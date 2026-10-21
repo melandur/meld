@@ -247,6 +247,15 @@ class MergePaneOrder(PreferenceEnum):
 class PreferencesDialog(Adw.PreferencesDialog):
     __gtype_name__ = "PreferencesDialog"
 
+    ailens_author_pattern_entry = Gtk.Template.Child()
+    ailens_build_folder_entry = Gtk.Template.Child()
+    ailens_build_model_entry = Gtk.Template.Child()
+    ailens_claude_path_entry = Gtk.Template.Child()
+    ailens_infer_model_entry = Gtk.Template.Child()
+    ailens_infer_switch = Gtk.Template.Child()
+    ailens_list_width_spin = Gtk.Template.Child()
+    ailens_notes_ref_entry = Gtk.Template.Child()
+    ailens_row_spacing_spin = Gtk.Template.Child()
     checkbutton_break_commit_lines = Gtk.Template.Child()
     checkbutton_folder_filter_text = Gtk.Template.Child()
     checkbutton_highlight_current_line = Gtk.Template.Child()
@@ -301,6 +310,15 @@ class PreferencesDialog(Adw.PreferencesDialog):
             ("vc-commit-margin", self.spinbutton_commit_margin, "value"),
             ("vc-break-commit-message", self.checkbutton_break_commit_lines, "active"),
             ("ignore-blank-lines", self.checkbutton_ignore_blank_lines, "active"),
+            ("ailens-file-row-spacing", self.ailens_row_spacing_spin, "value"),
+            ("ailens-file-list-width", self.ailens_list_width_spin, "value"),
+            ("ailens-infer-enabled", self.ailens_infer_switch, "active"),
+            ("ailens-claude-path", self.ailens_claude_path_entry, "text"),
+            ("ailens-infer-model", self.ailens_infer_model_entry, "text"),
+            ("ailens-build-model", self.ailens_build_model_entry, "text"),
+            ("ailens-build-folder", self.ailens_build_folder_entry, "text"),
+            ("ailens-notes-ref", self.ailens_notes_ref_entry, "text"),
+            ("ailens-author-pattern", self.ailens_author_pattern_entry, "text"),
             # Sensitivity bindings must come after value bindings, or the key
             # writability in gsettings overrides manual sensitivity setting.
             ("vc-show-commit-margin", self.spinbutton_commit_margin, "sensitive"),

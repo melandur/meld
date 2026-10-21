@@ -107,6 +107,44 @@ def config_from_settings() -> SessionConfig:
     )
 
 
+#: Row padding of every Git Compare file list, from ailens-file-row-spacing
+_row_css: Gtk.CssProvider | None = None
+
+
+def _apply_row_spacing(spacing: int) -> None:
+    global _row_css
+    display = Gdk.Display.get_default()
+    if display is None:
+        return
+    if _row_css is None:
+        _row_css = Gtk.CssProvider()
+        # Above style.css, which leaves the vertical padding to this
+        Gtk.StyleContext.add_provider_for_display(
+            display, _row_css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION + 1
+        )
+    spacing = max(0, min(16, int(spacing)))
+    _row_css.load_from_string(
+        f"listview.ailens-files > row {{"
+        f" padding-top: {spacing}px; padding-bottom: {spacing}px; }}"
+    )
+
+
+def _follow_row_spacing() -> None:
+    """Apply the row spacing setting now and whenever it changes"""
+    settings = get_settings()
+    if settings is None or _row_css is not None:
+        return
+    schema = settings.props.settings_schema
+    if schema is None or not schema.has_key("ailens-file-row-spacing"):
+        _apply_row_spacing(4)
+        return
+    settings.connect(
+        "changed::ailens-file-row-spacing",
+        lambda s, key: _apply_row_spacing(s.get_int(key)),
+    )
+    _apply_row_spacing(settings.get_int("ailens-file-row-spacing"))
+
+
 class _FileRow(GObject.Object):
     """A folder or file in the changed-files tree"""
 
@@ -172,6 +210,8 @@ class GitCompare(Gtk.Box, MeldDoc):
         # Gtk.Box's __init__ chains to MeldDoc's without arguments; see VcView
         MeldDoc.__init__(self)
         self.set_orientation(Gtk.Orientation.VERTICAL)
+        #: Settings are read again on every reload, unless given here
+        self._fixed_config = config is not None
         self.config = config or config_from_settings()
         self.worker = Worker()
         self.repo_info: RepositoryInfo | None = None
@@ -289,6 +329,18 @@ class GitCompare(Gtk.Box, MeldDoc):
         self.paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL)
         self.paned.set_vexpand(True)
         self.paned.set_position(300)
+        settings = get_settings()
+        schema = settings.props.settings_schema if settings is not None else None
+        if schema is not None and schema.has_key("ailens-file-list-width"):
+            # Dragging the divider updates the setting, and the setting
+            # (from Preferences or another tab) moves the divider
+            settings.bind(
+                "ailens-file-list-width",
+                self.paned,
+                "position",
+                Gio.SettingsBindFlags.DEFAULT,
+            )
+        _follow_row_spacing()
         self.paned.set_shrink_start_child(False)
 
         # Changed files, as a tree
@@ -484,6 +536,7 @@ class GitCompare(Gtk.Box, MeldDoc):
         if self._closed:
             return
         self._closed = True
+        Gio.Settings.unbind(self.paned, "position")
         if self._reload_id:
             GLib.source_remove(self._reload_id)
             self._reload_id = 0
@@ -615,6 +668,8 @@ class GitCompare(Gtk.Box, MeldDoc):
         info = self.repo_info
         if info is None or self._closed:
             return
+        if not self._fixed_config:
+            self.config = config_from_settings()
         keep = self._current.change.path if self._current else None
         base, target = self.base, self.target
         self._update_picker_labels(None)

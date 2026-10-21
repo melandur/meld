@@ -360,6 +360,94 @@
     </child>
     <child>
       <object class="AdwPreferencesPage">
+        <property name="title" translatable="yes">Git Compare</property>
+        <property name="icon-name">media-playlist-consecutive-symbolic</property>
+        <child>
+          <object class="AdwPreferencesGroup">
+            <property name="title" translatable="yes">File List</property>
+            <child>
+              <object class="AdwSpinRow" id="ailens_row_spacing_spin">
+                <property name="title" translatable="yes">Row Spacing</property>
+                <property name="subtitle" translatable="yes">Extra space above and below each file, in pixels</property>
+                <property name="adjustment">
+                  <object class="GtkAdjustment">
+                    <property name="lower">0</property>
+                    <property name="upper">16</property>
+                    <property name="value">4</property>
+                    <property name="step_increment">1</property>
+                    <property name="page_increment">4</property>
+                  </object>
+                </property>
+              </object>
+            </child>
+            <child>
+              <object class="AdwSpinRow" id="ailens_list_width_spin">
+                <property name="title" translatable="yes">Width</property>
+                <property name="subtitle" translatable="yes">In pixels; dragging the divider changes it too</property>
+                <property name="adjustment">
+                  <object class="GtkAdjustment">
+                    <property name="lower">120</property>
+                    <property name="upper">1200</property>
+                    <property name="value">300</property>
+                    <property name="step_increment">10</property>
+                    <property name="page_increment">50</property>
+                  </object>
+                </property>
+              </object>
+            </child>
+          </object>
+        </child>
+        <child>
+          <object class="AdwPreferencesGroup">
+            <property name="title" translatable="yes">Claude Code</property>
+            <property name="description" translatable="yes">Explain and Explain &amp;amp; Build run “claude -p” with no tools. Changes apply to comparisons opened or reloaded afterwards.</property>
+            <child>
+              <object class="AdwSwitchRow" id="ailens_infer_switch">
+                <property name="title" translatable="yes">Explain with Claude</property>
+                <property name="subtitle" translatable="yes">Offer to explain changes whose reason isn’t recorded</property>
+              </object>
+            </child>
+            <child>
+              <object class="AdwEntryRow" id="ailens_claude_path_entry">
+                <property name="title" translatable="yes">Claude Code Path</property>
+              </object>
+            </child>
+            <child>
+              <object class="AdwEntryRow" id="ailens_infer_model_entry">
+                <property name="title" translatable="yes">Model for Explanations</property>
+              </object>
+            </child>
+            <child>
+              <object class="AdwEntryRow" id="ailens_build_model_entry">
+                <property name="title" translatable="yes">Model for Build Summaries</property>
+              </object>
+            </child>
+          </object>
+        </child>
+        <child>
+          <object class="AdwPreferencesGroup">
+            <property name="title" translatable="yes">Repository</property>
+            <child>
+              <object class="AdwEntryRow" id="ailens_build_folder_entry">
+                <property name="title" translatable="yes">Build Folder</property>
+              </object>
+            </child>
+            <child>
+              <object class="AdwEntryRow" id="ailens_notes_ref_entry">
+                <property name="title" translatable="yes">Notes Ref</property>
+              </object>
+            </child>
+            <child>
+              <object class="AdwEntryRow" id="ailens_author_pattern_entry">
+                <property name="title" translatable="yes">Agent Author Pattern (regular expression)</property>
+              </object>
+            </child>
+          </object>
+        </child>
+      </object>
+    </child>
+    <child>
+      <object class="AdwPreferencesPage">
         <property name="title" translatable="yes">Filters</property>
         <property name="icon_name">view-list-symbolic</property>
         <child>

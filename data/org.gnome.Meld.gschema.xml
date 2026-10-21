@@ -321,6 +321,18 @@
       <summary>Git notes ref for explanations</summary>
       <description>The notes ref that explanations are read from and saved to.</description>
     </key>
+    <key name="ailens-file-row-spacing" type="i">
+      <range min="0" max="16"/>
+      <default>4</default>
+      <summary>Row spacing in the Git Compare file list</summary>
+      <description>Extra space above and below each file and folder in the changed-files list, in pixels.</description>
+    </key>
+    <key name="ailens-file-list-width" type="i">
+      <range min="120" max="1200"/>
+      <default>300</default>
+      <summary>Width of the Git Compare file list</summary>
+      <description>Width of the changed-files list, in pixels. Dragging the divider changes it too.</description>
+    </key>
     <key name="ailens-author-pattern" type="s">
       <default>""</default>
       <summary>Extra pattern for agent commits</summary>

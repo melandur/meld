@@ -205,9 +205,11 @@ listview.ailens-files {
   background: none;
 }
 
+/* Vertical padding comes from the ailens-file-row-spacing setting */
 listview.ailens-files > row {
   min-height: 0;
-  padding: 1px 6px 1px 2px;
+  padding-left: 2px;
+  padding-right: 6px;
   margin: 0 4px;
   border-radius: 4px;
 }
