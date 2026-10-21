@@ -38,6 +38,7 @@ from meld.const import (
 from meld.externalhelpers import open_files_external
 from meld.gutterrendererchunk import GutterRendererChunkLines
 from meld.iohelpers import find_shared_parent_path, prompt_save_filename
+from meld.languageguess import choose_pane_languages
 from meld.matchers.diffutil import Differ, merged_chunk_order
 from meld.matchers.helpers import CachedSequenceMatcher
 from meld.matchers.merge import AutoMergeDiffer, Merger
@@ -123,6 +124,37 @@ class CursorDetails:
     def __init__(self):
         for var in self.__slots__:
             setattr(self, var, None)
+
+
+#: Number of lines from the start and end of a file used to guess its
+#: language; the end is only needed for modelines.
+LANGUAGE_SAMPLE_HEAD_LINES = 100
+LANGUAGE_SAMPLE_TAIL_LINES = 20
+#: Limit on sampled text, in case of e.g., minified files
+LANGUAGE_SAMPLE_MAX_CHARS = 64 * 1024
+
+
+def get_language_sample_text(buf: Gtk.TextBuffer) -> str:
+    """Get text from the start and end of a buffer for language guessing
+
+    This includes enough lines from the end of the buffer for modelines,
+    while avoiding copying the text of large files.
+    """
+    line_count = buf.get_line_count()
+    if line_count <= LANGUAGE_SAMPLE_HEAD_LINES + LANGUAGE_SAMPLE_TAIL_LINES:
+        head_end = tail_start = buf.get_end_iter()
+    else:
+        _found, head_end = buf.get_iter_at_line(LANGUAGE_SAMPLE_HEAD_LINES)
+        _found, tail_start = buf.get_iter_at_line(
+            line_count - LANGUAGE_SAMPLE_TAIL_LINES
+        )
+
+    limit = LANGUAGE_SAMPLE_MAX_CHARS
+    head = buf.get_text(buf.get_start_iter(), head_end, False)[:limit]
+    tail = buf.get_text(tail_start, buf.get_end_iter(), False)[-limit:]
+    if head and tail and not head.endswith("\n"):
+        head += "\n"
+    return head + tail
 
 
 @Gtk.Template(resource_path="/org/gnome/meld/ui/filediff.ui")
@@ -1874,19 +1906,20 @@ class FileDiff(Gtk.Box, MeldDoc):
         if self.cursor.pane is not None:
             self._set_focused_textview(self.textview[self.cursor.pane])
 
-        langs = [
-            LanguageManager.get_language_from_file(buf.data.gfile)
-            for buf in self.textbuffer[: self.num_panes]
+        buffers = self.textbuffer[: self.num_panes]
+        file_langs = [
+            LanguageManager.get_language_from_file(buf.data.gfile) for buf in buffers
         ]
 
-        # If we have only one identified language then we assume that all of
-        # the files are actually of that type.
-        real_langs = [lang for lang in langs if lang]
-        if real_langs and real_langs.count(real_langs[0]) == len(real_langs):
-            langs = (real_langs[0],) * len(langs)
+        # If the file names don't settle it, we guess from the text
+        # (modelines, shebangs, etc.) and try to keep panes consistent.
+        def guess_from_text(pane):
+            text = get_language_sample_text(buffers[pane])
+            return LanguageManager.get_language_from_text(text)
 
-        for i in range(self.num_panes):
-            self.textbuffer[i].set_language(langs[i])
+        langs = choose_pane_languages(file_langs, guess_from_text)
+        for buf, lang in zip(buffers, langs, strict=True):
+            buf.set_language(lang)
 
     def _compare_files_internal(self):
         for i in self._merge_files():
@@ -1902,6 +1935,26 @@ class FileDiff(Gtk.Box, MeldDoc):
         if labels:
             for i, label in enumerate(labels):
                 self.filelabel[i].props.custom_label = label
+        self._update_diff_sides()
+
+    def _update_diff_sides(self):
+        """Tell our views which side of a two-way comparison they show
+
+        Side-aware diff colours (e.g., red/green) colour everything in
+        the old pane as removed and in the new pane as added. By default
+        the left pane is old and the right pane new, but comparisons can
+        override this with a "diff-sides" meta entry. Three-way
+        comparisons have no sides.
+        """
+        sides = (None, None, None)
+        if self.num_panes == 2:
+            sides = ("old", "new", None)
+            meta_sides = tuple(self.meta.get("diff-sides", ()))
+            if sorted(meta_sides) == ["new", "old"]:
+                sides = (*meta_sides, None)
+
+        for textview, side in zip(self.textview, sides, strict=True):
+            textview.props.diff_side = side
 
     def notify_file_changed(self, data):
         try:
@@ -2611,6 +2664,8 @@ class FileDiff(Gtk.Box, MeldDoc):
         for w, i in zip(self.textview, range(self.num_panes)):
             w.chunk_iter = chunk_iter(i)
             w.current_chunk_check = current_chunk_check(i)
+
+        self._update_diff_sides()
 
         for w, i in zip(self.linkmap, (0, self.num_panes - 2)):
             w.associate(self, self.textview[i], self.textview[i + 1])

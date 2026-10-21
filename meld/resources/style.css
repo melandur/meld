@@ -112,3 +112,117 @@ meld-status-menu-button label {
   border-style: solid;
   border-color: @borders;
 }
+
+/* Git Compare (AI Lens) */
+
+ailens-why-column {
+  background-color: @theme_bg_color;
+}
+
+.ailens-why-handle {
+  min-width: 4px;
+  background-color: @borders;
+}
+
+.ailens-card {
+  margin: 0 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border-left: 4px solid alpha(@theme_fg_color, 0.3);
+  background-color: @theme_base_color;
+  box-shadow: 0 1px 2px alpha(black, 0.12);
+}
+
+.ailens-card:hover {
+  background-color: mix(@theme_base_color, @theme_selected_bg_color, 0.08);
+}
+
+.ailens-card .ailens-sha {
+  padding: 0 4px;
+  min-height: 0;
+  font-family: monospace;
+}
+
+.ailens-card .ailens-what {
+  font-weight: bold;
+}
+
+.ailens-card .ailens-change {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid alpha(@theme_fg_color, 0.12);
+}
+
+.ailens-badge {
+  padding: 0 5px;
+  border-radius: 9px;
+  font-size: smaller;
+}
+
+.ailens-agent {
+  background-color: alpha(#d97757, 0.2);
+  color: mix(#d97757, @theme_fg_color, 0.35);
+}
+
+.ailens-inferred {
+  background-color: alpha(@theme_fg_color, 0.08);
+  font-style: italic;
+}
+
+.ailens-source {
+  font-size: smaller;
+}
+
+.ailens-layer {
+  font-weight: bold;
+}
+
+.ailens-staged { border-left-color: #2ec27e; }
+.ailens-unstaged { border-left-color: #e5a50a; }
+.ailens-unknown { border-left-color: alpha(@theme_fg_color, 0.2); }
+
+.ailens-color-0 { border-left-color: #3584e4; }
+.ailens-color-1 { border-left-color: #9141ac; }
+.ailens-color-2 { border-left-color: #e66100; }
+.ailens-color-3 { border-left-color: #26a269; }
+.ailens-color-4 { border-left-color: #c01c28; }
+.ailens-color-5 { border-left-color: #1c71d8; }
+.ailens-color-6 { border-left-color: #865e3c; }
+.ailens-color-7 { border-left-color: #613583; }
+
+.ailens-status {
+  font-weight: bold;
+  font-family: monospace;
+}
+
+.ailens-status-A, .ailens-status-U { color: #26a269; }
+.ailens-status-M, .ailens-status-T { color: #e5a50a; }
+.ailens-status-D { color: #c01c28; }
+.ailens-status-R, .ailens-status-C { color: #3584e4; }
+
+/* Compact changed-files tree */
+listview.ailens-files {
+  background: none;
+}
+
+listview.ailens-files > row {
+  min-height: 0;
+  padding: 1px 6px 1px 2px;
+  margin: 0 4px;
+  border-radius: 4px;
+}
+
+listview.ailens-files treeexpander indent,
+listview.ailens-files treeexpander expander {
+  -gtk-icon-size: 12px;
+  min-width: 12px;
+  min-height: 12px;
+}
+
+listview.ailens-files label {
+  font-size: 0.92em;
+}
+
+listview.ailens-files .caption {
+  font-size: 0.8em;
+}

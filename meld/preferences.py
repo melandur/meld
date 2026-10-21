@@ -204,6 +204,14 @@ class StyleVariant(PreferenceEnum):
     force_ark = ("force-dark", _("Dark"), Adw.ColorScheme.FORCE_DARK)
 
 
+class DiffColors(PreferenceEnum):
+    setting_type = enum.nonmember(str)
+
+    scheme = ("scheme", _("From Color Scheme"), 0)
+    red_green = ("red-green", _("Red and Green"), 1)
+    colorblind = ("colorblind", _("Blue and Orange (Colorblind Safe)"), 2)
+
+
 class TabCharacter(PreferenceEnum):
     setting_type = enum.nonmember(bool)
 

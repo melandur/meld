@@ -68,7 +68,13 @@ else
 endif
 
 # Install GtkSourceview style files
-styles = ['meld-base.style-scheme.xml', 'meld-dark.style-scheme.xml']
+styles = [
+  'meld-base.style-scheme.xml',
+  'meld-dark.style-scheme.xml',
+  'meld-lens-light.style-scheme.xml',
+  'meld-lens-dark.style-scheme.xml',
+  'meld-monokai.style-scheme.xml',
+]
 
 foreach style : styles
   i18n.merge_file(

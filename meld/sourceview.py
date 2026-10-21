@@ -19,9 +19,14 @@ from enum import Enum
 
 from gi.repository import Gdk, Gio, GLib, GObject, Graphene, Gsk, Gtk, GtkSource, Pango
 
+from meld.languageguess import guess_language_from_text
 from meld.meldbuffer import MeldBuffer
 from meld.settings import bind_settings, get_meld_settings, settings
-from meld.style import colour_lookup_with_fallback, get_common_theme
+from meld.style import (
+    colour_lookup_with_fallback,
+    get_common_theme,
+    get_inline_colour,
+)
 from meld.ui.gtkutil import make_gdk_rgba
 
 log = logging.getLogger(__name__)
@@ -63,6 +68,10 @@ class LanguageManager:
             return None
         content_type = info.get_content_type()
         return cls.manager.guess_language(gfile.get_basename(), content_type)
+
+    @classmethod
+    def get_language_from_text(cls, text):
+        return guess_language_from_text(text, cls.manager)
 
     @classmethod
     def get_language_from_mime_type(cls, mime_type):
@@ -174,6 +183,33 @@ class MeldSourceView(GtkSource.View, SourceViewHelperMixin):
         flags=(GObject.ParamFlags.READWRITE | GObject.ParamFlags.CONSTRUCT),
     )
 
+    def get_diff_side(self) -> str | None:
+        return self._diff_side
+
+    def set_diff_side(self, side: str | None) -> None:
+        side = side or None
+        if side == self._diff_side:
+            return
+
+        self._diff_side = side
+        # Colours are only set up once we're realized
+        if getattr(self, "fill_colors", None) is not None:
+            self.update_diff_colors()
+            self.queue_draw()
+        self.notify("diff-side")
+
+    diff_side = GObject.Property(
+        type=str,
+        default=None,
+        getter=get_diff_side,
+        setter=set_diff_side,
+        nick="Diff side",
+        blurb=(
+            "Which side of a two-way comparison this view shows; either "
+            "'old', 'new' or None if the view isn't on either side"
+        ),
+    )
+
     @GObject.Signal(name="popup-menu")
     def popup_menu(self) -> None: ...
 
@@ -183,6 +219,7 @@ class MeldSourceView(GtkSource.View, SourceViewHelperMixin):
         self.anim_source_id = None
         self.animating_chunks = []
         self._show_line_numbers = None
+        self._diff_side = None
 
         self.context_menu = None
 
@@ -251,6 +288,13 @@ class MeldSourceView(GtkSource.View, SourceViewHelperMixin):
         anim = TextviewLineAnimation(mark0, mark1, rgba0, rgba1, duration, anim_type)
         self.animating_chunks.append(anim)
 
+    def update_diff_colors(self):
+        """Update chunk and inline colours for the scheme and diff side"""
+
+        self.fill_colors, self.line_colors = get_common_theme(self._diff_side)
+        tag = self.get_buffer().get_tag_table().lookup("inline")
+        tag.props.background_rgba = get_inline_colour(self._diff_side)
+
     def on_setting_changed(self, settings, key):
         if key == "style-scheme":
             self.highlight_color = colour_lookup_with_fallback(
@@ -259,19 +303,18 @@ class MeldSourceView(GtkSource.View, SourceViewHelperMixin):
             self.syncpoint_color = colour_lookup_with_fallback(
                 "meld:syncpoint-outline", "foreground"
             )
-            self.fill_colors, self.line_colors = get_common_theme()
+            self.update_diff_colors()
 
             buf = self.get_buffer()
             buf.set_style_scheme(settings.style_scheme)
 
-            tag = buf.get_tag_table().lookup("inline")
-            tag.props.background_rgba = colour_lookup_with_fallback(
-                "meld:inline", "background"
-            )
             tag = buf.get_tag_table().lookup("dimmed")
             tag.props.foreground_rgba = colour_lookup_with_fallback(
                 "meld:dimmed", "foreground"
             )
+        elif key == "diff-colors":
+            self.update_diff_colors()
+            self.queue_draw()
 
     def on_popup_menu(self, *args):
         # TODO4: This layer of indirection is only needed because of syncpoint
@@ -340,7 +383,9 @@ class MeldSourceView(GtkSource.View, SourceViewHelperMixin):
 
     def do_unrealize(self):
         if self.anim_source_id:
-            GLib.source_remove(self.anim_source_id)
+            # A tick callback, not a GLib source
+            self.remove_tick_callback(self.anim_source_id)
+            self.anim_source_id = None
         return GtkSource.View.do_unrealize(self)
 
     def do_snapshot_layer(self, layer, snapshot):

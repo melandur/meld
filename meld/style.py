@@ -21,10 +21,14 @@ from collections.abc import Mapping
 from gi.repository import Adw, Gdk, Gtk, GtkSource, Pango
 
 from meld.conf import _
+from meld.diffpalette import PALETTE_TAGS, DiffPalette, get_diff_palette
 from meld.settings import get_meld_settings
 
 style_scheme: GtkSource.StyleScheme | None = None
 base_style_scheme: GtkSource.StyleScheme | None = None
+
+#: Whether the current style scheme is dark, as decided by should_use_dark
+_use_dark: bool = False
 
 #: Font zoom offset in points, applied to the configured font size
 _font_size_offset: int = 0
@@ -83,9 +87,11 @@ def set_base_style_scheme(
 ) -> GtkSource.StyleScheme:
     global base_style_scheme
     global style_scheme
+    global _use_dark
 
     style_scheme = new_style_scheme
     use_dark = should_use_dark(style_scheme)
+    _use_dark = use_dark
 
     manager = GtkSource.StyleSchemeManager.get_default()
     base_scheme_name = MeldStyleScheme.dark if use_dark else MeldStyleScheme.base
@@ -172,7 +178,38 @@ def colour_lookup_with_fallback(name: str, attribute: str) -> Gdk.RGBA:
 ColourMap = Mapping[str, Gdk.RGBA]
 
 
-def get_common_theme() -> tuple[ColourMap, ColourMap]:
+def _parse_colour(spec: str) -> Gdk.RGBA:
+    colour = Gdk.RGBA()
+    colour.parse(spec)
+    return colour
+
+
+def _current_diff_palette(side: str | None) -> DiffPalette | None:
+    # Settings may not exist yet (e.g., in tests), in which case we
+    # always use the scheme's colours.
+    meld_settings = get_meld_settings()
+    palette_name = getattr(meld_settings, "diff_colors", None)
+    return get_diff_palette(palette_name, _use_dark, side)
+
+
+def get_inline_colour(side: str | None = None) -> Gdk.RGBA:
+    """Get the inline (changed word) highlight colour for a diff side"""
+
+    palette = _current_diff_palette(side)
+    if palette is None:
+        return colour_lookup_with_fallback("meld:inline", "background")
+    return _parse_colour(palette.inline)
+
+
+def get_common_theme(side: str | None = None) -> tuple[ColourMap, ColourMap]:
+    """Get fill and line colours for diff chunks, keyed by chunk tag
+
+    The colours come from the style scheme unless the ``diff-colors``
+    setting selects a palette, in which case the insert, delete and
+    replace colours depend on the diff side being drawn; see
+    :func:`meld.diffpalette.get_diff_palette`.
+    """
+
     lookup = colour_lookup_with_fallback
     fill_colours = {
         "insert": lookup("meld:insert", "background"),
@@ -191,4 +228,12 @@ def get_common_theme() -> tuple[ColourMap, ColourMap]:
         "replace": lookup("meld:replace", "line-background"),
         "error": lookup("meld:error", "line-background"),
     }
+
+    palette = _current_diff_palette(side)
+    if palette is not None:
+        for tag in PALETTE_TAGS:
+            tone = palette.tone(tag)
+            fill_colours[tag] = _parse_colour(tone.fill)
+            line_colours[tag] = _parse_colour(tone.line)
+
     return fill_colours, line_colours

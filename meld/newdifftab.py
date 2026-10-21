@@ -30,6 +30,7 @@ class DiffType(enum.IntEnum):
     File = 0
     Folder = 1
     Version = 2
+    GitCompare = 3
 
     def supports_blank(self):
         return self in (self.File, self.Folder)
@@ -54,6 +55,7 @@ class NewDiffTab(Gtk.Box):
     button_new_blank = Gtk.Template.Child()
     button_type_dir = Gtk.Template.Child()
     button_type_file = Gtk.Template.Child()
+    button_type_git = Gtk.Template.Child()
     button_type_vc = Gtk.Template.Child()
     choosers_notebook = Gtk.Template.Child()
     dir_chooser0 = Gtk.Template.Child()
@@ -64,12 +66,14 @@ class NewDiffTab(Gtk.Box):
     file_chooser1 = Gtk.Template.Child()
     file_chooser2 = Gtk.Template.Child()
     file_three_way_checkbutton = Gtk.Template.Child()
+    git_chooser0 = Gtk.Template.Child()
     vc_chooser0 = Gtk.Template.Child()
 
     def __init__(self, parentapp):
         super().__init__()
-        map_widgets_into_lists(self, ["file_chooser", "dir_chooser", "vc_chooser"])
-        map_widgets_to_dict(self, ["file_chooser", "dir_chooser", "vc_chooser"])
+        choosers = ["file_chooser", "dir_chooser", "vc_chooser", "git_chooser"]
+        map_widgets_into_lists(self, choosers)
+        map_widgets_to_dict(self, choosers)
         self.file_chooser_dialogs = {}
         self.dir_chooser_dialogs = {}
         self.vc_chooser_dialogs = {}
@@ -77,11 +81,13 @@ class NewDiffTab(Gtk.Box):
             self.button_type_file,
             self.button_type_dir,
             self.button_type_vc,
+            self.button_type_git,
         ]
         self.diff_methods = {
             DiffType.File: parentapp.append_filediff,
             DiffType.Folder: parentapp.append_dirdiff,
             DiffType.Version: parentapp.append_vcview,
+            DiffType.GitCompare: parentapp.append_gitcompare,
         }
         self.diff_type = DiffType.Unselected
 
@@ -177,7 +183,11 @@ class NewDiffTab(Gtk.Box):
                 button = list(self.vc_chooser_dialogs.keys())[
                     list(self.vc_chooser_dialogs.values()).index(dialog)
                 ]
-                values = self.vc_chooser_values
+                values = (
+                    self.git_chooser_values
+                    if button is self.git_chooser0
+                    else self.vc_chooser_values
+                )
 
             if button is not None:
                 button.set_label(gfile.get_basename())
@@ -210,18 +220,24 @@ class NewDiffTab(Gtk.Box):
             )
             three_way = three_way_buttons[self.diff_type].get_active()
             num_paths = 3 if three_way else 2
-        else:  # DiffType.Version
+        else:  # DiffType.Version, DiffType.GitCompare
             num_paths = 1
         return num_paths
 
     @Gtk.Template.Callback()
     def on_button_compare_clicked(self, *args):
-        type_choosers = (self.file_chooser, self.dir_chooser, self.vc_chooser)
+        type_choosers = (
+            self.file_chooser,
+            self.dir_chooser,
+            self.vc_chooser,
+            self.git_chooser,
+        )
         choosers = type_choosers[self.diff_type][: self._get_num_paths()]
         values = (
             self.file_chooser_values,
             self.dir_chooser_values,
             self.vc_chooser_values,
+            self.git_chooser_values,
         )[self.diff_type]
         compare_gfiles = []
 

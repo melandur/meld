@@ -118,6 +118,37 @@
                 </style>
               </object>
             </child>
+            <child>
+              <object class="GtkToggleButton" id="button_type_git">
+                <property name="receives-default">True</property>
+                <property name="hexpand">1</property>
+                <property name="focusable">1</property>
+                <property name="tooltip-text" translatable="yes">Compare any two revisions of a Git repository: branches, tags, commits, staged and unstaged changes, other worktrees; with why each change was made</property>
+                <signal name="toggled" handler="on_button_type_toggled" swapped="no"/>
+                <child>
+                  <object class="GtkBox" id="vbox_git">
+                    <property name="orientation">vertical</property>
+                    <property name="spacing">6</property>
+                    <child>
+                      <object class="GtkImage" id="image_git">
+                        <property name="vexpand">1</property>
+                        <property name="icon-name">media-playlist-consecutive-symbolic</property>
+                        <property name="icon-size">large</property>
+                      </object>
+                    </child>
+                    <child>
+                      <object class="GtkLabel" id="label_git">
+                        <property name="label" translatable="yes">Git revisions</property>
+                        <property name="vexpand">1</property>
+                      </object>
+                    </child>
+                  </object>
+                </child>
+                <style>
+                  <class name="new-diff-button"/>
+                </style>
+              </object>
+            </child>
           </object>
         </child>
         <child>
@@ -312,6 +343,38 @@
                 </child>
                 <child>
                   <placeholder/>
+                </child>
+              </object>
+            </child>
+            <child>
+              <object class="GtkGrid" id="grid_git">
+                <property name="row-spacing">6</property>
+                <property name="column-spacing">12</property>
+                <property name="column-homogeneous">True</property>
+                <child>
+                  <object class="GtkButton" id="git_chooser0">
+                    <property name="label" translatable="yes">Select Git Repository or Worktree</property>
+                    <signal name="clicked" handler="on_vc_chooser_clicked" swapped="no"/>
+                    <layout>
+                      <property name="column">0</property>
+                      <property name="row">0</property>
+                    </layout>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkLabel" id="git_hint">
+                    <property name="label" translatable="yes">Pick the base and target revisions in the comparison: any branch, tag or commit, the staged or unstaged changes, or another worktree.</property>
+                    <property name="wrap">True</property>
+                    <property name="xalign">0</property>
+                    <style>
+                      <class name="dim-label"/>
+                    </style>
+                    <layout>
+                      <property name="column">0</property>
+                      <property name="row">1</property>
+                      <property name="column-span">2</property>
+                    </layout>
+                  </object>
                 </child>
               </object>
             </child>

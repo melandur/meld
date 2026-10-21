@@ -408,6 +408,27 @@ class MeldWindow(Adw.ApplicationWindow):
         else:
             return self.append_filediff(gfiles, merge_output=merge_output, meta=meta)
 
+    def append_gitcompare(self, location=None, *, base=None, target=None):
+        """Open a Git Compare tab for the repository ``location`` is in
+
+        ``location`` is a path, a Gio.File, or a list of one (as the new
+        comparison page passes it). Without one, the tab asks for a folder.
+        """
+        from meld.gitcompare import GitCompare
+
+        doc = GitCompare()
+        self._append_page(doc)
+        if isinstance(location, (list, tuple)):
+            location = location[0] if location else None
+        if isinstance(location, Gio.File):
+            location = location.get_path()
+        if location:
+            doc.set_location(location, base=base, target=target)
+        else:
+            doc.show_no_repository()
+        self.tabview.set_selected_page(self.tabview.get_page(doc))
+        return doc
+
     def append_vcview(self, location, auto_compare=False) -> VcView:
         doc = VcView()
         self._append_page(doc)

@@ -38,6 +38,7 @@ class MeldSettings(GObject.GObject):
         self.on_setting_changed(settings, "use-system-font")
         self.on_setting_changed(settings, "style-scheme")
         self.on_setting_changed(settings, "style-variant")
+        self.on_setting_changed(settings, "diff-colors")
         self.style_scheme = self._style_scheme_from_gsettings()
         settings.connect("changed", self.on_setting_changed)
 
@@ -69,6 +70,9 @@ class MeldSettings(GObject.GObject):
             setting_value = settings.get_enum("style-variant")
             manager.set_color_scheme(Adw.ColorScheme(setting_value))
             self.emit("changed", "style-variant")
+        elif key == "diff-colors":
+            self.diff_colors = self._diff_colours_from_gsettings()
+            self.emit("changed", "diff-colors")
 
     def on_style_manager_setting_notify(self, manager, pspec):
         property_name = pspec.get_name()
@@ -85,6 +89,15 @@ class MeldSettings(GObject.GObject):
         scheme = adapt_style_scheme(scheme)
         set_base_style_scheme(scheme)
         return scheme
+
+    def _diff_colours_from_gsettings(self) -> str:
+        from meld.diffpalette import DiffColours, parse_diff_colours
+
+        # Guard against running with an older compiled schema, where
+        # reading a missing key would abort.
+        if not settings.props.settings_schema.has_key("diff-colors"):
+            return DiffColours.scheme.value
+        return parse_diff_colours(settings.get_string("diff-colors")).value
 
     def _filters_from_gsetting(self, key, filt_type):
         filter_params = settings.get_value(key)

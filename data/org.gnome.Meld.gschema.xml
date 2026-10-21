@@ -25,6 +25,12 @@
     <value nick="force-dark" value="4"/>
   </enum>
 
+  <enum id="org.gnome.meld.diffcolors">
+    <value nick="scheme" value="0"/>
+    <value nick="red-green" value="1"/>
+    <value nick="colorblind" value="2"/>
+  </enum>
+
   <flags id="org.gnome.meld.spacesflags">
     <value nick="space" value="1"/>
     <value nick="tab" value="2"/>
@@ -98,6 +104,11 @@
           <default>"classic"</default>
           <summary>Color scheme to use for syntax highlighting</summary>
           <description>Used by GtkSourceView to determine colors for syntax highlighting</description>
+      </key>
+      <key name="diff-colors" enum="org.gnome.meld.diffcolors">
+          <default>"scheme"</default>
+          <summary>Colors used to highlight differences</summary>
+          <description>Which colors to use for changed, inserted and deleted text. "scheme" uses the colors of the current color scheme; "red-green" shows removed text in red and added text in green; "colorblind" shows removed text in orange and added text in blue.</description>
       </key>
       <key name="enable-space-drawer" type='b'>
           <default>false</default>
@@ -279,5 +290,41 @@
           <summary>Text-based filters</summary>
           <description>List of predefined text-based regex filters that, if active, will remove text from being used in a file comparison. The text will still be displayed, but won’t contribute to the comparison itself.</description>
       </key>
+    <!-- AI Lens (Git Compare) -->
+    <key name="ailens-claude-path" type="s">
+      <default>"claude"</default>
+      <summary>Path to the Claude Code CLI</summary>
+      <description>The claude executable that explains changes and writes build summaries.</description>
+    </key>
+    <key name="ailens-infer-enabled" type="b">
+      <default>true</default>
+      <summary>Offer to explain changes with Claude Code</summary>
+      <description>If true, Git Compare offers Explain with Claude for changes that have no recorded reason.</description>
+    </key>
+    <key name="ailens-infer-model" type="s">
+      <default>"claude-sonnet-5-5"</default>
+      <summary>Model that explains commits</summary>
+      <description>The model passed to claude -p when inferring why a commit or change was made.</description>
+    </key>
+    <key name="ailens-build-model" type="s">
+      <default>"claude-opus-5-5"</default>
+      <summary>Model that writes build summaries</summary>
+      <description>The model passed to claude -p for a build file's title, summary, decisions and risks.</description>
+    </key>
+    <key name="ailens-build-folder" type="s">
+      <default>"agent"</default>
+      <summary>Folder for build files</summary>
+      <description>Where build files are written, relative to the repository root.</description>
+    </key>
+    <key name="ailens-notes-ref" type="s">
+      <default>"ai-lens"</default>
+      <summary>Git notes ref for explanations</summary>
+      <description>The notes ref that explanations are read from and saved to.</description>
+    </key>
+    <key name="ailens-author-pattern" type="s">
+      <default>""</default>
+      <summary>Extra pattern for agent commits</summary>
+      <description>A regular expression matched against commit authors to recognise agent commits, besides the Co-Authored-By: Claude trailer.</description>
+    </key>
   </schema>
 </schemalist>

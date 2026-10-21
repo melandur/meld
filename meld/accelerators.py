@@ -28,6 +28,9 @@ VIEW_ACCELERATORS: dict[str, str | Sequence[str]] = {
     "view.save-all": "<Primary><Shift>L",
     "view.save-as": "<Primary><Shift>S",
     "view.undo": "<Primary>Z",
+    # Git Compare: next / previous changed file
+    "view.ailens-next-file": "<Alt>F7",
+    "view.ailens-previous-file": "<Alt><Shift>F7",
     "win.close": "<Primary>W",
     "win.gear-menu": "F10",
     "win.fullscreen": "F11",

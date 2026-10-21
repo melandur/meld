@@ -46,20 +46,29 @@ class GutterRendererChunkLines(GtkSource.GutterRendererText):
 
         self.num_line_digits = 0
         self.changed_handler_id = None
+        self._colours_side = None
 
         meld_settings = get_meld_settings()
         meld_settings.connect("changed", self.on_setting_changed)
         self.font_string = meld_settings.font.to_string()
         self.on_setting_changed(meld_settings, "style-scheme")
 
+    def get_diff_side(self) -> str | None:
+        return getattr(self.props.view, "diff_side", None)
+
+    def update_diff_colors(self):
+        self._colours_side = self.get_diff_side()
+        self.fill_colors, self.line_colors = get_common_theme(self._colours_side)
+        alpha = self.fill_colors["current-chunk-highlight"].alpha
+        self.chunk_highlights = {
+            state: alpha_tint(colour, alpha)
+            for state, colour in self.fill_colors.items()
+        }
+
     def on_setting_changed(self, settings, key):
-        if key == "style-scheme":
-            self.fill_colors, self.line_colors = get_common_theme()
-            alpha = self.fill_colors["current-chunk-highlight"].alpha
-            self.chunk_highlights = {
-                state: alpha_tint(colour, alpha)
-                for state, colour in self.fill_colors.items()
-            }
+        if key in ("style-scheme", "diff-colors"):
+            self.update_diff_colors()
+            self.queue_draw()
 
     def do_css_changed(self, change):
         self.recalculate_size(self.get_buffer(), force=True)
@@ -103,6 +112,10 @@ class GutterRendererChunkLines(GtkSource.GutterRendererText):
         self.queue_draw()
 
     def do_snapshot_line(self, snapshot, lines, line):
+        # Our view's diff side can change after we're added to it
+        if self._colours_side != self.get_diff_side():
+            self.update_diff_colors()
+
         idx = self.linediffer.locate_chunk(self.from_pane, line)[0]
         if idx is not None:
             self._chunk = self.linediffer.get_chunk(idx, self.from_pane, self.to_pane)

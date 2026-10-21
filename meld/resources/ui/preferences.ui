@@ -77,6 +77,23 @@
                 </child>
               </object>
             </child>
+            <child>
+              <object class="PreferenceComboRow" id="diff_colors_combo_row">
+                <property name="title" translatable="yes">Difference Colors</property>
+                <property name="subtitle" translatable="yes">How removed, added and changed text is highlighted</property>
+                <property name="enum-cls-name">DiffColors</property>
+                <property name="settings-key">diff-colors</property>
+                <property name="model">
+                  <object class="GtkStringList">
+                    <items>
+                      <item>scheme</item>
+                      <item>red-green</item>
+                      <item>colorblind</item>
+                    </items>
+                  </object>
+                </property>
+              </object>
+            </child>
           </object>
         </child>
         <child>

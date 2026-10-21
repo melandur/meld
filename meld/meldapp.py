@@ -307,6 +307,37 @@ class MeldApp(Adw.Application):
             help=_("Create a diff tab for the supplied files or folders"),
         )
 
+        parser.add_option(
+            "",
+            "--git",
+            action="store_true",
+            default=False,
+            help=_(
+                "Compare two revisions of the Git repository at the given path "
+                "(default: the current folder), with why each change was made"
+            ),
+        )
+        parser.add_option(
+            "",
+            "--base",
+            metavar="REV",
+            default=None,
+            help=_(
+                "With --git: the base revision; a branch, tag, SHA, "
+                "“staged” or “working-tree” (default: HEAD)"
+            ),
+        )
+        parser.add_option(
+            "",
+            "--target",
+            metavar="REV",
+            default=None,
+            help=_(
+                "With --git: the target revision; also “staged”, “unstaged” "
+                "or “working-tree” (default: working-tree)"
+            ),
+        )
+
         def cleanup():
             if not command_line.get_is_remote():
                 self.quit()
@@ -368,6 +399,30 @@ class MeldApp(Adw.Application):
                 return parser.exit_status
             if tab:
                 hold_primary_tab(tab)
+            finalize()
+            return 0
+
+        if options.git or options.base or options.target:
+            from meld.ailens.picker import revisions_from_args
+
+            if len(args) > 1:
+                parser.local_error(_("--git takes at most one path"))
+            try:
+                base, target = revisions_from_args(options.base, options.target)
+            except ValueError as err:
+                parser.local_error(str(err))
+            if parser.should_exit:
+                cleanup()
+                return parser.exit_status
+            if args:
+                location = command_line.create_file_for_arg(args[0]).get_path()
+            else:
+                location = command_line.get_cwd() or os.getcwd()
+            window = self.get_active_window()
+            if command_line.get_is_remote() and not options.newtab:
+                window = self.new_window()
+            tab = window.append_gitcompare(location, base=base, target=target)
+            hold_primary_tab(tab)
             finalize()
             return 0
 

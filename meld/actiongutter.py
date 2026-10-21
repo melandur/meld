@@ -134,6 +134,7 @@ class ActionGutter(Gtk.Widget):
         # Object-type defaults
         self.chunks = []
         self.action_map = {}
+        self._colours_side = None
 
         # State for "button" implementation
         self.buttons = []
@@ -156,13 +157,23 @@ class ActionGutter(Gtk.Widget):
     def on_setting_changed(self, settings, key):
         if key == "font":
             self.queue_draw()
-        elif key == "style-scheme":
-            self.fill_colors, self.line_colors = get_common_theme()
-            alpha = self.fill_colors["current-chunk-highlight"].alpha
-            self.chunk_highlights = {
-                state: alpha_tint(colour, alpha)
-                for state, colour in self.fill_colors.items()
-            }
+        elif key in ("style-scheme", "diff-colors"):
+            self.update_diff_colors()
+            self.queue_draw()
+
+    def get_diff_side(self) -> str | None:
+        # Our chunks are relative to our source view, so we use its colours
+        view = getattr(self, "_source_view", None)
+        return getattr(view, "diff_side", None)
+
+    def update_diff_colors(self):
+        self._colours_side = self.get_diff_side()
+        self.fill_colors, self.line_colors = get_common_theme(self._colours_side)
+        alpha = self.fill_colors["current-chunk-highlight"].alpha
+        self.chunk_highlights = {
+            state: alpha_tint(colour, alpha)
+            for state, colour in self.fill_colors.items()
+        }
 
     def on_realize(self, *args):
         self.connect("notify::action-mode", lambda *args: self.queue_draw())
@@ -316,6 +327,10 @@ class ActionGutter(Gtk.Widget):
             return
 
         self.buttons = []
+
+        # Our source view's diff side can change after we're realized
+        if self._colours_side != self.get_diff_side():
+            self.update_diff_colors()
 
         width = self.get_allocated_width()
         height = self.get_allocated_height()

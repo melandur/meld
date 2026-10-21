@@ -306,7 +306,13 @@ def setup_resources():
     # Just copy style schemes to the file ending expected by
     # GtkSourceView if we're uninstalled and they're missing
     if uninstalled:
-        for style in ("meld-base", "meld-dark"):
+        for style in (
+            "meld-base",
+            "meld-dark",
+            "meld-lens-light",
+            "meld-lens-dark",
+            "meld-monokai",
+        ):
             path = os.path.join(style_path, f"{style}.style-scheme.xml")
             if not os.path.exists(path):
                 import shutil

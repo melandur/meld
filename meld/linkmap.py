@@ -32,6 +32,8 @@ class LinkMap(Gtk.DrawingArea):
     def __init__(self):
         self.filediff = None
         self.views = []
+        self._settings_handler_id = None
+        self._colours_side = None
 
         self.set_draw_func(self.draw)
 
@@ -44,17 +46,45 @@ class LinkMap(Gtk.DrawingArea):
 
         meld_settings = get_meld_settings()
         self.on_setting_changed(meld_settings, "style-scheme")
-        meld_settings.connect("changed", self.on_setting_changed)
+        if not self._settings_handler_id:
+            self._settings_handler_id = meld_settings.connect(
+                "changed", self.on_setting_changed
+            )
+
+    def get_left_diff_side(self) -> str | None:
+        return getattr(self.views[0], "diff_side", None) if self.views else None
+
+    def update_diff_colors(self):
+        self.fill_colors, self.line_colors = get_common_theme()
+        self._colours_side = self.get_left_diff_side()
+
+        # Link maps show chunks from the perspective of the left pane,
+        # where an insert means lines that are only in the right pane.
+        # Our side-less colours assume that the left pane is the old
+        # side, so if it's actually the new side (e.g., in right-to-left
+        # layouts) we swap insert and delete colours to keep removed and
+        # added text coloured correctly.
+        if self._colours_side == "new":
+            for colours in (self.fill_colors, self.line_colors):
+                colours["insert"], colours["delete"] = (
+                    colours["delete"],
+                    colours["insert"],
+                )
 
     def on_setting_changed(self, settings, key):
         if key == "font":
             self.queue_draw()
-        elif key == "style-scheme":
-            self.fill_colors, self.line_colors = get_common_theme()
+        elif key in ("style-scheme", "diff-colors"):
+            self.update_diff_colors()
+            self.queue_draw()
 
     def draw(self, _linkmap, context, width, height):
         if not self.views:
             return
+
+        # Pane sides can change after we're associated with our views
+        if self._colours_side != self.get_left_diff_side():
+            self.update_diff_colors()
 
         pix_start = [t.get_visible_rect().y for t in self.views]
         y_offset = [t.translate_coordinates(self, 0, 0)[1] + 1 for t in self.views]

@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+ Copyright (C) 2026 Meld contributors
+
+ This program is free software: you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation, either version 2 of the License, or (at
+ your option) any later version.
+
+ This program is distributed in the hope that it will be useful, but
+ WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ General Public License for more details.
+
+ You should have received a copy of the GNU General Public License
+ along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+-->
+<style-scheme id="meld-lens-dark" name="Meld Lens Dark" version="1.0">
+  <author>Meld contributors</author>
+  <description>Dark scheme with familiar code colors and red/green differences</description>
+
+  <metadata>
+    <property name="variant">dark</property>
+    <property name="light-variant">meld-lens-light</property>
+  </metadata>
+
+  <!-- Palette -->
+  <color name="background"        value="#1e1e1e"/>
+  <color name="foreground"        value="#d4d4d4"/>
+  <color name="gutter"            value="#1e1e1e"/>
+  <color name="gutter-fg"         value="#858585"/>
+  <color name="gutter-fg-current" value="#c6c6c6"/>
+  <color name="current-line"      value="#2a2d2e"/>
+  <color name="selection"         value="#264f78"/>
+  <color name="selection-blur"    value="#3a3d41"/>
+  <color name="cursor"            value="#aeafad"/>
+  <color name="faint"             value="#404040"/>
+
+  <color name="comment"           value="#6a9955"/>
+  <color name="keyword"           value="#569cd6"/>
+  <color name="control"           value="#c586c0"/>
+  <color name="string"            value="#ce9178"/>
+  <color name="number"            value="#b5cea8"/>
+  <color name="type"              value="#4ec9b0"/>
+  <color name="function"          value="#dcdcaa"/>
+  <color name="variable"          value="#9cdcfe"/>
+  <color name="constant"          value="#4fc1ff"/>
+  <color name="escape"            value="#d7ba7d"/>
+  <color name="regex"             value="#d16969"/>
+  <color name="tag"               value="#569cd6"/>
+  <color name="attribute"         value="#9cdcfe"/>
+  <color name="error"             value="#f44747"/>
+  <color name="warning"           value="#cca700"/>
+  <color name="note"              value="#3794ff"/>
+
+  <color name="added-bg"          value="#173d22"/>
+  <color name="added-fg"          value="#7ee787"/>
+  <color name="added-line"        value="#3fb950"/>
+  <color name="removed-bg"        value="#4a1d1f"/>
+  <color name="removed-fg"        value="#ffa198"/>
+  <color name="removed-line"      value="#f85149"/>
+  <color name="changed-bg"        value="#12304f"/>
+  <color name="changed-fg"        value="#79c0ff"/>
+  <color name="changed-line"      value="#388bfd"/>
+  <color name="changed-inline"    value="#1f4f80"/>
+  <color name="conflict-bg"       value="#67060c"/>
+  <color name="conflict-fg"       value="#ff7b72"/>
+  <color name="conflict-line"     value="#da3633"/>
+  <color name="error-bg"          value="#4b3a05"/>
+  <color name="error-fg"          value="#e3b341"/>
+  <color name="error-line"        value="#9e6a03"/>
+
+  <!-- Global settings -->
+  <style name="text"                  foreground="foreground" background="background"/>
+  <style name="selection"             background="selection"/>
+  <style name="selection-unfocused"   background="selection-blur"/>
+  <style name="cursor"                foreground="cursor"/>
+  <style name="secondary-cursor"      foreground="gutter-fg"/>
+  <style name="current-line"          background="current-line"/>
+  <style name="line-numbers"          foreground="gutter-fg" background="gutter"/>
+  <style name="current-line-number"   foreground="gutter-fg-current" background="current-line" bold="true"/>
+  <style name="bracket-match"         background="#3a4a3a" bold="true"/>
+  <style name="bracket-mismatch"      foreground="#ffffff" background="#a1260d"/>
+  <style name="right-margin"          foreground="faint" background="#252526"/>
+  <style name="draw-spaces"           foreground="faint"/>
+  <style name="background-pattern"    background="#252526"/>
+  <style name="search-match"          foreground="#ffffff" background="#613214"/>
+  <style name="snippet-focus"         background="#264f78"/>
+  <style name="map-overlay"           background="#rgba(200, 200, 200, 0.25)"/>
+
+  <!-- Comments and documentation -->
+  <style name="def:comment"               foreground="comment"/>
+  <style name="def:shebang"               foreground="comment" bold="true"/>
+  <style name="def:doc-comment"           foreground="comment"/>
+  <style name="def:doc-comment-element"   foreground="#8fbf7a" bold="true"/>
+
+  <!-- Constants -->
+  <style name="def:constant"              foreground="constant"/>
+  <style name="def:special-constant"      foreground="keyword"/>
+  <style name="def:boolean"               foreground="keyword"/>
+  <style name="def:string"                foreground="string"/>
+  <style name="def:character"             foreground="string"/>
+  <style name="def:special-char"          foreground="escape"/>
+  <style name="def:number"                foreground="number"/>
+  <style name="def:floating-point"        foreground="number"/>
+  <style name="def:decimal"               foreground="number"/>
+  <style name="def:base-n-integer"        foreground="number"/>
+
+  <!-- Identifiers, functions and types -->
+  <style name="def:identifier"            foreground="variable"/>
+  <style name="def:variable"              foreground="variable"/>
+  <style name="def:function"              foreground="function"/>
+  <style name="def:builtin"               foreground="type"/>
+  <style name="def:type"                  foreground="type"/>
+
+  <!-- Statements and keywords -->
+  <style name="def:statement"             foreground="control"/>
+  <style name="def:keyword"               foreground="keyword"/>
+  <style name="def:reserved"              foreground="keyword"/>
+  <style name="def:operator"              foreground="foreground"/>
+  <style name="def:preprocessor"          foreground="control"/>
+
+  <!-- Diagnostics -->
+  <style name="def:error"                 foreground="error" underline="error"/>
+  <style name="def:warning"               foreground="warning"/>
+  <style name="def:note"                  foreground="note" bold="true"/>
+  <style name="def:net-address"           foreground="constant" underline="single"/>
+  <style name="def:underlined"            underline="single"/>
+
+  <!-- Markup -->
+  <style name="def:emphasis"              italic="true"/>
+  <style name="def:strong-emphasis"       bold="true"/>
+  <style name="def:heading"               foreground="keyword" bold="true"/>
+  <style name="def:inline-code"           foreground="string"/>
+  <style name="def:preformatted-section"  foreground="string"/>
+  <style name="def:link-text"             foreground="constant"/>
+  <style name="def:link-symbol"           foreground="gutter-fg"/>
+  <style name="def:link-destination"      foreground="constant" underline="single"/>
+  <style name="def:list-marker"           foreground="keyword" bold="true"/>
+  <style name="def:blockquote-marker"     foreground="comment"/>
+  <style name="def:thematic-break"        foreground="gutter-fg"/>
+  <style name="def:insertion"             foreground="added-fg"/>
+  <style name="def:deletion"              foreground="removed-fg" strikethrough="true"/>
+
+  <!-- Diff (patch files) -->
+  <style name="diff:added-line"           foreground="added-fg" background="added-bg"/>
+  <style name="diff:removed-line"         foreground="removed-fg" background="removed-bg"/>
+  <style name="diff:changed-line"         foreground="changed-fg"/>
+  <style name="diff:location"             foreground="control" bold="true"/>
+  <style name="diff:special-case"         foreground="constant"/>
+  <style name="diff:diff-file"            foreground="keyword" bold="true"/>
+
+  <!-- XML and HTML -->
+  <style name="xml:element-name"          foreground="tag"/>
+  <style name="xml:attribute-name"        foreground="attribute"/>
+  <style name="xml:attribute-value"       foreground="string"/>
+  <style name="xml:namespace"             foreground="type"/>
+  <style name="xml:entity"                foreground="escape"/>
+  <style name="xml:processing-instruction" foreground="gutter-fg"/>
+  <style name="xml:doctype"               foreground="keyword"/>
+  <style name="xml:cdata-delim"           foreground="gutter-fg"/>
+
+  <!-- Meld -->
+  <style name="meld:insert" background="added-bg" foreground="added-fg" line-background="added-line"/>
+  <style name="meld:replace" background="changed-bg" foreground="changed-fg" line-background="changed-line"/>
+  <style name="meld:conflict" background="conflict-bg" foreground="conflict-fg" line-background="conflict-line"/>
+  <style name="meld:delete" background="removed-bg" foreground="removed-fg" line-background="removed-line"/>
+  <style name="meld:error" background="error-bg" foreground="error-fg" line-background="error-line"/>
+  <style name="meld:inline" background="changed-inline"/>
+  <style name="meld:current-line-highlight" foreground="#eeeeee" background="#rgba(255, 255, 255, 0.06)"/>
+  <style name="meld:unknown-text" foreground="#8b949e"/>
+  <style name="meld:syncpoint-outline" foreground="#bbbbbb"/>
+  <style name="meld:current-chunk-highlight" background="#rgba(255, 255, 255, 0.06)"/>
+  <style name="meld:overscroll" background="#rgba(255, 255, 255, 0.05)"/>
+  <style name="meld:dimmed" foreground="#7d8590"/>
+</style-scheme>

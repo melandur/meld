@@ -70,6 +70,7 @@ class ChunkMap(Gtk.DrawingArea):
         self._grab_coordinates = None
         self._cached_map = None
         self._base_colors = None
+        self._colours_side = None
 
         click_controller = Gtk.GestureClick()
         click_controller.connect("pressed", self.button_press_event)
@@ -106,10 +107,19 @@ class ChunkMap(Gtk.DrawingArea):
         self._cached_map = None
         Gtk.DrawingArea.do_css_changed(self, change)
 
+    def get_diff_side(self) -> str | None:
+        """Get the diff side of the mapped pane, if any"""
+        return None
+
+    def update_diff_colors(self):
+        self._colours_side = self.get_diff_side()
+        self.fill_colors, self.line_colors = get_common_theme(self._colours_side)
+        self._cached_map = None
+
     def on_setting_changed(self, settings, key):
-        if key == "style-scheme":
-            self.fill_colors, self.line_colors = get_common_theme()
-            self._cached_map = None
+        if key in ("style-scheme", "diff-colors"):
+            self.update_diff_colors()
+            self.queue_draw()
 
     def get_height_scale(self) -> float:
         return 1.0
@@ -148,6 +158,10 @@ class ChunkMap(Gtk.DrawingArea):
 
         if width <= 0 or height <= 0:
             return
+
+        # Our mapped pane's diff side can change after we're realized
+        if self._colours_side != self.get_diff_side():
+            self.update_diff_colors()
 
         base_bg, base_outline, handle_overdraw, handle_outline = (
             self.get_map_base_colors()
@@ -291,6 +305,9 @@ class TextViewChunkMap(ChunkMap):
 
         self.textview.connect("notify::wrap-mode", force_redraw)
         return ChunkMap.do_realize(self)
+
+    def get_diff_side(self) -> str | None:
+        return getattr(self.textview, "diff_side", None)
 
     def get_height_scale(self):
         adjustments = [

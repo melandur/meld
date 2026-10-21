@@ -599,6 +599,8 @@ class VcView(Gtk.Box, MeldDoc):
             if self.props.left_is_local:
                 diffs = [path, comp_path]
                 meta["labels"] = (None, remote_label)
+                # The working copy is the newer side of the comparison
+                meta["diff-sides"] = ("new", "old")
                 meta["tablabel"] = _("%s (working, repository)") % basename
             else:
                 diffs = [comp_path, path]
