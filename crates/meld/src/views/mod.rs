@@ -20,6 +20,7 @@ pub mod filediff;
 pub mod gitcompare;
 pub mod imagediff;
 pub mod newtab;
+pub mod prlist;
 pub mod vcview;
 
 use iced::{Element, Subscription, Task};
@@ -138,8 +139,9 @@ impl Tab {
                 location,
                 base,
                 target,
+                pr,
             } => {
-                let (tab, task) = gitcompare::GitCompare::new(location, base, target, shared);
+                let (tab, task) = gitcompare::GitCompare::new(location, base, target, pr, shared);
                 (Tab::Git(Box::new(tab)), task.map(Message::Git))
             }
             Comparison::Images { paths } => {

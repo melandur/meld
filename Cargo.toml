@@ -6,6 +6,7 @@ members = [
     "crates/meld-config",
     "crates/meld-vc",
     "crates/meld-ailens",
+    "crates/meld-forge",
     "crates/meld-widgets",
     "crates/meld",
 ]
@@ -23,6 +24,7 @@ meld-files = { path = "crates/meld-files" }
 meld-config = { path = "crates/meld-config" }
 meld-vc = { path = "crates/meld-vc" }
 meld-ailens = { path = "crates/meld-ailens" }
+meld-forge = { path = "crates/meld-forge" }
 meld-widgets = { path = "crates/meld-widgets" }
 
 iced = { version = "0.14", features = ["advanced", "canvas", "tokio", "image", "svg", "lazy"] }

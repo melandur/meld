@@ -5,6 +5,7 @@ mod cli;
 mod command;
 mod comparison;
 mod dialogs;
+mod forge;
 mod instance;
 mod shared;
 mod ui;

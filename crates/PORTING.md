@@ -9,9 +9,10 @@ removed from the tree after commit 29d59e07; check that commit out (e.g.
 
     mise exec rust@1.98.1 -- cargo run -p meld --release -- [meld arguments]
 
-for example `-- file1 file2`, `-- dir1 dir2 dir3`, `-- .` (version control)
-or `-- --git --base main`. `cargo run -p meld -- --help` lists the options,
-which match the Python `meld` launcher.
+for example `-- file1 file2`, `-- dir1 dir2 dir3`, `-- .` (version control),
+`-- --git --base main` or `-- --git --pr 123` (review a pull request).
+`cargo run -p meld -- --help` lists the options, which match the Python
+`meld` launcher.
 
 ## Toolchain
 
@@ -31,6 +32,7 @@ dependency there first.
 | `meld-config`  | `settings.py` + `data/org.gnome.Meld.gschema.xml` (as TOML), `recent.py`, `style.py`, `diffpalette.py`, style-scheme XML loading | – |
 | `meld-vc`      | `meld/vc/*`                                                           | – |
 | `meld-ailens`  | `meld/ailens/*`                                                       | – |
+| `meld-forge`   | new: pull/merge requests through `gh` (GitHub) and `glab` (GitLab): lists, details, comments, posting reviews and replies, fetching into `refs/meld/pr/…` | meld-ailens |
 | `meld-widgets` | iced widgets replacing `sourceview.py`, `linkmap.py`, `chunkmap.py`, `actiongutter.py`, `gutterrendererchunk.py`, syntax highlighting | iced, syntect |
 | `meld`         | the application: window, tabs, file/folder/VC/Git Compare views, dialogs, preferences, CLI | all |
 

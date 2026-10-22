@@ -4,14 +4,15 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 
-use crate::comparison::Comparison;
+use crate::comparison::{Comparison, PrSpec};
 
 const USAGE_EPILOG: &str = "Meld is a file and directory comparison tool.\n\n\
     Usage:\n  meld                              Start with an empty window\n  \
     meld <file|folder>                Start a version control comparison\n  \
     meld <file> <file> [<file>]       Start a 2- or 3-way file comparison\n  \
     meld <folder> <folder> [<folder>] Start a 2- or 3-way folder comparison\n  \
-    meld --git [<path>]               Compare two revisions of a Git repository\n\n\
+    meld --git [<path>]               Compare two revisions of a Git repository\n  \
+    meld --git --pr <number> [<path>] Review a pull or merge request\n\n\
     For file comparisons, the special argument @blank may be used instead of\n\
     a <file> argument to create a blank pane.";
 
@@ -69,8 +70,28 @@ pub struct Args {
     #[arg(long = "target", value_name = "REV")]
     pub target: Option<String>,
 
+    /// With --git: review pull request (GitHub) or merge request (GitLab)
+    /// NUMBER, comparing its merge base with its head
+    #[arg(long = "pr", value_name = "NUMBER", value_parser = parse_pr_number)]
+    pub pr: Option<u64>,
+
+    /// With --pr: the git remote whose forge has it (default: the remote
+    /// chosen before, else the first with pull requests)
+    #[arg(long = "remote", value_name = "NAME")]
+    pub remote: Option<String>,
+
     /// Files or folders to compare
     pub paths: Vec<String>,
+}
+
+/// `12`, `#12` or `!12`.
+fn parse_pr_number(text: &str) -> Result<u64, String> {
+    let digits = text.trim().trim_start_matches(['#', '!']);
+    digits
+        .parse::<u64>()
+        .ok()
+        .filter(|n| *n > 0)
+        .ok_or_else(|| format!("“{text}” is not a pull request number"))
 }
 
 /// Parses a command line (without the program name). `--diff` takes every
@@ -141,9 +162,15 @@ pub fn launch_from_args(args: Args, cwd: &Path) -> Result<Launch, String> {
         return Ok(launch);
     }
 
-    if args.git || args.base.is_some() || args.target.is_some() {
+    if args.remote.is_some() && args.pr.is_none() {
+        return Err("--remote needs --pr".into());
+    }
+    if args.git || args.base.is_some() || args.target.is_some() || args.pr.is_some() {
         if args.paths.len() > 1 {
             return Err("--git takes at most one path".into());
+        }
+        if args.pr.is_some() && (args.base.is_some() || args.target.is_some()) {
+            return Err("--pr compares the pull request’s own base and head; leave out --base and --target".into());
         }
         let location = match args.paths.first() {
             Some(p) => resolve(cwd, p),
@@ -153,6 +180,10 @@ pub fn launch_from_args(args: Args, cwd: &Path) -> Result<Launch, String> {
             location,
             base: args.base,
             target: args.target,
+            pr: args.pr.map(|number| PrSpec {
+                number,
+                remote: args.remote,
+            }),
         });
         return Ok(launch);
     }
@@ -231,13 +262,46 @@ mod tests {
     fn git_defaults_to_cwd() {
         let launch = parse(&["--git", "--base", "main"]).unwrap();
         match &launch.comparisons[0] {
-            Comparison::Git { location, base, target } => {
+            Comparison::Git {
+                location,
+                base,
+                target,
+                pr,
+            } => {
                 assert_eq!(location, Path::new("/work"));
                 assert_eq!(base.as_deref(), Some("main"));
                 assert!(target.is_none());
+                assert!(pr.is_none());
             }
             other => panic!("unexpected {other:?}"),
         }
+    }
+
+    #[test]
+    fn pr_opens_a_pull_request_review() {
+        let launch = parse(&["--git", "--pr", "#123", "repo"]).unwrap();
+        match &launch.comparisons[0] {
+            Comparison::Git { location, pr, .. } => {
+                assert_eq!(location, Path::new("/work/repo"));
+                assert_eq!(
+                    pr,
+                    &Some(PrSpec {
+                        number: 123,
+                        remote: None
+                    })
+                );
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        // --pr implies --git
+        let launch = parse(&["--pr", "7", "--remote", "github"]).unwrap();
+        assert!(matches!(
+            &launch.comparisons[0],
+            Comparison::Git { pr: Some(PrSpec { number: 7, remote: Some(r) }), .. } if r == "github"
+        ));
+        assert!(parse(&["--git", "--pr", "x"]).is_err());
+        assert!(parse(&["--git", "--pr", "1", "--base", "main"]).is_err());
+        assert!(parse(&["--git", "--remote", "origin"]).is_err());
     }
 
     #[test]

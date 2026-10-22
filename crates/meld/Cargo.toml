@@ -15,6 +15,7 @@ meld-files.workspace = true
 meld-config.workspace = true
 meld-vc.workspace = true
 meld-ailens.workspace = true
+meld-forge.workspace = true
 meld-widgets.workspace = true
 iced.workspace = true
 clap.workspace = true

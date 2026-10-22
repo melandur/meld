@@ -222,6 +222,7 @@ fn recent_entry(comparison: &Comparison) -> Option<(ComparisonType, Vec<PathBuf>
             location,
             base,
             target,
+            pr,
         } => {
             let mut flags = Vec::new();
             if let Some(base) = base {
@@ -229,6 +230,12 @@ fn recent_entry(comparison: &Comparison) -> Option<(ComparisonType, Vec<PathBuf>
             }
             if let Some(target) = target {
                 flags.push(format!("target={target}"));
+            }
+            if let Some(pr) = pr {
+                flags.push(format!("pr={}", pr.number));
+                if let Some(remote) = &pr.remote {
+                    flags.push(format!("remote={remote}"));
+                }
             }
             (ComparisonType::GitCompare, vec![location.clone()], flags)
         }
@@ -265,6 +272,12 @@ fn comparison_from_recent(entry: &RecentComparison) -> Option<Comparison> {
             location: entry.paths.first()?.clone(),
             base: flag("base"),
             target: flag("target"),
+            pr: flag("pr")
+                .and_then(|n| n.parse().ok())
+                .map(|number| crate::comparison::PrSpec {
+                    number,
+                    remote: flag("remote"),
+                }),
         },
     })
 }

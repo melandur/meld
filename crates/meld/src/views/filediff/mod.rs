@@ -732,6 +732,12 @@ impl FileDiff {
         })
     }
 
+    /// The pane and 0-based line the cursor is on, once a pane has one.
+    #[allow(dead_code)] // embedding API
+    pub fn cursor_line(&self) -> Option<(usize, usize)> {
+        Some((self.cursor.pane?, self.cursor.line?))
+    }
+
     /// Height of the message area above `pane`, when it is known (fixed
     /// for embedded comparisons; otherwise measured from the panes).
     fn banner_height(&self, pane: usize) -> f32 {

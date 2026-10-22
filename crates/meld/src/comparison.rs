@@ -31,11 +31,23 @@ pub enum Comparison {
         location: PathBuf,
         base: Option<String>,
         target: Option<String>,
+        /// Review a pull or merge request instead of comparing `base` and
+        /// `target`.
+        pr: Option<PrSpec>,
     },
     /// Two or three images.
     Images { paths: Vec<PathBuf> },
     /// A saved `.meldcmp` comparison file.
     SavedFile(PathBuf),
+}
+
+/// A pull or merge request to open in Git Compare.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrSpec {
+    pub number: u64,
+    /// The git remote whose forge has it; None picks one (the remote
+    /// chosen before in this session, else the first with pull requests).
+    pub remote: Option<String>,
 }
 
 /// Extra details of file comparisons opened from a version control view.

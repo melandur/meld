@@ -10,6 +10,7 @@ use crate::comparison::Comparison;
 use crate::shared::Shared;
 use crate::ui::{self, menu};
 use crate::views::Event;
+use crate::views::prlist::{self, PrList};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
@@ -68,6 +69,8 @@ pub struct NewTab {
     git: Option<PathBuf>,
     /// The folder the last file chooser was in.
     last_folder: Option<PathBuf>,
+    /// Pull requests of the chosen Git repository.
+    prs: PrList,
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +81,7 @@ pub enum Message {
     Chosen(usize, Option<PathBuf>),
     Compare,
     Blank,
+    Prs(prlist::Message),
 }
 
 impl NewTab {
@@ -88,8 +92,11 @@ impl NewTab {
             files: Default::default(),
             folders: Default::default(),
             vc: None,
-            git: None,
+            // The repository Meld was started in, if any: its pull requests
+            // show as soon as Git Compare is picked
+            git: std::env::current_dir().ok().filter(|d| in_repository(d)),
             last_folder: None,
+            prs: PrList::default(),
         }
     }
 
@@ -128,7 +135,12 @@ impl NewTab {
 
     pub fn update(&mut self, message: Message, _shared: &mut Shared, events: &mut Vec<Event>) -> Task<Message> {
         match message {
-            Message::SelectKind(kind) => self.kind = Some(kind),
+            Message::SelectKind(kind) => {
+                self.kind = Some(kind);
+                if let (Kind::Git, Some(git)) = (kind, &self.git) {
+                    return self.prs.set_location(git.clone()).map(Message::Prs);
+                }
+            }
             Message::ThreeWay(on) => self.three_way = on,
             Message::Choose(pane) => {
                 let Some(kind) = self.kind else {
@@ -163,7 +175,10 @@ impl NewTab {
                     Some(Kind::File) => self.files[pane] = Some(path),
                     Some(Kind::Folder) => self.folders[pane] = Some(path),
                     Some(Kind::VersionControl) => self.vc = Some(path),
-                    Some(Kind::Git) => self.git = Some(path),
+                    Some(Kind::Git) => {
+                        self.git = Some(path.clone());
+                        return self.prs.set_location(path).map(Message::Prs);
+                    }
                     None => {}
                 }
             }
@@ -189,10 +204,24 @@ impl NewTab {
                         location: self.git.clone().unwrap_or_default(),
                         base: None,
                         target: None,
+                        pr: None,
                     },
                     None => return Task::none(),
                 };
                 events.push(Event::Replace(comparison));
+            }
+            Message::Prs(message) => {
+                let (task, picked) = self.prs.update(message);
+                if let (Some(pr), Some(location)) = (picked, &self.git) {
+                    events.push(Event::Replace(Comparison::Git {
+                        location: location.clone(),
+                        base: None,
+                        target: None,
+                        pr: Some(pr),
+                    }));
+                    return Task::none();
+                }
+                return task.map(Message::Prs);
             }
             Message::Blank => {
                 let n = self.pane_count();
@@ -285,7 +314,20 @@ impl NewTab {
                 if matches!(kind, Kind::File | Kind::Folder) {
                     col = col.push(checkbox(self.three_way).label("3-way comparison").on_toggle(Message::ThreeWay));
                 }
-                col = col.push(space::vertical());
+                if kind == Kind::Git {
+                    if self.git.is_some() {
+                        col = col.push(container(self.prs.view().map(Message::Prs)).height(Length::Fill));
+                    } else {
+                        col = col.push(
+                            text("Choose a repository to compare two of its revisions, or to review one of its pull requests")
+                                .size(13)
+                                .style(ui::dim_text),
+                        );
+                        col = col.push(space::vertical());
+                    }
+                } else {
+                    col = col.push(space::vertical());
+                }
                 let mut buttons = row![space::horizontal()].spacing(10);
                 if kind.supports_blank() {
                     buttons = buttons.push(
@@ -300,7 +342,7 @@ impl NewTab {
         };
 
         container(
-            container(row![kinds, ui::separator(true), choosers].spacing(20).height(400)).max_width(1000),
+            container(row![kinds, ui::separator(true), choosers].spacing(20).height(480)).max_width(1000),
         )
         .padding(30)
         .center(Length::Fill)
@@ -310,4 +352,10 @@ impl NewTab {
 
 fn dirs_home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
+}
+
+/// Whether `dir` is in a Git working tree (has a `.git` folder or file, or
+/// a folder above it has).
+fn in_repository(dir: &std::path::Path) -> bool {
+    dir.ancestors().any(|d| d.join(".git").exists())
 }

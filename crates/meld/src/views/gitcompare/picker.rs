@@ -5,6 +5,10 @@
 //! filters the list, offers the typed text as a ref or SHA, and after a
 //! pause searches the whole history ([`RepositoryInfo::search_commits`]).
 //!
+//! When the repository has a remote on GitHub or GitLab, a Pull requests
+//! section ([`PrSection`]) lists its pull or merge requests, with chips to
+//! filter them by state and to pick the remote; picking one reviews it.
+//!
 //! [`RepositoryInfo::search_commits`]: meld_ailens::RepositoryInfo::search_commits
 
 use std::collections::HashSet;
@@ -14,6 +18,7 @@ use iced::widget::{button, column, container, row, scrollable, text, text_input}
 use iced::{Element, Length, Theme};
 use meld_ailens::picker::{EntryKind, filter_entries};
 use meld_ailens::{PickerEntry, PickerSide, Revision, RevisionKind};
+use meld_forge::StateFilter;
 
 use super::ellipsis::{Mode, ellipsized};
 use super::popover::popover;
@@ -45,6 +50,22 @@ pub struct Picker {
     search_generation: u64,
     pub input_id: iced::widget::Id,
     list_id: iced::widget::Id,
+    /// Pull requests, when the repository has a forge remote.
+    prs: Option<PrSection>,
+}
+
+/// The pull requests a picker lists.
+#[derive(Debug, Clone, Default)]
+pub struct PrSection {
+    /// Labels of the forge remotes to choose from.
+    pub remotes: Vec<String>,
+    pub selected_remote: Option<usize>,
+    pub filter: StateFilter,
+    pub entries: Vec<PickerEntry>,
+    /// Found by searching the forge for the query.
+    pub search_results: Vec<PickerEntry>,
+    /// e.g. "Loading…" or why they couldn't be listed.
+    pub status: String,
 }
 
 /// What the owner should do after a picker message.
@@ -55,6 +76,10 @@ pub enum Outcome {
     ScheduleSearch(u64),
     /// The user picked an entry.
     Picked(PickerEntry),
+    /// List the pull requests in this state.
+    PrFilter(StateFilter),
+    /// List the pull requests of this remote.
+    PrRemote(usize),
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +88,8 @@ pub enum Message {
     Submit,
     Pick(usize),
     Move(isize),
+    PrFilter(StateFilter),
+    PrRemote(usize),
 }
 
 impl Picker {
@@ -81,6 +108,7 @@ impl Picker {
             search_generation: 0,
             input_id: iced::widget::Id::unique(),
             list_id: iced::widget::Id::unique(),
+            prs: None,
         }
     }
 
@@ -115,6 +143,36 @@ impl Picker {
         self.refilter();
     }
 
+    /// Shows (or hides) the Pull requests section.
+    pub fn set_prs(&mut self, prs: Option<PrSection>) {
+        self.prs = prs;
+        self.refilter_keeping_selection();
+    }
+
+    #[cfg(test)]
+    pub fn prs(&self) -> Option<&PrSection> {
+        self.prs.as_ref()
+    }
+
+    /// Pull requests found by searching the forge for `query`; ignored
+    /// once stale.
+    pub fn set_pr_search_results(&mut self, query: &str, entries: Vec<PickerEntry>) {
+        if query != self.query.trim() {
+            return;
+        }
+        if let Some(prs) = &mut self.prs {
+            let known: HashSet<&Revision> = prs.entries.iter().map(|e| &e.revision).collect();
+            prs.search_results = entries.into_iter().filter(|e| !known.contains(&e.revision)).collect();
+        }
+        self.refilter_keeping_selection();
+    }
+
+    fn refilter_keeping_selection(&mut self) {
+        let selected = self.selected;
+        self.refilter();
+        self.selected = selected.min(self.rows.len().saturating_sub(1));
+    }
+
     pub fn set_status(&mut self, status: impl Into<String>) {
         self.status = status.into();
     }
@@ -136,13 +194,27 @@ impl Picker {
     pub fn reset(&mut self) {
         self.query.clear();
         self.search_results.clear();
+        if let Some(prs) = &mut self.prs {
+            prs.search_results.clear();
+        }
         self.refilter();
     }
 
     fn refilter(&mut self) {
-        let all: Vec<PickerEntry> = self
+        // Pull requests come before the commits
+        let split = self
             .entries
             .iter()
+            .position(|e| e.kind == EntryKind::Commit)
+            .unwrap_or(self.entries.len());
+        let prs = self
+            .prs
+            .iter()
+            .flat_map(|p| p.entries.iter().chain(&p.search_results));
+        let all: Vec<PickerEntry> = self.entries[..split]
+            .iter()
+            .chain(prs)
+            .chain(&self.entries[split..])
             .chain(&self.search_results)
             .cloned()
             .collect();
@@ -167,6 +239,9 @@ impl Picker {
             Message::Query(query) => {
                 self.query = query;
                 self.search_results.clear();
+                if let Some(prs) = &mut self.prs {
+                    prs.search_results.clear();
+                }
                 self.refilter();
                 self.search_generation += 1;
                 if self.query.trim().is_empty() {
@@ -190,6 +265,8 @@ impl Picker {
                 }
                 Outcome::None
             }
+            Message::PrFilter(filter) => Outcome::PrFilter(filter),
+            Message::PrRemote(index) => Outcome::PrRemote(index),
         }
     }
 
@@ -255,7 +332,12 @@ impl Picker {
     }
 
     fn popup<'a, M: Clone + 'a>(&'a self, map: impl Fn(Message) -> M + Copy + 'a) -> Element<'a, M> {
-        let input = text_input("Branch, tag, commit message, author or SHA", &self.query)
+        let placeholder = if self.prs.is_some() {
+            "Branch, tag, commit message, author, SHA or pull request"
+        } else {
+            "Branch, tag, commit message, author or SHA"
+        };
+        let input = text_input(placeholder, &self.query)
             .id(self.input_id.clone())
             .on_input(move |q| map(Message::Query(q)))
             .on_submit(map(Message::Submit))
@@ -287,8 +369,39 @@ impl Picker {
             );
         }
 
+        let mut header = column![input].spacing(6);
+        if let Some(prs) = &self.prs {
+            let filters = crate::forge::chips(
+                StateFilter::ALL
+                    .iter()
+                    .map(|f| (f.label().to_string(), map(Message::PrFilter(*f))))
+                    .collect(),
+                StateFilter::ALL.iter().position(|f| *f == prs.filter),
+            );
+            let mut line = row![text("Pull requests").size(12).style(ui::dim_text), filters]
+                .spacing(8)
+                .align_y(iced::Center);
+            if prs.remotes.len() > 1 {
+                let remotes = prs
+                    .remotes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, label)| (label.clone(), map(Message::PrRemote(i))))
+                    .collect();
+                line = line.push(crate::forge::chips(remotes, prs.selected_remote));
+            }
+            header = header.push(line);
+            if !prs.status.is_empty() {
+                header = header.push(
+                    ellipsized(prs.status.as_str(), Mode::End)
+                        .size(11)
+                        .style(ui::dim_text)
+                        .width(Length::Fill),
+                );
+            }
+        }
         let mut body = column![
-            input,
+            header,
             scrollable(list)
                 .spacing(2)
                 .id(self.list_id.clone())
@@ -301,7 +414,7 @@ impl Picker {
             body = body.push(text(status).size(11).style(ui::dim_text));
         }
         container(body)
-            .width(480)
+            .width(if self.prs.as_ref().is_some_and(|p| p.remotes.len() > 1) { 640 } else { 480 })
             .max_height(560)
             .padding(8)
             .style(ui::popover)
@@ -320,6 +433,7 @@ pub fn icon(entry: &PickerEntry) -> &'static str {
         "network-server-symbolic" => "☁",
         "bookmark-new-symbolic" => "◆",
         "system-search-symbolic" => "⌕",
+        "pull-request" => "↳",
         _ => match entry.kind {
             EntryKind::Commit => "•",
             _ => "·",
@@ -514,6 +628,42 @@ mod tests {
         };
         assert_eq!(entry, p.rows()[2]);
         assert_eq!(p.update(Message::Pick(10_000)), Outcome::None);
+    }
+
+    fn pr_entry(number: u64, title: &str) -> PickerEntry {
+        let remote = meld_forge::remote::parse_remote("github", "git@github.com:o/r.git").unwrap();
+        let pr = meld_forge::PullRequest {
+            number,
+            title: title.into(),
+            ..Default::default()
+        };
+        super::super::review::picker_entry(&remote, &pr, 0.0)
+    }
+
+    #[test]
+    fn pull_requests_are_listed_before_commits_and_filtered() {
+        let mut p = picker();
+        p.set_prs(Some(PrSection {
+            remotes: vec!["github · o/r".into()],
+            selected_remote: Some(0),
+            entries: vec![pr_entry(12, "Add reviews"), pr_entry(3, "Fix typo")],
+            ..Default::default()
+        }));
+        let kinds: Vec<EntryKind> = p.rows().iter().map(|e| e.kind).take(4).collect();
+        assert_eq!(kinds, [EntryKind::Head, EntryKind::Branch, EntryKind::PullRequest, EntryKind::PullRequest]);
+        assert_eq!(p.rows()[4].kind, EntryKind::Commit);
+        p.update(Message::Query("reviews".into()));
+        let labels: Vec<&str> = p.rows().iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(labels, ["Use “reviews”", "#12 Add reviews"]);
+        // Forge search results join, without repeating known ones
+        p.set_pr_search_results("reviews", vec![pr_entry(12, "Add reviews"), pr_entry(40, "More reviews")]);
+        let labels: Vec<&str> = p.rows().iter().map(|e| e.label.as_str()).collect();
+        assert_eq!(labels, ["Use “reviews”", "#12 Add reviews", "#40 More reviews"]);
+        assert_eq!(p.update(Message::PrFilter(StateFilter::Merged)), Outcome::PrFilter(StateFilter::Merged));
+        assert_eq!(p.update(Message::PrRemote(1)), Outcome::PrRemote(1));
+        assert!(p.prs().is_some());
+        p.set_prs(None);
+        assert!(p.rows().iter().all(|e| e.kind != EntryKind::PullRequest));
     }
 
     #[test]

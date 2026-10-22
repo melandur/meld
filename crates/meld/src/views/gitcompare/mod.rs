@@ -16,6 +16,10 @@
 //! working-tree file) are checked every [`POLL_INTERVAL`], files that other
 //! tabs save are reported through [`GitCompare::file_changed`], and a
 //! change during a comparison compares again once it finished.
+//!
+//! A tab can also review a pull or merge request ([`review`]): its head
+//! and base are fetched into private refs, the comparison runs from the
+//! merge base to the head, and the forge's comments sit beside their lines.
 
 mod diffhost;
 mod divider;
@@ -24,6 +28,7 @@ mod filelist;
 mod jobs;
 mod picker;
 mod popover;
+mod review;
 mod whycolumn;
 
 use std::collections::HashSet;
@@ -39,6 +44,7 @@ use meld_ailens::{
     PickerSide, RepositoryInfo, Revision, RevisionKind, SessionConfig, build_file_tree,
 };
 use meld_config::Settings;
+use meld_forge::{Discussion, FetchedPullRequest, Forge, PullRequest, PullRequestDetails, Side, StateFilter};
 
 use self::diffhost::{DiffHost, EmbeddedFile};
 use self::divider::divider;
@@ -49,7 +55,7 @@ use self::picker::Picker;
 use self::popover::popover;
 use self::whycolumn::CardStates;
 use crate::command::Command;
-use crate::comparison::{Comparison, FileExtras};
+use crate::comparison::{Comparison, FileExtras, PrSpec};
 use crate::shared::Shared;
 use crate::ui::{self, BannerKind, icon, menu};
 use crate::views::Event;
@@ -189,6 +195,14 @@ pub struct GitCompare {
     watch: Vec<PathBuf>,
     watch_signature: Option<Vec<Option<(SystemTime, u64)>>>,
     disk_signature: Option<(PathBuf, Option<(SystemTime, u64)>)>,
+    /// A pull request to open once the repository is open (or to try
+    /// again after it failed).
+    pr_spec: Option<PrSpec>,
+    /// The pull request being reviewed.
+    pr: Option<review::PrReview>,
+    /// The forge remotes the pickers list pull requests from.
+    forges: Option<crate::forge::Remotes>,
+    pr_filter: StateFilter,
 }
 
 #[derive(Debug, Clone)]
@@ -204,6 +218,12 @@ pub enum Outcome {
     Built(Result<PathBuf, Error>),
     AgentsSetUp(Result<Vec<String>, Error>),
     CommitMessage(String, Result<String, Error>),
+    PrRemotes(Result<crate::forge::Remotes, Error>),
+    PrList(Result<Vec<PullRequest>, Error>),
+    PrSearch(String, Result<Vec<PullRequest>, Error>),
+    PrOpened(Result<(Forge, Box<PullRequestDetails>, FetchedPullRequest), Error>),
+    PrDiscussion(u64, Result<Discussion, Error>),
+    PrPosted(review::Post, Result<(), Error>),
 }
 
 #[derive(Debug, Clone)]
@@ -242,6 +262,7 @@ pub enum Message {
     DragEnd,
     ResetWhyWidth,
     Poll,
+    Review(review::Message),
 }
 
 /// Which popup a header button opens.
@@ -273,7 +294,13 @@ fn zero_based(ranges: &[meld_ailens::LineRange]) -> Vec<std::ops::Range<usize>> 
 }
 
 impl GitCompare {
-    pub fn new(location: PathBuf, base: Option<String>, target: Option<String>, shared: &mut Shared) -> (Self, Task<Message>) {
+    pub fn new(
+        location: PathBuf,
+        base: Option<String>,
+        target: Option<String>,
+        pr: Option<PrSpec>,
+        shared: &mut Shared,
+    ) -> (Self, Task<Message>) {
         let mut tab = GitCompare {
             location: location.clone(),
             config: config_from_settings(&shared.settings),
@@ -322,6 +349,10 @@ impl GitCompare {
             watch: Vec::new(),
             watch_signature: None,
             disk_signature: None,
+            pr_spec: pr,
+            pr: None,
+            forges: None,
+            pr_filter: StateFilter::Open,
         };
         match revisions_from_args(base.as_deref(), target.as_deref()) {
             Ok((base, target)) => {
@@ -349,7 +380,15 @@ impl GitCompare {
     }
 
     pub fn unsaved(&self) -> Vec<String> {
-        self.diff.unsaved()
+        let mut unsaved = self.diff.unsaved();
+        if let Some(pr) = self.pr.as_ref().filter(|pr| !pr.drafts.is_empty()) {
+            unsaved.push(format!(
+                "{} pending review comments on {}",
+                pr.drafts.len(),
+                pr.reference()
+            ));
+        }
+        unsaved
     }
 
     // -- jobs --
@@ -460,6 +499,34 @@ impl GitCompare {
                 self.title = title;
             }
         }
+        let labels = self.active_pr().map(|pr| {
+            let details = &pr.details.pr;
+            let short = meld_ailens::picker::short_sha(&pr.fetched.base).to_string();
+            let base_branch = if details.base_branch.is_empty() { "base" } else { details.base_branch.as_str() };
+            let reference = pr.reference();
+            let target_label = if details.head_branch.is_empty() {
+                reference.clone()
+            } else {
+                format!("{reference} {}", details.head_branch)
+            };
+            let title = format!("{reference} {}", details.title);
+            (
+                format!("{base_branch} · {short}"),
+                format!("Where {reference} branched off {base_branch}\n{}", pr.fetched.base),
+                target_label,
+                format!("The head of {reference}: {}\n{}", details.title, pr.fetched.head),
+                format!("{}\n{title}", pr.url()),
+                format!("{base_branch} → {reference}"),
+                title,
+            )
+        });
+        if let Some((base_label, base_tip, target_label, target_tip, tooltip, files_title, title)) = labels {
+            self.base_picker.set_label(base_label, Some(base_tip));
+            self.target_picker.set_label(target_label, Some(target_tip));
+            self.tooltip = tooltip;
+            self.files_title = files_title;
+            self.title = title;
+        }
     }
 
     fn rebuild_rows(&mut self) {
@@ -559,7 +626,12 @@ impl GitCompare {
         )
     }
 
-    fn show_file(&mut self, view: FileView, shared: &mut Shared) -> Task<Message> {
+    fn show_file(&mut self, mut view: FileView, shared: &mut Shared) -> Task<Message> {
+        if let (Some(pr), Some(session)) = (self.active_pr(), &self.session)
+            && let Some(path) = view.target_label.strip_suffix(session.target_label())
+        {
+            view.target_label = format!("{path}{}", pr.reference());
+        }
         let same = self.view.as_ref().is_some_and(|previous| {
             view.message.is_empty()
                 && previous.message.is_empty()
@@ -680,7 +752,12 @@ impl GitCompare {
                 self.watch = watch;
                 self.watch_signature = Some(self.signature());
                 let pickers = self.load_pickers();
-                Task::batch([pickers, self.reload(shared)])
+                let forges = self.load_forges();
+                let compare = match self.pr_spec.clone() {
+                    Some(spec) => self.open_pr(spec),
+                    None => self.reload(shared),
+                };
+                Task::batch([pickers, forges, compare])
             }
             Outcome::Opened(Err(err)) => {
                 if !err.is_cancelled() {
@@ -838,7 +915,372 @@ impl GitCompare {
                 }
                 Task::none()
             }
+            Outcome::PrRemotes(result) => {
+                match result {
+                    Ok(remotes) if !remotes.forges.is_empty() => {
+                        self.forges = Some(remotes);
+                        self.update_pr_sections(Vec::new(), "Loading…".into());
+                        return self.list_prs();
+                    }
+                    Ok(_) => {}
+                    Err(err) if !err.is_cancelled() => log::info!("No pull requests: {err}"),
+                    Err(_) => {}
+                }
+                Task::none()
+            }
+            Outcome::PrList(result) => {
+                match result {
+                    Ok(prs) => {
+                        let status = if prs.is_empty() {
+                            let nouns = self
+                                .forges
+                                .as_ref()
+                                .and_then(|f| f.current())
+                                .map_or("pull requests", |f| f.kind().nouns());
+                            match self.pr_filter {
+                                StateFilter::All => format!("No {nouns}"),
+                                filter => format!("No {} {nouns}", filter.label().to_lowercase()),
+                            }
+                        } else {
+                            String::new()
+                        };
+                        let entries = self.pr_entries(&prs);
+                        self.update_pr_sections(entries, status);
+                    }
+                    Err(err) if !err.is_cancelled() => {
+                        let (first, _) = condense(&err.to_string());
+                        self.update_pr_sections(Vec::new(), first);
+                    }
+                    Err(_) => {}
+                }
+                Task::none()
+            }
+            Outcome::PrSearch(query, result) => {
+                if let Ok(prs) = result {
+                    let entries = self.pr_entries(&prs);
+                    self.base_picker.set_pr_search_results(&query, entries.clone());
+                    self.target_picker.set_pr_search_results(&query, entries);
+                }
+                Task::none()
+            }
+            Outcome::PrOpened(result) => {
+                self.busy = None;
+                match result {
+                    Ok((forge, details, fetched)) => {
+                        let mut opened = review::PrReview::new(forge, *details, fetched);
+                        if let Some(old) = self.pr.take()
+                            && old.number() == opened.number()
+                            && old.forge.remote == opened.forge.remote
+                        {
+                            // Reloaded: keep what the user was writing
+                            opened.drafts = old.drafts;
+                            opened.review_body = old.review_body;
+                            opened.review_event = old.review_event;
+                            opened.show_details = old.show_details;
+                            opened.expanded = old.expanded;
+                        }
+                        self.base = Revision::commit(opened.fetched.base.clone());
+                        self.target = Revision::commit(opened.fetched.head_ref.clone());
+                        self.pr = Some(opened);
+                        self.pr_spec = None;
+                        let discussion = self.load_discussion();
+                        Task::batch([self.reload(shared), discussion])
+                    }
+                    Err(err) if err.is_cancelled() => {
+                        let what = self.pr_spec.as_ref().map(|s| format!("#{}", s.number)).unwrap_or_default();
+                        self.show_message(
+                            "⏹",
+                            &format!("Stopped opening {what}"),
+                            Some("Reload to try again.".into()),
+                        );
+                        Task::none()
+                    }
+                    Err(err) => {
+                        self.session = None;
+                        self.show_message("⚠", &condense(&err.to_string()).0, Some("Reload to try again.".into()));
+                        self.show_banner(BannerKind::Error, err.to_string(), None);
+                        Task::none()
+                    }
+                }
+            }
+            Outcome::PrDiscussion(number, result) => {
+                if let Some(pr) = self.pr.as_mut().filter(|pr| pr.number() == number) {
+                    match result {
+                        Ok(discussion) => pr.set_discussion(Ok(discussion)),
+                        Err(err) if err.is_cancelled() => {}
+                        Err(err) => pr.set_discussion(Err(condense(&err.to_string()).0)),
+                    }
+                }
+                Task::none()
+            }
+            Outcome::PrPosted(post, result) => {
+                let Some(pr) = self.pr.as_mut() else {
+                    return Task::none();
+                };
+                let what = match &post {
+                    review::Post::Review(review) => review.summary(),
+                    review::Post::Reply { .. } => "Reply".to_string(),
+                };
+                match result {
+                    Ok(()) => {
+                        pr.posted(&post, Ok(()));
+                        let text = format!("Posted to {}: {what}", pr.reference());
+                        self.show_banner(BannerKind::Info, text, None);
+                        self.load_discussion()
+                    }
+                    Err(err) => {
+                        pr.posted(&post, Err(err.to_string()));
+                        if !err.is_cancelled() {
+                            self.show_banner(BannerKind::Error, format!("Couldn’t post: {err}"), None);
+                        }
+                        Task::none()
+                    }
+                }
+            }
         }
+    }
+
+    // -- pull requests --
+
+    /// The forge remotes of the repository, for the pickers' Pull requests
+    /// sections.
+    fn load_forges(&mut self) -> Task<Message> {
+        let Some(info) = self.info.clone() else {
+            return Task::none();
+        };
+        let preferred = self.pr_spec.as_ref().and_then(|s| s.remote.clone());
+        self.run(
+            "pr-remotes",
+            true,
+            move |cancel, _| Ok(crate::forge::remotes_of(&info.repo, preferred.as_deref(), cancel)?),
+            Outcome::PrRemotes,
+        )
+    }
+
+    fn list_prs(&mut self) -> Task<Message> {
+        let Some(forge) = self.forges.as_ref().and_then(|f| f.current()).cloned() else {
+            return Task::none();
+        };
+        let filter = self.pr_filter;
+        self.run(
+            "pr-list",
+            true,
+            move |cancel, _| Ok(forge.list(filter, "", crate::views::prlist::PAGE, cancel)?),
+            Outcome::PrList,
+        )
+    }
+
+    fn pr_entries(&self, prs: &[PullRequest]) -> Vec<PickerEntry> {
+        let Some(forge) = self.forges.as_ref().and_then(|f| f.current()) else {
+            return Vec::new();
+        };
+        let now = meld_ailens::time::now_timestamp();
+        prs.iter().map(|pr| review::picker_entry(&forge.remote, pr, now)).collect()
+    }
+
+    fn update_pr_sections(&mut self, entries: Vec<PickerEntry>, status: String) {
+        let section = self.forges.as_ref().map(|forges| picker::PrSection {
+            remotes: forges.forges.iter().map(|f| f.remote.label()).collect(),
+            selected_remote: forges.selected,
+            filter: self.pr_filter,
+            entries,
+            search_results: Vec::new(),
+            status,
+        });
+        self.base_picker.set_prs(section.clone());
+        self.target_picker.set_prs(section);
+    }
+
+    /// Fetches pull request `spec` and compares its merge base with its head.
+    fn open_pr(&mut self, spec: PrSpec) -> Task<Message> {
+        let Some(info) = self.info.clone() else {
+            self.pr_spec = Some(spec);
+            return Task::none();
+        };
+        self.pr_spec = Some(spec.clone());
+        self.busy = Some(format!("Opening #{}…", spec.number));
+        if self.pr.as_ref().is_none_or(|pr| pr.number() != spec.number) {
+            self.session = None;
+            self.entries.clear();
+            self.tree.clear();
+            self.rows.clear();
+            self.current = None;
+            self.view = None;
+            self.show_message("⌛", &format!("Fetching #{}…", spec.number), Some("Press Escape to stop.".into()));
+        }
+        self.run(
+            "pr-open",
+            true,
+            move |cancel, progress| {
+                let remotes = crate::forge::remotes_of(&info.repo, spec.remote.as_deref(), cancel)?;
+                if let Some(name) = &spec.remote
+                    && remotes.find(name).is_none()
+                {
+                    return Err(Error::msg(format!(
+                        "The remote “{name}” isn’t on GitHub or GitLab (or doesn’t exist)."
+                    )));
+                }
+                let forge = remotes
+                    .current()
+                    .cloned()
+                    .ok_or_else(|| Error::msg("No remote of this repository is on GitHub or GitLab."))?;
+                let reference = forge.kind().reference(spec.number);
+                progress(&format!("Loading {reference} from {}…", forge.remote.host));
+                let details = forge.details(spec.number, cancel)?;
+                let fetched =
+                    meld_forge::fetch::fetch_pull_request(&info.repo, &forge.remote, &details, cancel, progress)?;
+                Ok((forge, Box::new(details), fetched))
+            },
+            Outcome::PrOpened,
+        )
+    }
+
+    fn load_discussion(&mut self) -> Task<Message> {
+        let Some(pr) = self.pr.as_mut() else {
+            return Task::none();
+        };
+        pr.discussion_status = Some("Loading comments…".into());
+        let (forge, details) = (pr.forge.clone(), pr.details.clone());
+        let number = pr.number();
+        self.run(
+            "pr-discussion",
+            true,
+            move |cancel, _| Ok(forge.discussion(&details, cancel)?),
+            move |result| Outcome::PrDiscussion(number, result),
+        )
+    }
+
+    /// The pull request being reviewed, while the comparison shows it.
+    fn active_pr(&self) -> Option<&review::PrReview> {
+        self.pr.as_ref().filter(|pr| pr.matches(&self.base, &self.target))
+    }
+
+    /// Stops reviewing (another comparison was picked).
+    fn leave_pr(&mut self) {
+        self.pr_spec = None;
+        if let Some(pr) = self.pr.take()
+            && !pr.drafts.is_empty()
+        {
+            self.show_banner(
+                BannerKind::Warning,
+                format!("{} pending review comments on {} were discarded", pr.drafts.len(), pr.reference()),
+                None,
+            );
+        }
+    }
+
+    /// Reload as the user asks for it: a pull request is fetched again, and
+    /// the pickers' pull requests are listed again.
+    fn user_reload(&mut self, shared: &Shared) -> Task<Message> {
+        let prs = if self.forges.is_some() { self.list_prs() } else { self.load_forges() };
+        let compare = self.user_reload_comparison(shared);
+        Task::batch([compare, prs])
+    }
+
+    fn user_reload_comparison(&mut self, shared: &Shared) -> Task<Message> {
+        if let Some(spec) = self.pr_spec.clone() {
+            return self.open_pr(spec);
+        }
+        if let Some(pr) = self.active_pr() {
+            let spec = PrSpec {
+                number: pr.number(),
+                remote: Some(pr.forge.remote.name.clone()),
+            };
+            return self.open_pr(spec);
+        }
+        self.reload(shared)
+    }
+
+    fn review(&mut self, message: review::Message) -> Task<Message> {
+        let had_composer = self.pr.as_ref().is_some_and(|pr| pr.composer.is_some());
+        let task = self.review_action(message);
+        // A composer that just opened gets the keyboard; it covers the card,
+        // which then never sees the pointer leave
+        match self.pr.as_ref().filter(|pr| !had_composer && pr.composer.is_some()) {
+            Some(pr) => {
+                let focus = iced::widget::operation::focus(pr.editor_id.clone());
+                self.diff.set_hover([Vec::new(), Vec::new()]);
+                Task::batch([task, focus])
+            }
+            None => task,
+        }
+    }
+
+    fn review_action(&mut self, message: review::Message) -> Task<Message> {
+        if matches!(message, review::Message::AddComment) {
+            self.comment_at_cursor();
+            return Task::none();
+        }
+        let Some(pr) = self.pr.as_mut() else {
+            return Task::none();
+        };
+        match pr.update(message) {
+            review::Action::None => Task::none(),
+            review::Action::Post(post) => {
+                let (forge, details) = (pr.forge.clone(), pr.details.clone());
+                let for_result = post.clone();
+                self.run(
+                    "pr-post",
+                    true,
+                    move |cancel, _| {
+                        match &post {
+                            review::Post::Review(review) => forge.submit_review(&details, review, cancel)?,
+                            review::Post::Reply { thread, body } => forge.reply(&details, thread, body, cancel)?,
+                        }
+                        Ok(())
+                    },
+                    move |result| Outcome::PrPosted(for_result.clone(), result),
+                )
+            }
+            review::Action::RefreshComments => self.load_discussion(),
+            review::Action::OpenUrl(url) => {
+                if let Err(err) = open::that_detached(&url) {
+                    self.show_banner(BannerKind::Error, format!("Couldn’t open {url}: {err}"), None);
+                }
+                Task::none()
+            }
+            review::Action::Hover(at) => {
+                let mut lines = [Vec::new(), Vec::new()];
+                if let Some((side, line)) = at {
+                    let pane = if side == Side::Old { 0 } else { 1 };
+                    let line = line.saturating_sub(1) as usize;
+                    lines[pane] = Vec::from([line..line + 1]);
+                }
+                self.diff.set_hover(lines);
+                Task::none()
+            }
+        }
+    }
+
+    /// Opens the composer for a comment on the line with the cursor.
+    fn comment_at_cursor(&mut self) {
+        let (Some(entry), true) = (self.current.clone(), self.content == Content::Diff) else {
+            self.show_banner(BannerKind::Info, "Open a changed file first".into(), None);
+            return;
+        };
+        let Some((pane, line)) = self.diff.cursor_line() else {
+            self.show_banner(BannerKind::Info, "Click the line to comment on first".into(), None);
+            return;
+        };
+        if self.active_pr().is_none() {
+            return;
+        }
+        let Some(pr) = self.pr.as_mut() else {
+            return;
+        };
+        let change = &entry.change;
+        // A deleted file only has its old side
+        let side = if pane == 0 || change.status == meld_ailens::GitFileStatus::Deleted {
+            Side::Old
+        } else {
+            Side::New
+        };
+        pr.comment_on(
+            change.path.clone(),
+            change.original_path.clone().filter(|o| *o != change.path),
+            side,
+            line as u32 + 1,
+        );
     }
 
     fn picker_mut(&mut self, side: PickerSide) -> &mut Picker {
@@ -861,6 +1303,7 @@ impl GitCompare {
             self.show_banner(BannerKind::Warning, "Staged → Working Tree can’t be swapped".into(), None);
             return Task::none();
         }
+        self.leave_pr();
         std::mem::swap(&mut self.base, &mut self.target);
         self.reload(shared)
     }
@@ -1110,6 +1553,10 @@ impl GitCompare {
             }
             Message::RepositoryChosen(Some(path)) => {
                 self.jobs.cancel_all();
+                self.leave_pr();
+                self.forges = None;
+                self.base_picker.set_prs(None);
+                self.target_picker.set_prs(None);
                 self.info = None;
                 self.session = None;
                 self.banner = None;
@@ -1157,8 +1604,41 @@ impl GitCompare {
                         tokio::time::sleep(picker::SEARCH_DELAY),
                         move |_| Message::SearchDue(side, generation),
                     ),
+                    picker::Outcome::PrFilter(filter) => {
+                        self.pr_filter = filter;
+                        self.update_pr_sections(Vec::new(), "Loading…".into());
+                        self.list_prs()
+                    }
+                    picker::Outcome::PrRemote(index) => {
+                        if let Some(forges) = &mut self.forges {
+                            forges.select(index);
+                        }
+                        self.update_pr_sections(Vec::new(), "Loading…".into());
+                        self.list_prs()
+                    }
+                    picker::Outcome::Picked(entry) if entry.kind == meld_ailens::picker::EntryKind::PullRequest => {
+                        self.popup = None;
+                        match entry
+                            .revision
+                            .ref_name
+                            .as_deref()
+                            .and_then(meld_forge::fetch::parse_pr_ref)
+                        {
+                            Some((remote, number)) => {
+                                if self.pr.as_ref().is_some_and(|pr| pr.number() != number) {
+                                    self.leave_pr();
+                                }
+                                self.open_pr(PrSpec {
+                                    number,
+                                    remote: Some(remote),
+                                })
+                            }
+                            None => Task::none(),
+                        }
+                    }
                     picker::Outcome::Picked(entry) => {
                         self.popup = None;
+                        self.leave_pr();
                         let heads = self.info.as_ref().map(|i| i.worktree_heads()).unwrap_or_default();
                         let (base, target) = apply_pick(&self.base, &self.target, &entry, side, &heads);
                         self.base = base;
@@ -1180,15 +1660,29 @@ impl GitCompare {
                     return Task::none();
                 }
                 let for_result = query.clone();
-                self.run(
+                let pr_search = match self.forges.as_ref().and_then(|f| f.current()).cloned() {
+                    Some(forge) => {
+                        let (filter, pr_query) = (self.pr_filter, query.clone());
+                        let for_pr_result = query.clone();
+                        self.run(
+                            "pr-search",
+                            true,
+                            move |cancel, _| Ok(forge.list(filter, &pr_query, 30, cancel)?),
+                            move |result| Outcome::PrSearch(for_pr_result.clone(), result),
+                        )
+                    }
+                    None => Task::none(),
+                };
+                let search = self.run(
                     &format!("search-{}", side_name(side)),
                     true,
                     move |cancel, _| info.search_commits(&query, cancel),
                     move |result| Outcome::Search(side, for_result.clone(), result),
-                )
+                );
+                Task::batch([search, pr_search])
             }
             Message::Swap => self.swap(shared),
-            Message::Reload => self.reload(shared),
+            Message::Reload => self.user_reload(shared),
             Message::ExplainAll => self.explain_all(),
             Message::Build => self.generate_build(),
             Message::SetUpAgents => {
@@ -1273,6 +1767,7 @@ impl GitCompare {
             }
             Message::CompareWithParent(sha) => {
                 self.commit = None;
+                self.leave_pr();
                 self.base = Revision::commit(format!("{sha}^"));
                 self.target = Revision::commit(sha);
                 self.reload(shared)
@@ -1334,6 +1829,7 @@ impl GitCompare {
                 Task::none()
             }
             Message::Poll => self.poll(shared),
+            Message::Review(message) => self.review(message),
         }
     }
 
@@ -1346,12 +1842,37 @@ impl GitCompare {
                     None => Task::none(),
                 }
             }
-            Command::Refresh => self.reload(shared),
+            Command::Refresh => self.user_reload(shared),
             Command::Stop => {
-                if self.popup.is_some() || self.commit.is_some() {
+                if let Some(pr) = self.pr.as_mut().filter(|pr| pr.confirm.is_some() || pr.composer.is_some()) {
+                    if pr.posting {
+                        // The post may be half done; say so
+                        self.jobs.cancel_all();
+                        pr.posting = false;
+                        pr.confirm = None;
+                        self.busy = None;
+                        self.show_banner(
+                            BannerKind::Warning,
+                            "Stopped posting; some of it may have been posted already".into(),
+                            None,
+                        );
+                    } else if pr.confirm.is_some() {
+                        pr.update(review::Message::CancelConfirm);
+                    } else {
+                        pr.update(review::Message::CancelComposer);
+                    }
+                } else if self.popup.is_some() || self.commit.is_some() {
                     self.popup = None;
                     self.commit = None;
                 } else {
+                    if self.jobs.is_running("pr-open")
+                        && let Some(spec) = &self.pr_spec
+                    {
+                        let title = format!("Stopped opening #{}", spec.number);
+                        if self.session.is_none() {
+                            self.show_message("⏹", &title, Some("Reload to try again.".into()));
+                        }
+                    }
                     self.jobs.cancel_all();
                     self.busy = None;
                     self.cards.busy.clear();
@@ -1426,6 +1947,26 @@ impl GitCompare {
         } else {
             menu::Item::disabled("Open File in New Tab")
         });
+        if let Some(pr) = self.active_pr() {
+            items.push(menu::Item::Separator);
+            items.push(menu::Item::Heading(format!("Review {}", pr.reference())));
+            items.push(menu::Item::action(
+                "Comment on Line",
+                None,
+                Message::Review(review::Message::AddComment),
+            ));
+            items.push(menu::Item::action("Review…", None, Message::Review(review::Message::StartReview)));
+            items.push(menu::Item::action(
+                "Reload Comments",
+                None,
+                Message::Review(review::Message::RefreshComments),
+            ));
+            items.push(menu::Item::action(
+                "Open in Browser",
+                None,
+                Message::Review(review::Message::OpenInBrowser),
+            ));
+        }
         if self.content == Content::Diff {
             let diff_items = self.diff.menu_items(shared);
             if !diff_items.is_empty() {
@@ -1440,6 +1981,9 @@ impl GitCompare {
 
     pub fn view<'a>(&'a self, shared: &'a Shared) -> Element<'a, Message> {
         let mut page = column![self.header(), ui::separator(false)];
+        if let Some(pr) = self.active_pr() {
+            page = page.push(pr.strip().map(Message::Review)).push(ui::separator(false));
+        }
         if let Some(banner) = &self.banner {
             let mut actions = Vec::new();
             if let Some((label, _)) = &banner.action {
@@ -1458,8 +2002,13 @@ impl GitCompare {
         .height(Length::Fill);
         let page: Element<'a, Message> = page.push(body).into();
 
-        match &self.commit {
-            Some(commit) => ui::modal::modal(page, commit_dialog(commit), Message::CloseCommit),
+        if let Some(commit) = &self.commit {
+            return ui::modal::modal(page, commit_dialog(commit), Message::CloseCommit);
+        }
+        match self.active_pr().and_then(|pr| pr.dialog()) {
+            Some((dialog, on_blur)) => {
+                ui::modal::modal(page, dialog.map(Message::Review), Message::Review(on_blur))
+            }
             None => page,
         }
     }
@@ -1675,15 +2224,26 @@ impl GitCompare {
             _ => &[],
         };
         let now = meld_ailens::time::now_timestamp();
-        let elements: Vec<Element<'_, Message>> = cards
+        let mut elements: Vec<Element<'_, Message>> = cards
             .iter()
             .map(|card| whycolumn::card_view(card, &self.cards, callbacks, now))
             .collect();
-        let wanted = whycolumn::wanted_tops(cards, [self.diff.pane_geometry(0), self.diff.pane_geometry(1)]);
+        let panes = [self.diff.pane_geometry(0), self.diff.pane_geometry(1)];
+        let mut wanted = whycolumn::wanted_tops(cards, panes);
+        // The pull request's comments on this file, beside their lines
+        let mut comments = 0;
+        if let (Some(pr), Some(view), false) = (self.active_pr(), &self.view, self.diff.is_loading()) {
+            let change = view.change();
+            for (top, card) in pr.cards(&change.path, change.original_path.as_deref(), panes) {
+                wanted.push(top);
+                elements.push(card.map(Message::Review));
+                comments += 1;
+            }
+        }
         let placeholder = self
             .view
             .as_ref()
-            .filter(|v| v.cards.is_empty() && !v.cards_placeholder.is_empty())
+            .filter(|v| v.cards.is_empty() && !v.cards_placeholder.is_empty() && comments == 0)
             .map(|v| {
                 container(text(v.cards_placeholder.as_str()).size(13).style(ui::dim_text).center())
                     .padding([0, 12])
@@ -1748,6 +2308,16 @@ fn map_item<M, N>(item: menu::Item<M>, f: impl Fn(M) -> N) -> menu::Item<N> {
         },
         menu::Item::Separator => menu::Item::Separator,
         menu::Item::Heading(h) => menu::Item::Heading(h),
+    }
+}
+
+/// A one-line label shortened with “…” at its end: bold, or dimmed.
+pub fn ellipsized_label<'a, M: 'a>(content: impl Into<std::borrow::Cow<'a, str>>, size: f32, bold: bool) -> Element<'a, M> {
+    let label = ellipsized(content, Mode::End).size(size).width(Length::Fill);
+    if bold {
+        label.font(ui::bold()).into()
+    } else {
+        label.style(ui::dim_text).into()
     }
 }
 

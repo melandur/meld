@@ -9,7 +9,8 @@
 //! - `pane_geometry(pane) -> Option<PaneGeometry>` (0-based line `i` is at
 //!   `PaneGeometry::line_y(i)` below `header_height`, which accounts for
 //!   wrapped lines and a message shown above that pane)
-//! - `scroll_to_line(pane, line)`, `first_change()`, `is_loading()`
+//! - `scroll_to_line(pane, line)`, `first_change()`, `is_loading()`,
+//!   `cursor_line()` (where a line comment of a review goes)
 //! - [`DiffHost::header_height`]: how far below the top of the view the
 //!   file header row ends, so that the Why column lines up
 //! - [`DiffHost::set_hover`]: lines of the hovered card, drawn highlighted
@@ -44,6 +45,11 @@ impl DiffHost {
 
     pub fn pane_geometry(&self, pane: usize) -> Option<PaneGeometry<'_>> {
         self.0.pane_geometry(pane)
+    }
+
+    /// The pane (0 base, 1 target) and 0-based line of the cursor.
+    pub fn cursor_line(&self) -> Option<(usize, usize)> {
+        self.0.cursor_line()
     }
 
     pub fn header_height(&self) -> f32 {

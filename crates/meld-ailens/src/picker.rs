@@ -23,6 +23,9 @@ pub enum EntryKind {
     Tag,
     Commit,
     Typed,
+    /// A pull or merge request; the app lists these (picking one compares
+    /// its merge base with its head)
+    PullRequest,
 }
 
 /// Which picker an entry is for
