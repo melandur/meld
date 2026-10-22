@@ -71,6 +71,7 @@ impl Shared {
     /// Re-resolves the style scheme, iced theme and fonts after a settings
     /// or system theme change.
     pub fn refresh_theme(&mut self) {
+        crate::ui::chooser::set_default_folder(&self.settings.default_folder);
         self.style =
             meld_config::Theme::from_settings(&self.schemes, &self.settings, self.system_dark);
         self.theme = iced_theme(&self.style);

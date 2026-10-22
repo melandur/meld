@@ -233,6 +233,9 @@ pub struct Settings {
     pub ignore_blank_lines: bool,
     pub use_system_editor: bool,
     pub custom_editor_command: String,
+    /// Where file choosers start when nothing better is known; empty is
+    /// the home folder.
+    pub default_folder: String,
     pub folder_ignore_symlinks: bool,
     pub folder_shallow_comparison: bool,
     pub folder_time_resolution: i32,
@@ -319,13 +322,13 @@ impl Default for Settings {
             detect_encodings: Vec::new(),
             indent_width: 8,
             insert_spaces_instead_of_tabs: false,
-            show_line_numbers: false,
+            show_line_numbers: true,
             highlight_syntax: true,
-            style_scheme: "classic".to_string(),
-            diff_colors: DiffColorMode::Scheme,
+            style_scheme: "meld-monokai".to_string(),
+            diff_colors: DiffColorMode::SchemeChanges,
             diff_color_opacity: 100,
             enable_space_drawer: false,
-            wrap_mode: WrapMode::None,
+            wrap_mode: WrapMode::Word,
             highlight_current_line: false,
             use_system_font: true,
             custom_font: "monospace, 14".to_string(),
@@ -334,6 +337,7 @@ impl Default for Settings {
             ignore_blank_lines: false,
             use_system_editor: true,
             custom_editor_command: String::new(),
+            default_folder: String::new(),
             folder_columns: default_folder_columns(),
             folder_ignore_symlinks: false,
             folder_shallow_comparison: false,
@@ -629,12 +633,12 @@ mod tests {
         assert!(s.detect_encodings.is_empty());
         assert_eq!(s.indent_width, 8);
         assert!(!s.insert_spaces_instead_of_tabs);
-        assert!(!s.show_line_numbers);
+        assert!(s.show_line_numbers);
         assert!(s.highlight_syntax);
-        assert_eq!(s.style_scheme, "classic");
-        assert_eq!(s.diff_colors, DiffColorMode::Scheme);
+        assert_eq!(s.style_scheme, "meld-monokai");
+        assert_eq!(s.diff_colors, DiffColorMode::SchemeChanges);
         assert!(!s.enable_space_drawer);
-        assert_eq!(s.wrap_mode, WrapMode::None);
+        assert_eq!(s.wrap_mode, WrapMode::Word);
         assert!(!s.highlight_current_line);
         assert!(s.use_system_font);
         assert_eq!(s.custom_font, "monospace, 14");
@@ -710,8 +714,8 @@ mod tests {
                 "missing setting {key}"
             );
         }
-        assert_eq!(count, 47);
-        assert_eq!(table.len() - 1 + window.len(), 47);
+        assert_eq!(count, 48);
+        assert_eq!(table.len() - 1 + window.len(), 48);
     }
 
     #[test]
@@ -775,7 +779,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(s.indent_width, 8);
-        assert_eq!(s.wrap_mode, WrapMode::None);
+        assert_eq!(s.wrap_mode, WrapMode::Word);
         assert!(s.show_line_numbers);
         // Clamped into the schema range
         assert_eq!(s.ailens_file_list_width, 120);
@@ -784,7 +788,7 @@ mod tests {
     #[test]
     fn diff_color_settings() {
         let s = Settings::default();
-        assert_eq!(s.diff_colors, DiffColorMode::Scheme);
+        assert_eq!(s.diff_colors, DiffColorMode::SchemeChanges);
         assert_eq!(s.diff_color_opacity, 100);
         // Every palette is a valid value, including Meld's original ones
         for mode in DiffColorMode::ALL {
@@ -792,7 +796,7 @@ mod tests {
             assert_eq!(s.diff_colors, mode);
         }
         let s = Settings::from_toml_str("diff-colors = 'rainbow'\nindent-width = 3").unwrap();
-        assert_eq!(s.diff_colors, DiffColorMode::Scheme);
+        assert_eq!(s.diff_colors, DiffColorMode::SchemeChanges);
         assert_eq!(s.indent_width, 3);
         // Opacity is clamped into the schema range
         for (value, expected) in [(5, 10), (10, 10), (55, 55), (100, 100), (150, 100)] {

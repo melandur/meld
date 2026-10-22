@@ -1397,7 +1397,7 @@ impl DirDiff {
                     .filter(|r| !r.as_os_str().is_empty())
                     .and_then(|r| r.parent().map(Path::to_path_buf))
                     .or_else(|| self.last_folder.clone())
-                    .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
+                    .or_else(ui::chooser::default_folder);
                 return ui::chooser::pick_folder(tr!("Select Folder"), start)
                     .map(move |path| Message::Browsed(pane, path));
             }

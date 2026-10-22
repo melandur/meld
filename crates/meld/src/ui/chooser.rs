@@ -75,6 +75,7 @@ fn run(
     // Without a folder the portal would show its own working directory.
     let dir = dir
         .filter(|d| d.is_dir())
+        .or_else(default_folder)
         .or_else(|| std::env::current_dir().ok());
     let options = Options {
         mode,
@@ -311,6 +312,34 @@ impl Request {
 
 static QUEUE: Mutex<Vec<Request>> = Mutex::new(Vec::new());
 
+/// The `default-folder` setting, kept here so every chooser can use it.
+static DEFAULT_FOLDER: Mutex<Option<PathBuf>> = Mutex::new(None);
+
+/// Sets where choosers start when nothing better is known (the
+/// `default-folder` setting; empty is the home folder, `~` expands).
+pub fn set_default_folder(setting: &str) {
+    let setting = setting.trim();
+    let folder = if setting.is_empty() {
+        None
+    } else {
+        Some(resolve(setting, Path::new("/")))
+    };
+    if let Ok(mut current) = DEFAULT_FOLDER.lock() {
+        *current = folder;
+    }
+}
+
+/// The folder choosers start in when nothing better is known: the
+/// `default-folder` setting if it exists, else the home folder.
+pub fn default_folder() -> Option<PathBuf> {
+    DEFAULT_FOLDER
+        .lock()
+        .ok()
+        .and_then(|f| f.clone())
+        .filter(|f| f.is_dir())
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+}
+
 fn notify() -> &'static Notify {
     static NOTIFY: OnceLock<Notify> = OnceLock::new();
     NOTIFY.get_or_init(Notify::new)
@@ -494,6 +523,7 @@ impl Dialog {
             .options
             .dir
             .clone()
+            .or_else(default_folder)
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("/"))
     }

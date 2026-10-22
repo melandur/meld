@@ -96,7 +96,7 @@
           <description>If true, any new indentation will use spaces instead of tabs.</description>
       </key>
       <key name="show-line-numbers" type="b">
-          <default>false</default>
+          <default>true</default>
           <summary>Show line numbers</summary>
           <description>If true, line numbers will be shown in the gutter of file comparisons.</description>
       </key>
@@ -106,12 +106,12 @@
           <description>Whether to highlight syntax in comparisons.</description>
       </key>
       <key name="style-scheme" type="s">
-          <default>"classic"</default>
+          <default>"meld-monokai"</default>
           <summary>Color scheme to use for syntax highlighting</summary>
           <description>Used by GtkSourceView to determine colors for syntax highlighting</description>
       </key>
       <key name="diff-colors" enum="org.gnome.meld.diffcolors">
-          <default>"scheme"</default>
+          <default>"scheme-changes"</default>
           <summary>Colors used to highlight differences</summary>
           <description>Which colors to use for changed, inserted and deleted text. "scheme" uses the colors of the current color scheme; "scheme-changes" uses them too, with removed lines in the scheme's delete color. "red-green" colors everything in the old pane red and in the new pane green; "colorblind" does the same in orange and blue. The other palettes color each change the same in both panes: "red-green-blue" shows removed lines red, added green and changed blue; "blue-orange" orange, blue and teal; "purple-green" purple, green and slate; "high-contrast" uses saturated fills and strong outlines.</description>
       </key>
@@ -132,7 +132,7 @@
             <alias value='GTK_WRAP_CHAR' target='char'/>
             <alias value='GTK_WRAP_WORD' target='word'/>
           </aliases>
-          <default>'none'</default>
+          <default>"word"</default>
           <summary>Wrap mode</summary>
           <description>Lines in file comparisons will be wrapped according to this setting, either not at all ('none'), at any character ('char') or only at the end of words ('word').</description>
       </key>
@@ -186,6 +186,11 @@
           <default>""</default>
           <summary>The custom editor launch command</summary>
           <description>The command used to launch a custom editor. Some limited templating is supported here; at the moment '{file}' and '{line}' are recognised tokens.</description>
+      </key>
+      <key name="default-folder" type="s">
+          <default>""</default>
+          <summary>Default folder for file choosers</summary>
+          <description>The folder file and folder choosers open in when there is no better place to start, such as the folder of the file being compared. Empty means the home folder. A leading ~ is the home folder.</description>
       </key>
 
       <!-- Folder comparison properties -->

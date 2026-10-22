@@ -183,7 +183,7 @@ impl NewTab {
                     .chosen(pane)
                     .and_then(|p| p.parent().map(PathBuf::from))
                     .or_else(|| self.last_folder.clone())
-                    .or_else(dirs_home);
+                    .or_else(ui::chooser::default_folder);
                 let pick = if kind.picks_folders() {
                     ui::chooser::pick_folder
                 } else {
@@ -410,10 +410,6 @@ impl NewTab {
         .center(Length::Fill)
         .into()
     }
-}
-
-fn dirs_home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
 }
 
 /// Whether `dir` is in a Git working tree (has a `.git` folder or file, or

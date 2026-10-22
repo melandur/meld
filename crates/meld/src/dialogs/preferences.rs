@@ -175,6 +175,7 @@ impl BoolKey {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TextKey {
     CustomEditorCommand,
+    DefaultFolder,
     ClaudePath,
     InferModel,
     BuildModel,
@@ -187,6 +188,7 @@ impl TextKey {
     fn field(self, s: &mut Settings) -> &mut String {
         match self {
             TextKey::CustomEditorCommand => &mut s.custom_editor_command,
+            TextKey::DefaultFolder => &mut s.default_folder,
             TextKey::ClaudePath => &mut s.ailens_claude_path,
             TextKey::InferModel => &mut s.ailens_infer_model,
             TextKey::BuildModel => &mut s.ailens_build_model,
@@ -199,6 +201,7 @@ impl TextKey {
     fn get(self, s: &Settings) -> &str {
         match self {
             TextKey::CustomEditorCommand => &s.custom_editor_command,
+            TextKey::DefaultFolder => &s.default_folder,
             TextKey::ClaudePath => &s.ailens_claude_path,
             TextKey::InferModel => &s.ailens_infer_model,
             TextKey::BuildModel => &s.ailens_build_model,
@@ -326,6 +329,9 @@ pub enum Message {
     Page(Page),
     Bool(BoolKey, bool),
     Text(TextKey, String),
+    /// Choose the default folder with a folder chooser.
+    BrowseDefaultFolder,
+    DefaultFolderChosen(Option<std::path::PathBuf>),
     SpinStep(SpinKey, i32),
     SpinInput(SpinKey, String),
     FontSizeStep(i32),
@@ -444,6 +450,22 @@ impl Preferences {
             Message::Text(key, value) => {
                 *key.field(settings) = value;
                 Outcome::changed(true)
+            }
+            Message::DefaultFolderChosen(path) => match path {
+                Some(path) => {
+                    settings.default_folder = path.display().to_string();
+                    Outcome::changed(true)
+                }
+                None => Outcome::changed(false),
+            },
+            Message::BrowseDefaultFolder => {
+                let start = crate::ui::chooser::default_folder();
+                Outcome {
+                    task: crate::ui::chooser::pick_folder(tr!("Default Folder"), start)
+                        .map(Message::DefaultFolderChosen),
+                    changed: false,
+                    close: false,
+                }
             }
             Message::SpinStep(key, direction) => {
                 self.spin_drafts.remove(&key);
@@ -843,7 +865,37 @@ impl Preferences {
             )],
         );
 
+        let default_folder = row![
+            container(entry_row(
+                tr!("Default folder"),
+                tr!(
+                    "Where file and folder choosers open when there is no better place to start. \
+                     Empty means your home folder."
+                ),
+                TextKey::DefaultFolder,
+                s,
+                (!s.default_folder.trim().is_empty()
+                    && !std::path::Path::new(&expand_home(s.default_folder.trim())).is_dir())
+                .then(
+                    || tr!("This folder doesn't exist; your home folder is used instead.")
+                        .to_string()
+                ),
+            ))
+            .width(Length::Fill),
+            // Level with the entry, which sits above the row's bottom padding.
+            container(
+                button(text(tr!("Browse…")).size(13))
+                    .padding([5, 10])
+                    .style(button::secondary)
+                    .on_press(Message::BrowseDefaultFolder),
+            )
+            .padding(iced::Padding::ZERO.bottom(8)),
+        ]
+        .padding(iced::Padding::ZERO.right(14))
+        .align_y(iced::Bottom);
+
         column![
+            group(Some(tr!("Files")), None, vec![default_folder.into()]),
             group(
                 Some(tr!("Appearance")),
                 None,
@@ -2933,5 +2985,15 @@ mod tests {
         ] {
             assert_eq!(check_regex(re), Err(message.to_string()), "{re}");
         }
+    }
+}
+
+/// Expands a leading `~` to the home folder.
+fn expand_home(path: &str) -> String {
+    match (path.strip_prefix('~'), std::env::var("HOME")) {
+        (Some(rest), Ok(home)) if rest.is_empty() || rest.starts_with('/') => {
+            format!("{home}{rest}")
+        }
+        _ => path.to_string(),
     }
 }
