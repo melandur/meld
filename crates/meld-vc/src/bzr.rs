@@ -1,4 +1,13 @@
-//! Bazaar backend (port of `meld/vc/bzr.py`).
+//! Bazaar backend (port of `meld/vc/bzr.py`), also used with Breezy
+//! (`brz`), Bazaar's maintained successor.
+//!
+//! Differences from Python, found by testing against Breezy 3.3: unknown
+//! files are unversioned (not normal), files deleted without `bzr rm` are
+//! missing, refreshes drop stale states, commit commits only the selected
+//! files unless a merge is pending, and missing files count as files to
+//! commit. See [`parse_status`] and [`Bazaar`]'s `commit`.
+//!
+//! Ignored files are not reported by `bzr status`, so they show as normal.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -12,7 +21,10 @@ use crate::error::Result;
 use crate::paths;
 use crate::vc::{TreeCache, Vc, VcCore, VcKind};
 
-const CMD: &str = "bzr";
+/// `bzr`, or Breezy's `brz` when there is no `bzr` (see [`VcKind::cmd`]).
+fn cmd() -> &'static str {
+    VcKind::Bazaar.cmd().unwrap_or("bzr")
+}
 const CMDARGS: [&str; 2] = ["--no-aliases", "--no-plugins"];
 const NAME: &str = "Bazaar";
 
@@ -26,7 +38,14 @@ static VALID_STATUS_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[ +\-R?XCP][ NDKM][ */@]").expect("valid regex"));
 
 /// States that are committed by `bzr commit`.
-const COMMIT_STATUSES: [State; 4] = [State::Modified, State::Renamed, State::New, State::Removed];
+/// Missing files are committed as removals.
+const COMMIT_STATUSES: [State; 5] = [
+    State::Modified,
+    State::Renamed,
+    State::New,
+    State::Removed,
+    State::Missing,
+];
 
 /// First status column; `None` for flags we don't care about.
 fn state_1(c: char) -> Option<State> {
@@ -57,22 +76,33 @@ fn state_3(c: char) -> Option<State> {
     }
 }
 
-/// Result of parsing `bzr status -S --no-pending`.
+/// Result of parsing `bzr status -S`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct BzrStatus {
     /// Final state per absolute path (the maximum of its flags).
     pub states: HashMap<PathBuf, State>,
     /// Extra information per path (joined with `,` like Python's options).
     pub meta: HashMap<PathBuf, String>,
-    /// Paths missing from disk (removed in the second column).
+    /// Paths missing from disk: removed (`-D`) or missing (` D`).
     pub removed: Vec<PathBuf>,
     /// New path → old path for renamed entries.
     pub reverse_renames: HashMap<PathBuf, PathBuf>,
+    /// Whether the output lists pending merges (`P` lines). Bazaar refuses
+    /// to commit only some files while a merge is pending.
+    pub pending_merge: bool,
 }
 
-/// Parse `bzr status -S --no-pending <branch_root>` output.
+/// Parse `bzr status -S <branch_root>` output.
 /// `diff_first_line` returns the first line of `bzr diff <path>`, used to
 /// describe executable-bit changes.
+///
+/// Differences from Python (which took the maximum of all column states):
+/// an empty second column ("no content change") only counts when no other
+/// column has a state, so unknown files (`?  `) are unversioned rather than
+/// normal; and a versioned file deleted from disk without `bzr rm` (` D`,
+/// no `-` "now unversioned" flag) is missing rather than removed. Pending
+/// merge lines (`P`) are recorded in [`BzrStatus::pending_merge`] instead
+/// of being parsed as paths.
 pub fn parse_status(
     output: &str,
     branch_root: &Path,
@@ -82,6 +112,7 @@ pub fn parse_status(
     let mut meta: HashMap<PathBuf, Vec<String>> = HashMap::new();
     let mut renames: Vec<(PathBuf, PathBuf)> = Vec::new();
     let mut removed = Vec::new();
+    let mut pending_merge = false;
 
     // Files can appear twice in the list if they conflict and were renamed
     // at once.
@@ -94,11 +125,21 @@ pub fn parse_status(
         if !VALID_STATUS_RE.is_match(&state_string) {
             continue;
         }
+        if chars[0] == 'P' {
+            pending_merge = true;
+            continue;
+        }
         let mut name: String = chars.iter().skip(4).collect::<String>().trim().to_string();
         let s1 = state_1(chars[0]);
-        let s2 = state_2(chars[1]);
+        let s2 = match state_2(chars[1]) {
+            Some(State::Removed) if chars[0] == ' ' => Some(State::Missing),
+            s => s,
+        };
         let s3 = state_3(chars[2]);
-        let states: BTreeSet<State> = [s1, s2, s3].into_iter().flatten().collect();
+        let mut states: BTreeSet<State> = [s1, s2, s3].into_iter().flatten().collect();
+        if states.len() > 1 {
+            states.remove(&State::Normal);
+        }
         let mut entry_meta = Vec::new();
         let mut old_name = None;
 
@@ -132,7 +173,7 @@ pub fn parse_status(
         let path = normalize_entry(&joined);
         tree.entry(path.clone()).or_default().extend(states);
         meta.entry(path.clone()).or_default().extend(entry_meta);
-        if s2 == Some(State::Removed) {
+        if matches!(s2, Some(State::Removed | State::Missing)) {
             removed.push(path);
         }
     }
@@ -156,6 +197,7 @@ pub fn parse_status(
         meta: meta.into_iter().map(|(p, m)| (p, m.join(","))).collect(),
         removed,
         reverse_renames,
+        pending_merge,
     }
 }
 
@@ -169,6 +211,7 @@ fn normalize_entry(path: &Path) -> PathBuf {
 pub struct Bazaar {
     core: VcCore,
     reverse_rename_cache: HashMap<PathBuf, PathBuf>,
+    pending_merge: bool,
 }
 
 impl Bazaar {
@@ -176,24 +219,32 @@ impl Bazaar {
         Ok(Bazaar {
             core: VcCore::new(VcKind::Bazaar, path)?,
             reverse_rename_cache: HashMap::new(),
+            pending_merge: false,
         })
     }
 
     fn bzr_cmd(&self, args: &[&str], files: &[PathBuf]) -> VcCommand {
         let mut full: Vec<&str> = CMDARGS.to_vec();
         full.extend_from_slice(args);
-        VcCommand::new(CMD, &full, files, &self.core.root)
+        VcCommand::new(cmd(), &full, files, &self.core.root)
     }
 
+    /// Replace the cached state with `status`. The status always covers
+    /// the whole branch, so stale entries (e.g. a file that was modified
+    /// and has been edited back) are dropped; Python kept them.
     fn apply(&mut self, status: BzrStatus) {
         let cache: &mut TreeCache = &mut self.core.cache;
+        cache.states.clear();
+        cache.missing.clear();
         for path in &status.removed {
-            cache.add_missing_entry(path, State::Removed);
+            let state = status.states.get(path).copied().unwrap_or(State::Removed);
+            cache.add_missing_entry(path, state);
         }
         cache.states.extend(status.states);
         // Python replaces the whole meta cache here.
         cache.meta = status.meta;
         self.reverse_rename_cache = status.reverse_renames;
+        self.pending_merge = status.pending_merge;
     }
 }
 
@@ -224,15 +275,17 @@ impl Vc for Bazaar {
         let mut root_args: Vec<&str> = CMDARGS.to_vec();
         let arg = paths::lossy(path);
         root_args.extend(["root", arg.as_str()]);
-        let branch_root = command::output_text(CMD, &root_args, Some(&self.core.location))?;
+        let branch_root = command::output_text(cmd(), &root_args, Some(&self.core.location))?;
         let branch_root = PathBuf::from(branch_root.trim_end_matches('\n'));
         let branch_root_s = paths::lossy(&branch_root);
+        // Pending merges are listed (as `P` lines) so that commit knows
+        // whether it may commit only the selected files.
         let mut status_args: Vec<&str> = CMDARGS.to_vec();
-        status_args.extend(["status", "-S", "--no-pending", branch_root_s.as_str()]);
-        let output = command::output_text(CMD, &status_args, None)?;
+        status_args.extend(["status", "-S", branch_root_s.as_str()]);
+        let output = command::output_text(cmd(), &status_args, None)?;
         let mut diff = |p: &Path| {
             let p = paths::lossy(p);
-            command::output_text(CMD, &["diff", &p], None)
+            command::output_text(cmd(), &["diff", &p], None)
                 .map(|o| o.lines().next().unwrap_or_default().to_string())
                 .unwrap_or_default()
         };
@@ -245,9 +298,10 @@ impl Vc for Bazaar {
         let mut files = BTreeSet::new();
         for p in paths_in {
             if p.is_dir() {
-                let prefix = paths::lossy(p);
+                // Python compared string prefixes, so `sub` also matched
+                // `subway/file`.
                 for (path, status) in &self.core.cache.states {
-                    if COMMIT_STATUSES.contains(status) && paths::lossy(path).starts_with(&prefix) {
+                    if COMMIT_STATUSES.contains(status) && path.starts_with(p) && path != p {
                         files.insert(paths::lossy(&paths::relpath(path, &self.core.root)));
                     }
                 }
@@ -267,7 +321,7 @@ impl Vc for Bazaar {
             rev = format!("-r{c}");
             args.push(&rev);
         }
-        command::call_temp_output(CMD, &args, &self.core.root, "", &suffix)
+        command::call_temp_output(cmd(), &args, &self.core.root, "", &suffix)
     }
 
     fn get_path_for_conflict(&self, path: &Path, side: ConflictSide) -> Result<(PathBuf, bool)> {
@@ -293,9 +347,13 @@ impl Vc for Bazaar {
     fn add(&self, files: &[PathBuf]) -> Result<Vec<VcCommand>> {
         Ok(vec![self.bzr_cmd(&["add"], files)])
     }
-    /// As in Python, bzr commits the whole tree; `files` are ignored.
-    fn commit(&self, _files: &[PathBuf], message: &str) -> Result<Vec<VcCommand>> {
-        Ok(vec![self.bzr_cmd(&["commit", "-m", message], &[])])
+    /// Commits the selected `files`. Python always committed the whole
+    /// tree, although the commit dialog lists only the selected files;
+    /// that is still done while a merge is pending, since Bazaar refuses
+    /// partial commits then.
+    fn commit(&self, files: &[PathBuf], message: &str) -> Result<Vec<VcCommand>> {
+        let files = if self.pending_merge { &[] } else { files };
+        Ok(vec![self.bzr_cmd(&["commit", "-m", message], files)])
     }
     fn revert(&self, files: &[PathBuf]) -> Result<Vec<VcCommand>> {
         Ok(vec![self.bzr_cmd(&["revert"], files)])
@@ -318,29 +376,35 @@ impl Vc for Bazaar {
 mod tests {
     use super::*;
 
-    /// Output of `bzr status -S --no-pending` in the bzrtest2 tree built by
-    /// test/testbzr.sh.
+    /// `brz status -S` output (Breezy 3.3) after a conflicting merge, with
+    /// a renamed file that also conflicts and a renamed folder.
     const STATUS: &str = "\
 R   conflict2.txt => conflict2-moved.txt
 RM  renamed-dir/ => renamed-new-dir/
 R   renamed.txt => renamed-new.txt
  M  conflict.txt
+?   conflict.txt.BASE
+?   conflict.txt.OTHER
+?   conflict.txt.THIS
  M  conflict2.txt
- D  deleted-dir/
- D  deleted.txt
+-D  deleted-dir/
+-D  deleted.txt
   * exec.txt
+ D  missing.txt
  M  modified.txt
 +N  new-dir/
 +N  new-dir/new-dir-file.txt
 +N  new.txt
+?   quote\"d ü.txt
+?   unknown-dir/
 ?   unknown.txt
 C   Text conflict in conflict.txt
 C   Text conflict in conflict2-moved.txt
-P   pending merge tip
+P   Meld Test 2026-10-22 other
 ";
 
     #[test]
-    fn parses_testbzr_status() {
+    fn parses_status() {
         let root = Path::new("/b");
         let mut diffs = Vec::new();
         let mut diff = |p: &Path| {
@@ -354,15 +418,23 @@ P   pending merge tip
         assert_eq!(s("/b/renamed-new-dir"), Some(State::Renamed));
         assert_eq!(s("/b/renamed-new.txt"), Some(State::Renamed));
         assert_eq!(s("/b/conflict.txt"), Some(State::Conflict));
+        assert_eq!(s("/b/conflict.txt.BASE"), Some(State::Unversioned));
         assert_eq!(s("/b/deleted.txt"), Some(State::Removed));
         assert_eq!(s("/b/deleted-dir"), Some(State::Removed));
+        assert_eq!(s("/b/missing.txt"), Some(State::Missing));
         assert_eq!(s("/b/exec.txt"), Some(State::Modified));
         assert_eq!(s("/b/modified.txt"), Some(State::Modified));
         assert_eq!(s("/b/new.txt"), Some(State::New));
         assert_eq!(s("/b/new-dir/new-dir-file.txt"), Some(State::New));
-        // "?" plus an empty second column gives {Unversioned, Normal}; like
-        // Python, the maximum (Normal) wins.
-        assert_eq!(s("/b/unknown.txt"), Some(State::Normal));
+        assert_eq!(s("/b/unknown.txt"), Some(State::Unversioned));
+        assert_eq!(s("/b/unknown-dir"), Some(State::Unversioned));
+        assert_eq!(s("/b/quote\"d ü.txt"), Some(State::Unversioned));
+        assert!(st.pending_merge);
+        assert!(
+            !st.states
+                .keys()
+                .any(|p| p.to_string_lossy().contains("Meld"))
+        );
         assert_eq!(diffs, vec![PathBuf::from("/b/exec.txt")]);
         assert_eq!(
             st.meta[Path::new("/b/exec.txt")],
@@ -376,24 +448,34 @@ P   pending merge tip
             st.reverse_renames[Path::new("/b/conflict2-moved.txt")],
             PathBuf::from("/b/conflict2.txt")
         );
-        assert!(st.removed.contains(&PathBuf::from("/b/deleted.txt")));
-        assert!(st.removed.contains(&PathBuf::from("/b/deleted-dir")));
+        for p in ["/b/deleted.txt", "/b/deleted-dir", "/b/missing.txt"] {
+            assert!(st.removed.contains(&PathBuf::from(p)), "{p}");
+        }
+
+        let st = parse_status(" M  a.txt\n", root, &mut |_| String::new());
+        assert!(!st.pending_merge);
     }
 
-    #[test]
-    fn conflict_paths_follow_renames() {
-        let mut vc = Bazaar {
+    fn fake_vc() -> Bazaar {
+        Bazaar {
             core: VcCore {
                 root: "/b".into(),
                 location: "/b".into(),
                 cache: TreeCache::default(),
             },
             reverse_rename_cache: HashMap::new(),
-        };
+            pending_merge: false,
+        }
+    }
+
+    #[test]
+    fn conflict_paths_follow_renames() {
+        let mut vc = fake_vc();
         let st = parse_status(STATUS, Path::new("/b"), &mut |_| String::new());
         vc.apply(st);
         assert_eq!(vc.core.cache.state(Path::new("/b/new.txt")), State::New);
-        assert!(vc.core.cache.missing[Path::new("/b")].contains("deleted.txt"));
+        let missing = &vc.core.cache.missing[Path::new("/b")];
+        assert!(missing.contains("deleted.txt") && missing.contains("missing.txt"));
         let p = Path::new("/b/conflict2-moved.txt");
         assert_eq!(
             vc.get_path_for_conflict(p, ConflictSide::Base).unwrap(),
@@ -421,12 +503,33 @@ P   pending merge tip
         let c = &vc.add(&[PathBuf::from("/b/new.txt")]).unwrap()[0];
         assert_eq!(
             c.console_line(),
-            "bzr --no-aliases --no-plugins add new.txt (in /b)\n"
+            format!("{} --no-aliases --no-plugins add new.txt (in /b)\n", cmd())
         );
+        // A merge is pending: the whole tree is committed
         let c = &vc.commit(&[PathBuf::from("/b/new.txt")], "m").unwrap()[0];
         assert_eq!(
             c.argv(),
             vec!["--no-aliases", "--no-plugins", "commit", "-m", "m"]
         );
+    }
+
+    #[test]
+    fn commit_selected_files_without_pending_merge() {
+        let mut vc = fake_vc();
+        vc.apply(parse_status(
+            " M  a.txt\n M  b.txt\n",
+            Path::new("/b"),
+            &mut |_| String::new(),
+        ));
+        let c = &vc.commit(&[PathBuf::from("/b/a.txt")], "m").unwrap()[0];
+        assert_eq!(
+            c.argv(),
+            vec!["--no-aliases", "--no-plugins", "commit", "-m", "m", "a.txt"]
+        );
+        // A refresh replaces stale states
+        vc.apply(parse_status(" M  b.txt\n", Path::new("/b"), &mut |_| {
+            String::new()
+        }));
+        assert_eq!(vc.core.cache.state(Path::new("/b/a.txt")), State::Normal);
     }
 }

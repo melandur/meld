@@ -17,9 +17,9 @@
 //! | [`languages`] | GtkSourceView's language specs (embedded table) | [`LanguageSpec`], [`LANGUAGES`], [`language_for_filename`], [`language_for_mime_type`] |
 //! | [`filters`] | `meld/filters.py`, `filename-filters`/`text-filters` defaults | [`FilterEntry`], [`FilterKind`], [`TextRegex`], [`ByteRegex`], [`default_filename_filters`], [`default_text_filters`] |
 //! | [`misc`] | GUI-free parts of `meld/misc.py` | [`all_same`], [`shorten_names`], [`merge_intervals`], [`apply_text_filters`], [`apply_byte_filters`], [`calc_syncpoint`] |
-//! | [`dirdiff`] | the non-GTK logic of `meld/dirdiff.py` | [`FolderComparison`] (`scan_dir`, `walk`, `scan_tree`, `row_status`), [`files_same`], [`remove_blank_lines`], [`StatusFilters`], [`FolderOptions`], [`CompareArgs`] |
+//! | [`dirdiff`] | the non-GTK logic of `meld/dirdiff.py` | [`FolderComparison`] (`scan_dir`, `walk`, `walk_cancellable`, `scan_tree`, `row_status`), [`files_same`], [`remove_blank_lines`], [`StatusFilters`], [`FolderOptions`], [`CompareArgs`] |
 //! | [`fileops`] | `copy2()`/`copytree()` in `meld/misc.py`, `DirDiff.copy_selected()` | [`copy_entry`], [`copy2`], [`copytree`], [`create_missing_dirs`] |
-//! | [`archive`] | `meld/archivehelpers.py` | [`is_archive`], [`mount_archive_command`], [`unmount_archive_command`], [`ArchiveMounts`] |
+//! | [`archive`] | `meld/archivehelpers.py` | [`is_archive`], [`open_archive`] / [`extract_archive`] ([`ArchiveFolder`]), [`mount_archive_command`], [`unmount_archive_command`], [`ArchiveMounts`] |
 //! | [`external`] | `meld/externalhelpers.py` | [`open_external_command`], [`make_custom_editor_command`], [`spawn_detached`] |
 //!
 //! Language IDs are GtkSourceView's (`"python3"`, `"sh"`, `"rust"`,
@@ -41,7 +41,10 @@ pub mod state;
 pub mod text;
 pub mod trash;
 
-pub use archive::{ArchiveMounts, is_archive, mount_archive_command, unmount_archive_command};
+pub use archive::{
+    ArchiveFolder, ArchiveFolderKind, ArchiveMounts, extract_archive, is_archive,
+    mount_archive_command, open_archive, unmount_archive_command,
+};
 pub use dirdiff::{
     CompareArgs, ComparisonCache, DirScan, FileComparison, FolderComparison, FolderNode,
     FolderOptions, FolderTree, PaneStatus, Row, RowStatus, ScanOutcome, StatusFilters, Walk,

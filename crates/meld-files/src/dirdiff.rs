@@ -19,6 +19,7 @@ use std::fs::{self, File};
 use std::io::{self, Read};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -905,6 +906,20 @@ impl FolderComparison {
     /// `symlinks` tracks followed symlinks across a scan; pass a fresh
     /// tracker when expanding a single row.
     pub fn scan_dir(&self, roots: &[PathBuf], symlinks: &mut SymlinkTracker) -> DirScan {
+        self.scan_dir_cancellable(roots, symlinks, None)
+            .unwrap_or_else(|| unreachable!("scans without a cancel flag finish"))
+    }
+
+    /// [`scan_dir`](Self::scan_dir) that gives up, returning `None`, as
+    /// soon as `cancel` is set; it is checked between folder entries and
+    /// between file comparisons.
+    pub fn scan_dir_cancellable(
+        &self,
+        roots: &[PathBuf],
+        symlinks: &mut SymlinkTracker,
+        cancel: Option<&AtomicBool>,
+    ) -> Option<DirScan> {
+        let cancelled = || cancel.is_some_and(|c| c.load(Ordering::Relaxed));
         let n = roots.len();
         let mut errors = Vec::new();
         let mut invalid_filenames = Vec::new();
@@ -928,6 +943,9 @@ impl FolderComparison {
                 }
             };
             for entry in entries {
+                if cancelled() {
+                    return None;
+                }
                 let Ok(entry) = entry else { continue };
                 let os_name = entry.file_name();
                 let Some(name) = os_name.to_str() else {
@@ -1017,6 +1035,9 @@ impl FolderComparison {
             .map(|n| (n, true))
             .chain(files.get().into_iter().map(|n| (n, false)))
         {
+            if cancelled() {
+                return None;
+            }
             let paths = join(&names);
             if !self.passes_status_filters(&paths) {
                 continue;
@@ -1041,7 +1062,7 @@ impl FolderComparison {
             ScanOutcome::Prune
         };
 
-        DirScan {
+        Some(DirScan {
             roots: roots.to_vec(),
             children,
             errors,
@@ -1050,7 +1071,7 @@ impl FolderComparison {
             whitespace,
             outcome,
             differences,
-        }
+        })
     }
 
     /// Scan every folder level depth-first, in the order Meld does
@@ -1062,6 +1083,18 @@ impl FolderComparison {
             comparison: self.clone(),
             stack: vec![(Vec::new(), roots.to_vec())],
             symlinks: SymlinkTracker::default(),
+            cancel: None,
+        }
+    }
+
+    /// [`walk`](Self::walk) that stops as soon as `cancel` is set, even
+    /// in the middle of a folder: the folder being scanned is dropped
+    /// and the iterator ends. [`Walk::cancelled`] tells the two endings
+    /// apart.
+    pub fn walk_cancellable(&self, roots: &[PathBuf], cancel: Arc<AtomicBool>) -> Walk {
+        Walk {
+            cancel: Some(cancel),
+            ..self.walk(roots)
         }
     }
 
@@ -1173,6 +1206,16 @@ pub struct Walk {
     comparison: FolderComparison,
     stack: Vec<(Vec<usize>, Vec<PathBuf>)>,
     symlinks: SymlinkTracker,
+    cancel: Option<Arc<AtomicBool>>,
+}
+
+impl Walk {
+    /// Whether the walk was cancelled through its cancel flag.
+    pub fn cancelled(&self) -> bool {
+        self.cancel
+            .as_ref()
+            .is_some_and(|c| c.load(Ordering::Relaxed))
+    }
 }
 
 impl Iterator for Walk {
@@ -1180,12 +1223,19 @@ impl Iterator for Walk {
 
     fn next(&mut self) -> Option<WalkItem> {
         loop {
+            if self.cancelled() {
+                return None;
+            }
             let (tree_path, roots) = self.stack.pop()?;
             // Rows whose folders have vanished are skipped
             if !roots.iter().any(|r| r.is_dir()) {
                 continue;
             }
-            let scan = self.comparison.scan_dir(&roots, &mut self.symlinks);
+            let scan = self.comparison.scan_dir_cancellable(
+                &roots,
+                &mut self.symlinks,
+                self.cancel.as_deref(),
+            )?;
             for (i, child) in scan.children.iter().enumerate().rev() {
                 if child.is_dir {
                     let mut path = tree_path.clone();
@@ -1658,6 +1708,27 @@ mod tests {
                 vec![2, 2]
             ]
         );
+    }
+
+    #[test]
+    fn cancelled_walks_stop() {
+        let dir = create_sample_dir();
+        let roots = vec![dir.path().join("a"), dir.path().join("b")];
+        let cancel = Arc::new(AtomicBool::new(false));
+        let mut walk =
+            comparison(StatusFilters::default()).walk_cancellable(&roots, cancel.clone());
+        assert_eq!(walk.next().map(|w| w.tree_path), Some(vec![]));
+        assert!(!walk.cancelled());
+        cancel.store(true, Ordering::Relaxed);
+        assert!(walk.next().is_none());
+        assert!(walk.cancelled());
+        // A cancelled folder scan gives nothing rather than a partial scan
+        let scan = comparison(StatusFilters::default()).scan_dir_cancellable(
+            &roots,
+            &mut SymlinkTracker::default(),
+            Some(&cancel),
+        );
+        assert!(scan.is_none());
     }
 
     #[test]

@@ -43,7 +43,7 @@
 //! `to_std_command()` and `run() -> Result<CommandOutput>`; [`run_all`].
 //!
 //! **View logic** ([`view`]): [`StatusFilters`] (`vc-status-filters`),
-//! [`scan_tree`] / [`scan_tree_with_progress`] building a [`VcRow`] tree
+//! [`scan_tree`] / [`scan_tree_with_progress`] / [`scan_tree_cancellable`] building a [`VcRow`] tree
 //! (recursive or flattened), [`choose_vcs`] (backend chooser with
 //! "(not found)" etc. labels, default selection and null fallback),
 //! [`action_sensitivity`], [`prepare_diff`] building a [`DiffRequest`]
@@ -54,6 +54,13 @@
 //! [`finish_commit_message`] / [`wrap_commit_message`] / [`commit::fill`]
 //! (`textwrap.fill` port) and [`MessageHistory`] ("Previous logs",
 //! persisted in `history.ini`).
+//!
+//! # Testing
+//!
+//! `tests/<backend>.rs` run each backend against real repositories made
+//! with the VC program found on `PATH` (`git`, `hg`, `bzr`/`brz`, `svn` and
+//! `svnadmin`, `cvs`, `darcs`); tests of a backend whose program is missing
+//! are skipped. Each file's doc comment names the tool version last tested.
 
 pub mod bzr;
 pub mod command;
@@ -88,7 +95,7 @@ pub use vc::{TreeCache, VC_PLUGINS, Vc, VcCandidate, VcCore, VcKind, get_vcs, op
 pub use view::{
     ActionSensitivity, DiffOptions, DiffRequest, DiffSide, MergeFileOrder, StatusFilters,
     TempFiles, VcChoice, VcChoices, VcRow, action_sensitivity, auto_compare_paths, choose_vcs,
-    prepare_diff, scan_tree, scan_tree_with_progress,
+    prepare_diff, scan_tree, scan_tree_cancellable, scan_tree_with_progress,
 };
 
 #[cfg(test)]

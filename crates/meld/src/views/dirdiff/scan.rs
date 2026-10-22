@@ -3,7 +3,7 @@
 //! A scan walks the folders depth-first on its own thread and streams
 //! batches of scanned folders back, so the tree fills in as it goes and
 //! the UI stays responsive. Setting the cancel flag stops the walk
-//! between folders.
+//! promptly, between the entries of a folder.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -37,12 +37,8 @@ pub fn start(comparison: FolderComparison, roots: Vec<PathBuf>, cancel: Arc<Atom
         let prefix = roots.first().cloned().unwrap_or_default();
         let mut batch = Vec::new();
         let mut last_sent = Instant::now();
-        let mut cancelled = false;
-        for item in comparison.walk(&roots) {
-            if cancel.load(Ordering::Relaxed) {
-                cancelled = true;
-                break;
-            }
+        let mut walk = comparison.walk_cancellable(&roots, cancel.clone());
+        for item in walk.by_ref() {
             batch.push(item);
             if last_sent.elapsed() >= BATCH_INTERVAL {
                 let current = describe(&prefix, batch.last());
@@ -55,6 +51,7 @@ pub fn start(comparison: FolderComparison, roots: Vec<PathBuf>, cancel: Arc<Atom
                 last_sent = Instant::now();
             }
         }
+        let cancelled = walk.cancelled() || cancel.load(Ordering::Relaxed);
         if !batch.is_empty() && !cancelled {
             let current = describe(&prefix, batch.last());
             let _ = tx.unbounded_send(ScanEvent::Items(Arc::new(batch), current));

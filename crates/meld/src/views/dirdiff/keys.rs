@@ -10,11 +10,15 @@ use iced::advanced::{Clipboard, Shell, Widget, mouse, overlay, renderer};
 use iced::keyboard::{self, Key, Modifiers};
 use iced::{Element, Event, Length, Point, Rectangle, Size, Vector};
 
+/// Maps a key press to a message.
+type KeyFn<'a, Message> = Box<dyn Fn(&Key, Modifiers) -> Option<Message> + 'a>;
+
 pub struct KeyListener<'a, Message, Theme, Renderer> {
     content: Element<'a, Message, Theme, Renderer>,
-    on_key: Box<dyn Fn(&Key, Modifiers) -> Option<Message> + 'a>,
+    on_key: KeyFn<'a, Message>,
     on_modifiers: Option<Box<dyn Fn(Modifiers) -> Message + 'a>>,
     on_right_click: Option<Box<dyn Fn(Point) -> Message + 'a>>,
+    intercept: Option<KeyFn<'a, Message>>,
 }
 
 impl<'a, Message, Theme, Renderer> KeyListener<'a, Message, Theme, Renderer> {
@@ -27,7 +31,16 @@ impl<'a, Message, Theme, Renderer> KeyListener<'a, Message, Theme, Renderer> {
             on_key: Box::new(on_key),
             on_modifiers: None,
             on_right_click: None,
+            intercept: None,
         }
+    }
+
+    /// Maps key presses to messages before the content sees them; keys
+    /// it maps never reach the content (the search entry's Escape, Up
+    /// and Down).
+    pub fn intercept(mut self, f: impl Fn(&Key, Modifiers) -> Option<Message> + 'a) -> Self {
+        self.intercept = Some(Box::new(f));
+        self
     }
 
     pub fn on_modifiers(mut self, f: impl Fn(Modifiers) -> Message + 'a) -> Self {
@@ -80,6 +93,15 @@ where
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
+        if let Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) = event
+            && !shell.is_event_captured()
+            && let Some(f) = &self.intercept
+            && let Some(message) = f(key, *modifiers)
+        {
+            shell.publish(message);
+            shell.capture_event();
+            return;
+        }
         let captured_before = shell.is_event_captured();
         self.content.as_widget_mut().update(
             &mut tree.children[0],

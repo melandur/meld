@@ -48,6 +48,11 @@ pub enum VcError {
     #[error("{vc}: could not parse output: {reason}")]
     Parse { vc: &'static str, reason: String },
 
+    /// A cancellable operation (e.g. [`crate::scan_tree_cancellable`])
+    /// was cancelled.
+    #[error("cancelled")]
+    Cancelled,
+
     /// Any other I/O error (temporary files, directory scans, ...).
     #[error(transparent)]
     Io(#[from] io::Error),

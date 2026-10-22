@@ -6,9 +6,13 @@
 //! doesn't exist. Folders are scanned on a background thread
 //! ([`scan`]), filling in the shared [`model::Tree`] as they arrive;
 //! copying, deleting and re-reading rows also run off the UI thread.
+//! Link maps between the panes ([`linkmap`]) mark the differing rows;
+//! archives open as folders ([`archive`]).
 
+mod archive;
 mod format;
 mod keys;
+mod linkmap;
 mod model;
 mod scan;
 
@@ -20,7 +24,7 @@ use std::time::{Duration, Instant};
 
 use iced::keyboard::{Key, Modifiers, key::Named};
 use iced::widget::{
-    Space, button, column, container, mouse_area, pin, row, scrollable, space, stack, text, tooltip,
+    Space, button, column, container, mouse_area, row, scrollable, space, stack, text, tooltip,
 };
 use iced::{Background, Border, Color, Element, Font, Length, Point, Subscription, Task, Theme};
 use meld_config::{FilterSetting, Settings, StatusColors};
@@ -33,7 +37,8 @@ use meld_files::{
 use crate::command::Command;
 use crate::comparison::Comparison;
 use crate::shared::Shared;
-use crate::ui::{self, BannerKind, icon, menu};
+use crate::ui::search::{self, EntryKey, Step, TreeSearch};
+use crate::ui::{self, BannerKind, icon, menu, pathlabel};
 use crate::views::Event;
 
 use model::{Kind, NodeId, Selection, Tree, Visible};
@@ -196,6 +201,20 @@ pub enum Message {
     OpFinished(u64, OpResult),
     DialogAnswer(bool),
     HideBanners,
+    /// Type-to-search: start with this text, the entry's text changed, a
+    /// key in the entry, and the inactivity timer.
+    SearchStart(String),
+    SearchInput(String),
+    SearchKey(EntryKey),
+    SearchTick,
+    /// The path label drop-down of a pane, picking one of its segments,
+    /// copying the picked path, showing its containing folder.
+    PathLabel(usize),
+    PathPick(usize),
+    PathCopy,
+    PathOpenFolder,
+    /// An archive pane finished opening (pane, generation).
+    ArchiveOpened(usize, u64, Result<archive::Opened, String>),
 }
 
 struct Job {
@@ -216,6 +235,8 @@ enum Dialog {
 enum Popup {
     Filters,
     Context(Point),
+    /// A pane's path label drop-down, with the picked path segment.
+    Path { pane: usize, picked: Option<usize> },
 }
 
 #[derive(Default)]
@@ -270,6 +291,12 @@ pub struct DirDiff {
     marked: Option<(NodeId, usize)>,
     restore: Option<Restore>,
     last_folder: Option<PathBuf>,
+    search: Option<TreeSearch>,
+    /// A row was right-clicked: the next context menu request opens.
+    context_pending: bool,
+    /// Panes showing archives.
+    archives: Vec<Option<archive::ArchivePane>>,
+    next_archive: u64,
 }
 
 fn filters_from(settings: &[FilterSetting], kind: FilterKind) -> Vec<FilterEntry> {
@@ -363,6 +390,10 @@ impl DirDiff {
             marked: None,
             restore: None,
             last_folder: None,
+            search: None,
+            context_pending: false,
+            archives: (0..n).map(|_| None).collect(),
+            next_archive: 1,
         };
         tab.update_metrics(shared);
         tab.comparison = FolderComparison::new(
@@ -370,8 +401,82 @@ impl DirDiff {
             tab.name_filters.clone(),
             tab.text_filters.clone(),
         );
-        let task = tab.start_scan(false);
-        (tab, task)
+        let mut tasks = Vec::new();
+        for pane in 0..n {
+            if meld_files::is_archive(&tab.roots[pane]) {
+                tasks.push(tab.open_archive(pane));
+            }
+        }
+        tasks.push(tab.start_scan(false));
+        (tab, Task::batch(tasks))
+    }
+
+    /// Starts opening the archive given for `pane` as a folder.
+    fn open_archive(&mut self, pane: usize) -> Task<Message> {
+        let path = self.roots[pane].clone();
+        let generation = self.next_archive;
+        self.next_archive += 1;
+        self.archives[pane] = Some(archive::ArchivePane {
+            archive: path.clone(),
+            generation,
+            folder: None,
+        });
+        Task::perform(background(move || archive::open(&path)), move |result| {
+            Message::ArchiveOpened(
+                pane,
+                generation,
+                result.unwrap_or_else(|| Err("the archive could not be opened".into())),
+            )
+        })
+    }
+
+    fn archive_opened(&mut self, pane: usize, generation: u64, result: Result<archive::Opened, String>) -> Task<Message> {
+        let Some(slot) = self.archives.get_mut(pane) else {
+            return Task::none();
+        };
+        if slot.as_ref().is_none_or(|a| a.generation != generation) {
+            // The pane changed in the meantime; dropping the folder
+            // cleans it up.
+            return Task::none();
+        }
+        match result.map(|opened| opened.take()) {
+            Ok(Some(folder)) => {
+                self.roots[pane] = folder.root.clone();
+                if let Some(a) = slot.as_mut() {
+                    a.folder = Some(folder);
+                }
+            }
+            Ok(None) => return Task::none(),
+            Err(error) => {
+                let uri = slot
+                    .as_ref()
+                    .map(|a| meld_files::archive::file_uri(&a.archive))
+                    .unwrap_or_default();
+                *slot = None;
+                self.roots[pane] = PathBuf::new();
+                self.dialog = Some(Dialog::Error {
+                    title: "Failed to mount archive".into(),
+                    message: format!("Error mounting archive {uri}: {error}"),
+                });
+            }
+        }
+        self.start_scan(false)
+    }
+
+    fn opening_archives(&self) -> bool {
+        self.archives.iter().flatten().any(archive::ArchivePane::opening)
+    }
+
+    /// The path a pane shows: its archive, or its folder.
+    fn shown_path(&self, pane: usize) -> &Path {
+        match self.archives.get(pane).and_then(Option::as_ref) {
+            Some(a) => &a.archive,
+            None => &self.roots[pane],
+        }
+    }
+
+    fn shown_paths(&self) -> Vec<PathBuf> {
+        (0..self.panes()).map(|p| self.shown_path(p).to_path_buf()).collect()
     }
 
     fn panes(&self) -> usize {
@@ -379,7 +484,7 @@ impl DirDiff {
     }
 
     fn ready(&self) -> bool {
-        self.roots.iter().all(|r| !r.as_os_str().is_empty())
+        self.roots.iter().all(|r| !r.as_os_str().is_empty()) && !self.opening_archives()
     }
 
     fn busy(&self) -> bool {
@@ -387,8 +492,8 @@ impl DirDiff {
     }
 
     fn display_names(&self) -> Vec<String> {
-        self.roots
-            .iter()
+        (0..self.panes())
+            .map(|p| self.shown_path(p))
             .map(|r| {
                 if r.as_os_str().is_empty() {
                     "No folder".to_string()
@@ -867,12 +972,22 @@ impl DirDiff {
                 auto_compare: false,
             })
         } else {
-            let paths = row
+            let paths: Vec<Option<PathBuf>> = row
                 .paths
                 .iter()
                 .zip(&row.status.panes)
                 .map(|(path, pane)| (pane.exists && !pane.is_dir).then(|| path.clone()))
                 .collect();
+            // Archives are compared as folders, as on the command line.
+            if paths.iter().flatten().count() > 1
+                && archive::all_archives(&paths.iter().map(Option::as_deref).collect::<Vec<_>>())
+            {
+                return Some(Comparison::Folders {
+                    paths: paths.into_iter().map(Option::unwrap_or_default).collect(),
+                    labels: Vec::new(),
+                    auto_compare: false,
+                });
+            }
             Comparison::from_paths(paths, false).ok()
         }
     }
@@ -1172,9 +1287,11 @@ impl DirDiff {
                 self.last_folder = path.parent().map(Path::to_path_buf);
                 self.roots[pane] = path;
                 self.labels[pane].clear();
+                // Unmounts or deletes a previously opened archive.
+                self.archives[pane] = None;
                 if self.ready() {
                     events.push(Event::Recent(Comparison::Folders {
-                        paths: self.roots.clone(),
+                        paths: self.shown_paths(),
                         labels: Vec::new(),
                         auto_compare: false,
                     }));
@@ -1183,6 +1300,7 @@ impl DirDiff {
             }
             Message::RowPressed(pane, id) => {
                 self.popup = None;
+                self.search = None;
                 if pane != self.sel.pane {
                     self.sel.clear();
                     self.sel.pane = pane;
@@ -1209,9 +1327,11 @@ impl DirDiff {
                     self.sel.pane = pane;
                     self.sel.set(id);
                 }
+                self.search = None;
+                self.context_pending = true;
             }
             Message::ContextMenu(point) => {
-                if !self.sel.is_empty() {
+                if std::mem::take(&mut self.context_pending) && !self.sel.is_empty() {
                     self.popup = Some(Popup::Context(point));
                 }
             }
@@ -1225,6 +1345,7 @@ impl DirDiff {
                     return Task::none();
                 }
                 self.popup = None;
+                self.search = None;
                 return self.navigate(nav, extend);
             }
             Message::Modifiers(modifiers) => self.modifiers = modifiers,
@@ -1286,6 +1407,7 @@ impl DirDiff {
                 if self.panes() == 2 {
                     self.roots.reverse();
                     self.labels.reverse();
+                    self.archives.reverse();
                     return self.start_scan(true);
                 }
             }
@@ -1339,8 +1461,121 @@ impl DirDiff {
             Message::OpFinished(generation, result) => return self.op_finished(generation, result),
             Message::DialogAnswer(yes) => return self.answer_dialog(yes),
             Message::HideBanners => self.banners = Banners::default(),
+            Message::SearchStart(text) => return self.start_search(text),
+            Message::SearchInput(text) => {
+                if let Some(search) = &mut self.search {
+                    search.set_text(text);
+                    return self.search_step(Step::First);
+                }
+            }
+            Message::SearchKey(key) => match key {
+                EntryKey::Close => self.search = None,
+                EntryKey::Step(step) => {
+                    if let Some(search) = &mut self.search {
+                        search.touch();
+                    }
+                    return self.search_step(step);
+                }
+                EntryKey::Activate => {
+                    self.search = None;
+                    if let Some(cursor) = self.sel.cursor {
+                        self.activate(cursor, self.sel.pane, events);
+                    }
+                }
+            },
+            Message::SearchTick => {
+                if self.search.as_ref().is_some_and(TreeSearch::expired) {
+                    self.search = None;
+                }
+            }
+            Message::PathLabel(pane) => {
+                self.popup = match self.popup {
+                    Some(Popup::Path { pane: p, .. }) if p == pane => None,
+                    _ if pane < self.panes() && !self.shown_path(pane).as_os_str().is_empty() => {
+                        Some(Popup::Path { pane, picked: None })
+                    }
+                    _ => None,
+                };
+            }
+            Message::PathPick(index) => {
+                if let Some(Popup::Path { picked, .. }) = &mut self.popup {
+                    *picked = Some(index);
+                }
+            }
+            Message::PathCopy | Message::PathOpenFolder => {
+                let Some(path) = self.picked_path() else {
+                    return Task::none();
+                };
+                self.popup = None;
+                if matches!(message, Message::PathCopy) {
+                    return iced::clipboard::write(path.display().to_string());
+                }
+                return Task::perform(
+                    background(move || {
+                        meld_files::spawn_detached(&meld_files::external::open_containing_folder_command(&path))
+                            .err()
+                            .map(|e| e.to_string())
+                    }),
+                    |error| Message::OpenedExternal(error.flatten().into_iter().collect()),
+                );
+            }
+            Message::ArchiveOpened(pane, generation, result) => return self.archive_opened(pane, generation, result),
         }
         Task::none()
+    }
+
+    // --- Type-to-search ---------------------------------------------------
+
+    fn start_search(&mut self, text: String) -> Task<Message> {
+        if !self.ready() || self.dialog.is_some() {
+            return Task::none();
+        }
+        self.popup = None;
+        self.search = Some(TreeSearch::new(text));
+        Task::batch([
+            iced::widget::operation::focus(search::INPUT_ID),
+            self.search_step(Step::First),
+        ])
+    }
+
+    /// The names searched in: the focused pane's names of the shown rows.
+    fn search_names(&self) -> Vec<String> {
+        let pane = self.sel.pane;
+        self.visible_ids
+            .iter()
+            .map(|&id| match &self.tree.node(id).kind {
+                Kind::Entry(row) => row.names.get(pane).cloned().unwrap_or_default(),
+                _ => String::new(),
+            })
+            .collect()
+    }
+
+    fn search_step(&mut self, step: Step) -> Task<Message> {
+        let Some(search) = &self.search else {
+            return Task::none();
+        };
+        let current = self.sel.cursor_index(&self.visible_ids);
+        match search::find_row(&self.search_names(), &search.text, current, step) {
+            Some(index) => {
+                let id = self.visible_ids[index];
+                self.sel.set(id);
+                self.scroll_to_row(id)
+            }
+            None => Task::none(),
+        }
+    }
+
+    /// The path picked in the open path label drop-down.
+    fn picked_path(&self) -> Option<PathBuf> {
+        let Some(Popup::Path { pane, picked }) = self.popup else {
+            return None;
+        };
+        let path = self.shown_path(pane);
+        let segments = pathlabel::segments(path);
+        match picked {
+            Some(i) => segments.get(i).cloned(),
+            None => Some(path.to_path_buf()),
+        }
     }
 
     pub fn command(&mut self, command: Command, shared: &mut Shared, events: &mut Vec<Event>) -> Task<Message> {
@@ -1353,8 +1588,9 @@ impl DirDiff {
         }
         match command {
             Command::Stop => {
-                if self.popup.is_some() {
+                if self.popup.is_some() || self.search.is_some() {
                     self.popup = None;
+                    self.search = None;
                     Task::none()
                 } else {
                     self.update(Message::Stop, shared, events)
@@ -1375,6 +1611,7 @@ impl DirDiff {
             Command::SwapPanes => self.update(Message::Swap, shared, events),
             Command::Refresh => self.update(Message::Refresh, shared, events),
             Command::Filter => self.update(Message::ToggleFilterMenu, shared, events),
+            Command::Find => self.start_search(String::new()),
             Command::NextPane => {
                 self.change_focus_pane(1);
                 Task::none()
@@ -1422,7 +1659,11 @@ impl DirDiff {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        Subscription::none()
+        if self.search.is_some() {
+            iced::time::every(Duration::from_millis(500)).map(|_| Message::SearchTick)
+        } else {
+            Subscription::none()
+        }
     }
 
     // --- View -------------------------------------------------------------
@@ -1570,8 +1811,9 @@ impl DirDiff {
 
         content = content.push(self.pane_headers());
 
+        let mut lower = column![].width(Length::Fill).height(Length::Fill);
         if self.banners.pane_errors.iter().any(Option::is_some) {
-            let mut errors = row![].spacing(1).width(Length::Fill);
+            let mut errors = row![].spacing(linkmap::WIDTH).width(Length::Fill);
             for error in &self.banners.pane_errors {
                 let cell: Element<'_, Message> = match error {
                     Some((heading, details)) => ui::banner(
@@ -1584,24 +1826,27 @@ impl DirDiff {
                 };
                 errors = errors.push(container(cell).width(Length::FillPortion(1)));
             }
-            content = content.push(errors);
+            lower = lower.push(errors);
         }
 
         if !self.ready() {
-            content = content.push(ui::separator(false));
-            content = content.push(
-                container(text("Select a folder for each pane to compare").style(ui::dim_text))
-                    .center(Length::Fill),
-            );
+            let note = if self.opening_archives() {
+                "Opening archive…"
+            } else {
+                "Select a folder for each pane to compare"
+            };
+            lower = lower.push(ui::separator(false));
+            lower = lower.push(container(text(note).style(ui::dim_text)).center(Length::Fill));
         } else {
-            content = content.push(iced::widget::responsive(move |size| {
+            let links = linkmap::Colors::new(&shared.style.diff_colors(shared.settings.diff_colors, None));
+            lower = lower.push(iced::widget::responsive(move |size| {
                 let columns = self.fitting_columns(size.width);
                 let mut area = column![].width(Length::Fill).height(Length::Fill);
                 if !columns.is_empty() {
                     area = area.push(self.column_headers(&columns));
                 }
                 area.push(ui::separator(false))
-                    .push(self.rows_view(shared, &colors, columns, size.width))
+                    .push(self.rows_view(shared, &colors, links, columns, size.width))
                     .into()
             }));
         }
@@ -1612,7 +1857,7 @@ impl DirDiff {
             } else {
                 format!("Scanning {}", self.progress)
             };
-            content = content.push(
+            lower = lower.push(
                 container(
                     row![
                         text(label).size(13).width(Length::Fill).wrapping(text::Wrapping::None),
@@ -1628,15 +1873,25 @@ impl DirDiff {
             );
         }
 
-        let mut base: Element<'_, Message> = content.into();
+        content = content.push(match self.popup {
+            Some(Popup::Path { pane, picked }) => self.path_popover(lower, pane, picked),
+            _ => lower.into(),
+        });
+
+        // Right clicks on rows open the context menu where they happened.
+        let mut base: Element<'_, Message> = keys::KeyListener::new(content, |_, _| None)
+            .on_right_click(Message::ContextMenu)
+            .into();
 
         match self.popup {
             Some(Popup::Filters) => {
                 let filters = StatusFilters::from_names(&shared.settings.folder_status_filters);
                 base = menu::overlay(base, self.filter_items(filters), menu::Anchor::TopRight(8.0), Message::ClosePopup);
             }
-            Some(Popup::Context(point)) => base = self.context_menu(base, point),
-            None => {}
+            Some(Popup::Context(point)) => {
+                base = menu::context(base, self.action_items(false), point, Message::ClosePopup);
+            }
+            Some(Popup::Path { .. }) | None => {}
         }
 
         match &self.dialog {
@@ -1677,50 +1932,54 @@ impl DirDiff {
         }
     }
 
-    fn context_menu<'a>(&'a self, base: Element<'a, Message>, point: Point) -> Element<'a, Message> {
-        let mut list = column![].width(260);
-        for item in self.action_items(false) {
-            list = list.push(match item {
-                menu::Item::Action { label, shortcut, message } => {
-                    let mut r = row![text(label).size(14).width(Length::Fill)].spacing(12);
-                    if let Some(s) = shortcut {
-                        r = r.push(text(s).size(12).style(ui::dim_text));
-                    }
-                    Element::from(
-                        button(r)
-                            .width(Length::Fill)
-                            .padding([5, 10])
-                            .style(ui::flat_button)
-                            .on_press_maybe(message),
-                    )
-                }
-                _ => container(ui::separator(false)).padding([4, 0]).into(),
+    /// The path label drop-down of `pane`, below its header.
+    fn path_popover<'a>(
+        &'a self,
+        base: impl Into<Element<'a, Message>>,
+        pane: usize,
+        picked: Option<usize>,
+    ) -> Element<'a, Message> {
+        let mut popover = Some(pathlabel::popover(
+            self.shown_path(pane),
+            picked,
+            pathlabel::Actions {
+                pick: Box::new(Message::PathPick),
+                copy: Message::PathCopy,
+                open_folder: Message::PathOpenFolder,
+            },
+        ));
+        let mut layer = row![].spacing(linkmap::WIDTH).width(Length::Fill).padding([2, 4]);
+        for p in 0..self.panes() {
+            layer = layer.push(match if p == pane { popover.take() } else { None } {
+                Some(popover) => Element::from(container(iced::widget::opaque(popover)).width(Length::FillPortion(1))),
+                None => Space::new().width(Length::FillPortion(1)).into(),
             });
         }
-        let menu = container(list).padding(6).style(ui::popover);
         stack![
-            base,
-            mouse_area(
-                pin(iced::widget::opaque(menu))
-                    .x(point.x)
-                    .y(point.y)
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-            )
-            .on_press(Message::ClosePopup)
-            .on_right_press(Message::ClosePopup),
+            base.into(),
+            mouse_area(container(layer).width(Length::Fill).height(Length::Fill)).on_press(Message::ClosePopup),
         ]
         .into()
     }
 
     fn pane_headers(&self) -> Element<'_, Message> {
+        let shown = self.shown_paths();
         let parent = if self.ready() {
-            meld_files::find_shared_parent_path(&self.roots.iter().map(Some).collect::<Vec<_>>())
+            meld_files::find_shared_parent_path(&shown.iter().map(Some).collect::<Vec<_>>())
         } else {
             None
         };
-        let mut headers = row![].spacing(1).width(Length::Fill);
-        for (pane, root) in self.roots.iter().enumerate() {
+        let mut headers = row![].width(Length::Fill);
+        for (pane, root) in shown.iter().enumerate() {
+            if pane > 0 {
+                // The link map's part of the header bar
+                headers = headers.push(
+                    container(Space::new())
+                        .width(linkmap::WIDTH)
+                        .height(Length::Fill)
+                        .style(ui::header_bar),
+                );
+            }
             let label = if !self.labels[pane].is_empty() {
                 self.labels[pane].clone()
             } else if root.as_os_str().is_empty() {
@@ -1737,17 +1996,36 @@ impl DirDiff {
                 root.display().to_string()
             };
             let focused = pane == self.sel.pane;
-            let label = tooltip(
-                container(text(label).size(13).wrapping(text::Wrapping::None).font(if focused {
-                    ui::bold()
-                } else {
-                    Font::DEFAULT
-                }))
-                .width(Length::Fill)
-                .clip(true),
-                container(text(full).size(13)).padding([4, 8]).style(ui::tooltip_box),
-                tooltip::Position::Bottom,
-            );
+            let open = matches!(self.popup, Some(Popup::Path { pane: p, .. }) if p == pane);
+            let label_button = button(
+                row![
+                    container(text(label).size(13).wrapping(text::Wrapping::None).font(if focused {
+                        ui::bold()
+                    } else {
+                        Font::DEFAULT
+                    }))
+                    .width(Length::Fill)
+                    .clip(true),
+                    text(if open { "▴" } else { "▾" }).size(12).style(ui::dim_text),
+                ]
+                .spacing(4)
+                .align_y(iced::Center),
+            )
+            .padding([3, 6])
+            .width(Length::Fill)
+            .style(ui::tab_button(open))
+            .on_press_maybe((!root.as_os_str().is_empty()).then_some(Message::PathLabel(pane)));
+            // The drop-down shows the full path; the tooltip would cover it.
+            let label: Element<'_, Message> = if open {
+                label_button.into()
+            } else {
+                tooltip(
+                    label_button,
+                    container(text(full).size(13)).padding([4, 8]).style(ui::tooltip_box),
+                    tooltip::Position::Bottom,
+                )
+                .into()
+            };
             headers = headers.push(
                 container(
                     row![
@@ -1762,13 +2040,12 @@ impl DirDiff {
                 .style(ui::header_bar),
             );
         }
-        headers.into()
+        headers.height(Length::Shrink).into()
     }
 
     /// The configured columns that fit next to a usable name column.
     fn fitting_columns(&self, width: f32) -> Vec<Column> {
-        let n = self.panes() as f32;
-        let pane_width = (width - (n - 1.0)) / n;
+        let pane_width = self.pane_width(width);
         let mut available = pane_width - 16.0 - 160.0;
         let mut out = Vec::new();
         for &column in &self.columns {
@@ -1782,12 +2059,18 @@ impl DirDiff {
         out
     }
 
+    /// The width of one pane when the panes and link maps share `width`.
+    fn pane_width(&self, width: f32) -> f32 {
+        let n = self.panes() as f32;
+        ((width - (n - 1.0) * linkmap::WIDTH) / n).max(0.0)
+    }
+
     fn column_headers(&self, columns: &[Column]) -> Element<'_, Message> {
         let header_text = |label: &'static str| text(label).size(12).font(ui::bold()).wrapping(text::Wrapping::None);
         let mut panes = row![].width(Length::Fill);
         for pane in 0..self.panes() {
             if pane > 0 {
-                panes = panes.push(ui::separator(true));
+                panes = panes.push(Space::new().width(linkmap::WIDTH));
             }
             let mut r = row![container(header_text("Name")).width(Length::Fill).clip(true)]
                 .spacing(6)
@@ -1804,23 +2087,48 @@ impl DirDiff {
         &'a self,
         shared: &'a Shared,
         colors: &StatusColors,
+        link_colors: linkmap::Colors,
         columns: Vec<Column>,
         width: f32,
     ) -> Element<'a, Message> {
-        let n = self.panes() as f32;
-        let pane_width = (width - (n - 1.0)) / n;
+        let pane_width = self.pane_width(width);
         let name_width = pane_width - 12.0 - columns.iter().map(|c| c.width() + 6.0).sum::<f32>();
         let total = self.visible.len();
         let first = ((self.scroll_y / self.row_height).floor() as usize).saturating_sub(OVERSCAN).min(total);
         let count = (self.view_height / self.row_height).ceil() as usize + 2 * OVERSCAN;
         let last = (first + count).min(total);
 
+        // The link maps' bands, including a row beyond each end of the
+        // rendered rows so that bands continue past them.
+        let lo = first.saturating_sub(1);
+        let hi = (last + 1).min(total);
+        let bands: Vec<Vec<(Option<linkmap::Link>, bool, bool)>> = (1..self.panes())
+            .map(|right| {
+                let links: Vec<_> = self.visible[lo..hi]
+                    .iter()
+                    .map(|v| linkmap::link(&self.tree.node(v.id).kind, right - 1, right))
+                    .collect();
+                linkmap::bands(&links)
+            })
+            .collect();
+
         let mut list = column![Space::new().height(first as f32 * self.row_height)].width(Length::Fill);
-        for visible in &self.visible[first..last] {
+        for (index, visible) in self.visible[first..last].iter().enumerate() {
             let mut cells = row![].width(Length::Fill).height(self.row_height);
             for pane in 0..self.panes() {
                 if pane > 0 {
-                    cells = cells.push(ui::separator(true));
+                    let (link, top, bottom) = bands[pane - 1][first + index - lo];
+                    cells = cells.push(
+                        iced::widget::canvas(linkmap::Cell {
+                            link,
+                            top,
+                            bottom,
+                            colors: link_colors,
+                            on_scroll: (Message::Change(false), Message::Change(true)),
+                        })
+                        .width(linkmap::WIDTH)
+                        .height(Length::Fill),
+                    );
                 }
                 cells = cells.push(self.cell(shared, colors, &columns, name_width, pane, *visible));
             }
@@ -1834,10 +2142,28 @@ impl DirDiff {
             .width(Length::Fill)
             .height(Length::Fill);
 
-        keys::KeyListener::new(scroller, on_key)
-            .on_modifiers(Message::Modifiers)
-            .on_right_click(Message::ContextMenu)
-            .into()
+        let searching = self.search.is_some();
+        keys::KeyListener::new(
+            search::overlay(scroller, self.search.as_ref(), Message::SearchInput),
+            move |key, modifiers| {
+                on_key(key, modifiers).or_else(|| {
+                    if searching {
+                        None
+                    } else {
+                        search::start_key(key, modifiers).map(Message::SearchStart)
+                    }
+                })
+            },
+        )
+        .intercept(move |key, modifiers| {
+            if searching {
+                search::entry_key(key, modifiers).map(Message::SearchKey)
+            } else {
+                None
+            }
+        })
+        .on_modifiers(Message::Modifiers)
+        .into()
     }
 
     fn cell<'a>(
@@ -1879,6 +2205,12 @@ impl DirDiff {
             Kind::Entry(row) => {
                 let pane_status = &row.status.panes[pane];
                 let mut name = row.names[pane].clone();
+                // The root of an archive pane shows the archive
+                if Some(id) == self.tree.root()
+                    && let Some(Some(a)) = self.archives.get(pane)
+                {
+                    name = a.archive.display().to_string();
+                }
                 if let Some(target) = &pane_status.symlink_target {
                     name = format!("{name} ⟶ {}", target.display());
                 }

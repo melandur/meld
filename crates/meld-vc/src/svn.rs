@@ -158,8 +158,9 @@ pub(crate) fn valid_repo(cmd: &str, path: &Path) -> bool {
 }
 
 /// Files in the folder of `path` whose names start with `name + pattern`
-/// (a minimal `glob("<path><pattern>*")`), sorted by trailing revision
-/// number where there is one.
+/// (a minimal `glob("<path><pattern>*")`): with `exact`, only the file
+/// named exactly so; otherwise those followed by a revision number, sorted
+/// by it.
 fn glob_prefix(path: &Path, pattern: &str, exact: bool) -> Vec<PathBuf> {
     let Some(name) = path.file_name() else {
         return Vec::new();
@@ -174,10 +175,15 @@ fn glob_prefix(path: &Path, pattern: &str, exact: bool) -> Vec<PathBuf> {
         .filter_map(|e| {
             let fname = e.file_name().to_string_lossy().into_owned();
             let rest = fname.strip_prefix(&prefix)?;
-            if exact && !rest.is_empty() {
-                return None;
-            }
-            let rev = rest.parse().unwrap_or(u64::MAX);
+            let rev = if exact {
+                if !rest.is_empty() {
+                    return None;
+                }
+                0
+            } else {
+                // Only `<name><pattern><revision>`, not e.g. `.rej` files
+                rest.parse().ok()?
+            };
             Some((rev, fname.clone(), dir.join(&fname)))
         })
         .collect();
@@ -229,10 +235,12 @@ impl Vc for Subversion {
 
     fn update_tree_state_cache(&mut self, path: &Path) -> Result<()> {
         let arg = paths::lossy(path);
-        // "svn --xml" outputs utf8, even with Windows non-utf8 locale
+        // "svn --xml" outputs utf8, even with Windows non-utf8 locale.
+        // Python left out --no-ignore, so ignored files were never reported
+        // (and shown as normal) although its state map handles them.
         let xml = command::output_text(
             self.cmd,
-            &["status", "-v", "--xml", &arg],
+            &["status", "-v", "--xml", "--no-ignore", &arg],
             Some(&self.core.location),
         )?;
         let items = parse_status_xml(&xml)?;
@@ -256,10 +264,15 @@ impl Vc for Subversion {
         )
     }
 
-    /// SVN has two types of conflicts. Merge conflicts give
-    /// `.merge-left.r*` (THIS), `.working` (BASE) and `.merge-right.r*`
-    /// (OTHER); update conflicts give `.mine` (BASE here, as in Python),
-    /// and two `.r*` files (lower: THIS, higher: OTHER).
+    /// SVN has two types of conflicts. Merge conflicts give `.working`
+    /// (local), `.merge-left.r*` (base) and `.merge-right.r*` (remote);
+    /// update conflicts give `.mine` (local) and two `.r*` files (lower:
+    /// base, higher: remote).
+    ///
+    /// Python returned the base file as the local side and the local file
+    /// as base (for update conflicts, contrary to its own docstring), so
+    /// the 3-way comparison showed the common ancestor instead of the
+    /// user's version; Subversion 1.14/1.15 name the files as above.
     fn get_path_for_conflict(&self, path: &Path, side: ConflictSide) -> Result<(PathBuf, bool)> {
         let invalid = |reason: &str| VcError::InvalidPath {
             vc: NAME,
@@ -273,7 +286,7 @@ impl Vc for Subversion {
         }
 
         let working = glob_prefix(path, ".working", true);
-        let (is_merge, base) = if working.len() == 1 {
+        let (is_merge, local) = if working.len() == 1 {
             (true, working)
         } else {
             let mine = glob_prefix(path, ".mine", true);
@@ -286,12 +299,12 @@ impl Vc for Subversion {
 
         let missing = || invalid("Conflict file does not exist");
         let file = match side {
-            ConflictSide::Base => base[0].clone(),
-            ConflictSide::Local if is_merge => glob_prefix(path, ".merge-left.r", false)
+            ConflictSide::Local => local[0].clone(),
+            ConflictSide::Base if is_merge => glob_prefix(path, ".merge-left.r", false)
                 .into_iter()
                 .next()
                 .ok_or_else(missing)?,
-            ConflictSide::Local => glob_prefix(path, ".r", false)
+            ConflictSide::Base => glob_prefix(path, ".r", false)
                 .into_iter()
                 .next()
                 .ok_or_else(missing)?,
@@ -455,13 +468,13 @@ mod tests {
         let root = dir.path();
         let vc = fake_vc(root);
         let f = root.join("a.txt");
-        for name in ["a.txt", "a.txt.mine", "a.txt.r10", "a.txt.r9"] {
+        for name in ["a.txt", "a.txt.mine", "a.txt.r10", "a.txt.r9", "a.txt.rej"] {
             std::fs::write(root.join(name), b"").unwrap();
         }
         let get = |side| vc.get_path_for_conflict(&f, side).unwrap();
         assert_eq!(get(ConflictSide::Merged), (f.clone(), false));
-        assert_eq!(get(ConflictSide::Base).0, root.join("a.txt.mine"));
-        assert_eq!(get(ConflictSide::Local).0, root.join("a.txt.r9"));
+        assert_eq!(get(ConflictSide::Local).0, root.join("a.txt.mine"));
+        assert_eq!(get(ConflictSide::Base).0, root.join("a.txt.r9"));
         assert_eq!(get(ConflictSide::Remote).0, root.join("a.txt.r10"));
 
         let g = root.join("b.txt");
@@ -474,8 +487,8 @@ mod tests {
             std::fs::write(root.join(name), b"").unwrap();
         }
         let get = |side| vc.get_path_for_conflict(&g, side).unwrap().0;
-        assert_eq!(get(ConflictSide::Base), root.join("b.txt.working"));
-        assert_eq!(get(ConflictSide::Local), root.join("b.txt.merge-left.r3"));
+        assert_eq!(get(ConflictSide::Local), root.join("b.txt.working"));
+        assert_eq!(get(ConflictSide::Base), root.join("b.txt.merge-left.r3"));
         assert_eq!(get(ConflictSide::Remote), root.join("b.txt.merge-right.r5"));
 
         std::fs::write(root.join("c.txt"), b"").unwrap();

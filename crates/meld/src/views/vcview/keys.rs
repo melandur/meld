@@ -1,18 +1,41 @@
 //! A wrapper widget that turns key presses no inner widget consumed into
 //! messages. Unlike a keyboard subscription it only sees events while
 //! its tab is on screen, so arrow keys move the selection of the visible
-//! version control view only.
+//! version control view only. It also reports right clicks, for the
+//! context menu.
 
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::widget::{Operation, Tree};
 use iced::advanced::{Clipboard, Shell, Widget, mouse, overlay, renderer};
 use iced::keyboard::{self, Key, Modifiers};
-use iced::{Element, Event, Length, Rectangle, Size, Vector};
+use iced::{Element, Event, Length, Point, Rectangle, Size, Vector};
+
+/// Maps a key press to a message.
+type KeyFn<'a, Message> = Box<dyn Fn(&Key, Modifiers) -> Option<Message> + 'a>;
 
 pub struct KeyHandler<'a, Message, Theme, Renderer> {
     content: Element<'a, Message, Theme, Renderer>,
-    on_key: Box<dyn Fn(&Key, Modifiers) -> Option<Message> + 'a>,
+    on_key: KeyFn<'a, Message>,
     on_modifiers: Box<dyn Fn(Modifiers) -> Message + 'a>,
+    on_right_click: Option<Box<dyn Fn(Point) -> Message + 'a>>,
+    intercept: Option<KeyFn<'a, Message>>,
+}
+
+impl<'a, Message, Theme, Renderer> KeyHandler<'a, Message, Theme, Renderer> {
+    /// Reports right clicks the content didn't handle, with the position
+    /// inside this widget.
+    pub fn on_right_click(mut self, f: impl Fn(Point) -> Message + 'a) -> Self {
+        self.on_right_click = Some(Box::new(f));
+        self
+    }
+
+    /// Maps key presses to messages before the content sees them; keys
+    /// it maps never reach the content (the search entry's Escape, Up
+    /// and Down).
+    pub fn intercept(mut self, f: impl Fn(&Key, Modifiers) -> Option<Message> + 'a) -> Self {
+        self.intercept = Some(Box::new(f));
+        self
+    }
 }
 
 /// Wraps `content`; `on_key` maps unconsumed key presses to a message
@@ -27,6 +50,8 @@ pub fn key_handler<'a, Message, Theme, Renderer>(
         content: content.into(),
         on_key: Box::new(on_key),
         on_modifiers: Box::new(on_modifiers),
+        on_right_click: None,
+        intercept: None,
     }
 }
 
@@ -67,6 +92,16 @@ where
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
+        if let Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) = event
+            && !shell.is_event_captured()
+            && let Some(f) = &self.intercept
+            && let Some(message) = f(key, *modifiers)
+        {
+            shell.publish(message);
+            shell.capture_event();
+            return;
+        }
+        let captured_before = shell.is_event_captured();
         self.content.as_widget_mut().update(
             &mut tree.children[0],
             event,
@@ -85,6 +120,13 @@ where
                 if let Some(message) = (self.on_key)(key, *modifiers) {
                     shell.publish(message);
                     shell.capture_event();
+                }
+            }
+            Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right)) if !captured_before => {
+                if let Some(f) = &self.on_right_click
+                    && let Some(position) = cursor.position_in(layout.bounds())
+                {
+                    shell.publish(f(position));
                 }
             }
             _ => {}

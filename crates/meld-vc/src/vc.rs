@@ -54,12 +54,21 @@ impl VcKind {
 
     /// The command line program (`Vc.CMD`); `None` for [`VcKind::Null`].
     /// CVSNT is a drop-in replacement for CVS and preferred if installed.
+    /// Breezy, Bazaar's maintained successor, installs only `brz` unless
+    /// packaged with a `bzr` alias; `brz` is used when there is no `bzr`.
     pub fn cmd(self) -> Option<&'static str> {
         static CVS_CMD: OnceLock<&'static str> = OnceLock::new();
+        static BZR_CMD: OnceLock<&'static str> = OnceLock::new();
         Some(match self {
             VcKind::Git => "git",
             VcKind::Mercurial => "hg",
-            VcKind::Bazaar => "bzr",
+            VcKind::Bazaar => BZR_CMD.get_or_init(|| {
+                if paths::which("bzr").is_none() && paths::which("brz").is_some() {
+                    "brz"
+                } else {
+                    "bzr"
+                }
+            }),
             VcKind::Subversion => "svn",
             VcKind::Darcs => "darcs",
             VcKind::Cvs => CVS_CMD.get_or_init(|| {
@@ -162,7 +171,8 @@ impl VcKind {
             VcKind::Git => command::call_ok(cmd, &["branch"], cwd),
             VcKind::Mercurial | VcKind::Bazaar => command::call_ok(cmd, &["root"], cwd),
             VcKind::Subversion => svn::valid_repo(cmd, path),
-            VcKind::Darcs => command::call_ok(cmd, &["show", "repo", "--no-files"], cwd),
+            // Python passed --no-files, which Darcs 2.18 rejects
+            VcKind::Darcs => command::call_ok(cmd, &["show", "repo"], cwd),
             VcKind::Cvs => command::call_ok(cmd, &["ls"], cwd),
             VcKind::Null => false,
         }
@@ -449,8 +459,9 @@ pub trait Vc: Send + fmt::Debug {
     }
 
     /// Entries of folder `base`: its children on disk (except the VC
-    /// metadata folder) plus removed/missing entries known to the VC.
-    /// Symlinks are not followed.
+    /// metadata folder) plus removed/missing entries known to the VC that
+    /// are not on disk (Python listed those twice). Symlinks are not
+    /// followed.
     fn get_entries(&self, base: &Path) -> Result<Vec<Entry>> {
         let base = paths::abspath(base);
         let core = self.core();
@@ -483,8 +494,13 @@ pub trait Vc: Send + fmt::Debug {
             Err(e) => return Err(e.into()),
         }
 
+        // Removed entries may still be on disk (e.g. `darcs remove` keeps
+        // the file); those are already listed.
         if let Some(names) = core.cache.missing.get(&base) {
             for name in names {
+                if entries.iter().any(|e| &e.name == name) {
+                    continue;
+                }
                 let path = base.join(name);
                 entries.push(Entry::new(
                     path.clone(),

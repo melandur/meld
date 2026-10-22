@@ -71,9 +71,11 @@ impl Comparison {
                 paths.len()
             )),
             _ => {
+                // Archives are compared as folders (`open_paths` mounts
+                // them first).
                 let dirs = paths
                     .iter()
-                    .filter(|p| p.as_ref().is_some_and(|p| p.is_dir()))
+                    .filter(|p| p.as_ref().is_some_and(|p| p.is_dir() || meld_files::is_archive(p)))
                     .count();
                 if dirs == paths.len() {
                     Ok(Comparison::Folders {

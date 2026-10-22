@@ -476,6 +476,186 @@ impl TreeModel {
     pub fn entry_count(&self) -> usize {
         self.nodes.iter().skip(1).filter(|n| n.entry().is_some()).count()
     }
+
+    /// The name shown for each visible row, top to bottom (for
+    /// type-to-search).
+    pub fn visible_names(&self) -> Vec<String> {
+        self.visible
+            .iter()
+            .map(|&id| match &self.nodes[id].kind {
+                NodeKind::Entry(e) => e
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| e.name.clone()),
+                NodeKind::Empty(_) | NodeKind::Error(_) => String::new(),
+            })
+            .collect()
+    }
+
+    // ----- Partial refreshes -----
+
+    /// The row of the entry at `path` (`find_iter_by_name`).
+    pub fn find(&self, path: &Path) -> Option<NodeId> {
+        self.nodes
+            .iter()
+            .position(|n| n.entry().is_some_and(|e| e.path == path))
+    }
+
+    fn root_path(&self) -> Option<&Path> {
+        self.path(0)
+    }
+
+    /// The folder row to rescan when something in folder `dir` changed:
+    /// the nearest folder row at or above it, or the root for folders
+    /// outside the tree (such as a repository root above the location).
+    pub fn folder_for(&self, dir: &Path) -> Option<PathBuf> {
+        let root = self.root_path()?;
+        let mut current = dir;
+        loop {
+            if !current.starts_with(root) || current == root {
+                return Some(root.to_path_buf());
+            }
+            if let Some(id) = self.find(current)
+                && self.nodes[id].entry().is_some_and(|e| e.isdir)
+            {
+                return Some(current.to_path_buf());
+            }
+            current = current.parent()?;
+        }
+    }
+
+    /// The tree as scan rows, with `folder`'s row replaced by `new`.
+    fn to_row(&self, id: NodeId, splice: Option<(NodeId, &VcRow)>) -> VcRow {
+        let node = &self.nodes[id];
+        if let Some((target, new)) = splice
+            && target == id
+        {
+            return match (new, node.entry()) {
+                (VcRow::Entry { entry, children, expanded }, Some(old)) => {
+                    // The root keeps its own entry; other folders keep
+                    // their name (which differs in flattened trees).
+                    let entry = if id == 0 {
+                        old.clone()
+                    } else {
+                        Entry {
+                            name: old.name.clone(),
+                            ..entry.clone()
+                        }
+                    };
+                    VcRow::Entry {
+                        entry,
+                        children: children.clone(),
+                        expanded: *expanded || id == 0,
+                    }
+                }
+                _ => new.clone(),
+            };
+        }
+        match &node.kind {
+            NodeKind::Entry(entry) => VcRow::Entry {
+                entry: entry.clone(),
+                children: node.children.iter().map(|&c| self.to_row(c, splice)).collect(),
+                expanded: id == 0,
+            },
+            NodeKind::Empty(text) => VcRow::Empty(text.clone()),
+            NodeKind::Error(text) => VcRow::Error(text.clone()),
+        }
+    }
+
+    /// Replaces the rows of the folder at `folder` with a rescan of it
+    /// (`_search_recursively_iter(path, replace=True)`), keeping the
+    /// expanded folders, selection and cursor elsewhere. Returns false if
+    /// the folder isn't in the tree.
+    pub fn replace_subtree(&mut self, folder: &Path, row: &VcRow) -> bool {
+        let Some(id) = self.find(folder) else {
+            return false;
+        };
+        let combined = self.to_row(0, Some((id, row)));
+        self.replace(&combined);
+        true
+    }
+
+    /// Updates the state of the row for `entry.path`
+    /// (`_update_item_state()`). Returns false if there is no such row.
+    pub fn update_entry(&mut self, entry: &Entry) -> bool {
+        let Some(id) = self.find(&entry.path) else {
+            return false;
+        };
+        if let NodeKind::Entry(e) = &mut self.nodes[id].kind {
+            e.state = entry.state;
+            e.options = entry.options.clone();
+        }
+        true
+    }
+}
+
+/// What to refresh after a command ran or a file was saved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Refresh {
+    /// Rescan everything (flattened trees, like Meld's `refresh()`).
+    Full,
+    /// Rescan one folder's rows (`refresh_partial()`).
+    Folder(PathBuf),
+    /// Update one entry's state (`on_file_changed()`).
+    Entry(PathBuf),
+}
+
+impl Refresh {
+    /// The refresh covering both `self` and `other`, for refreshes asked
+    /// for while another one runs.
+    pub fn merge(self, other: Refresh) -> Refresh {
+        match (self, other) {
+            (Refresh::Full, _) | (_, Refresh::Full) => Refresh::Full,
+            (Refresh::Entry(a), Refresh::Entry(b)) if a == b => Refresh::Entry(a),
+            (a, b) => Refresh::Folder(common_ancestor(&a.folder(), &b.folder())),
+        }
+    }
+
+    fn folder(&self) -> PathBuf {
+        match self {
+            Refresh::Full => PathBuf::from("/"),
+            Refresh::Folder(f) => f.clone(),
+            Refresh::Entry(p) => p.parent().map(Path::to_path_buf).unwrap_or_default(),
+        }
+    }
+}
+
+fn common_ancestor(a: &Path, b: &Path) -> PathBuf {
+    a.components()
+        .zip(b.components())
+        .take_while(|(x, y)| x == y)
+        .map(|(x, _)| x)
+        .collect()
+}
+
+/// The refresh after commands that ran in the folders `dirs`.
+pub fn plan_command_refresh(tree: &TreeModel, flatten: bool, dirs: &[PathBuf]) -> Option<Refresh> {
+    if dirs.is_empty() {
+        return None;
+    }
+    if flatten {
+        return Some(Refresh::Full);
+    }
+    dirs.iter()
+        .filter_map(|d| tree.folder_for(d))
+        .map(Refresh::Folder)
+        .reduce(Refresh::merge)
+        .or(Some(Refresh::Full))
+}
+
+/// The refresh after `path` was saved: its row's state, or the folder
+/// it appeared in. Paths outside the tree need nothing.
+pub fn plan_file_refresh(tree: &TreeModel, flatten: bool, path: &Path) -> Option<Refresh> {
+    let root = tree.root_path()?;
+    if !path.starts_with(root) {
+        return None;
+    }
+    match tree.find(path) {
+        Some(id) if !tree.node(id).is_folder() => Some(Refresh::Entry(path.to_path_buf())),
+        _ if flatten => Some(Refresh::Full),
+        _ => tree.folder_for(path.parent()?).map(Refresh::Folder),
+    }
 }
 
 #[cfg(test)]
@@ -685,6 +865,94 @@ mod tests {
         model.click(3, Mods::NONE);
         model.replace(&dir("/r", State::Normal, true, vec![]));
         assert_eq!(selected_names(&model), ["r"]);
+    }
+
+    #[test]
+    fn partial_refresh_replaces_one_folder() {
+        let mut model = TreeModel::new(&sample());
+        model.toggle_expanded(1); // expand a
+        model.click(2, Mods::NONE); // a1
+        assert_eq!(selected_names(&model), ["a1"]);
+
+        // b was rescanned: b1 is now modified, c is gone and d is new
+        let rescanned = dir(
+            "/r/b",
+            State::Normal,
+            true,
+            vec![file("/r/b/b1", State::Modified), file("/r/b/d", State::New)],
+        );
+        assert!(model.replace_subtree(Path::new("/r/b"), &rescanned));
+        assert_eq!(names(&model), ["r", "a", "a1", "b", "b1", "d", "x", "(Empty)"]);
+        assert_eq!(selected_names(&model), ["a1"], "the selection elsewhere stays");
+        let b1 = model.find(Path::new("/r/b/b1")).unwrap();
+        assert_eq!(model.node(b1).state(), State::Modified);
+        assert_eq!(model.node(b1).depth, 2);
+        assert!(model.find(Path::new("/r/b/c")).is_none());
+        assert!(!model.replace_subtree(Path::new("/r/zzz"), &rescanned));
+
+        // The root keeps its own row
+        let root = dir("/r", State::Modified, true, vec![file("/r/only", State::New)]);
+        assert!(model.replace_subtree(Path::new("/r"), &root));
+        assert_eq!(names(&model), ["r", "only"]);
+        assert_eq!(model.node(0).state(), State::Normal);
+    }
+
+    #[test]
+    fn entry_updates() {
+        let mut model = TreeModel::new(&sample());
+        let mut entry = Entry::new("/r/x", "x", State::Normal, false, "Staged");
+        assert!(model.update_entry(&entry));
+        let x = model.find(Path::new("/r/x")).unwrap();
+        assert_eq!(model.node(x).state(), State::Normal);
+        assert_eq!(model.node(x).entry().unwrap().options, "Staged");
+        entry.path = PathBuf::from("/r/nope");
+        assert!(!model.update_entry(&entry));
+    }
+
+    #[test]
+    fn refresh_planning() {
+        let model = TreeModel::new(&sample());
+        assert_eq!(model.folder_for(Path::new("/r/b/c")), Some(PathBuf::from("/r/b/c")));
+        assert_eq!(model.folder_for(Path::new("/r/b/c/new/deeper")), Some(PathBuf::from("/r/b/c")));
+        assert_eq!(model.folder_for(Path::new("/r")), Some(PathBuf::from("/r")));
+        // A repository root above the location refreshes the location
+        assert_eq!(model.folder_for(Path::new("/")), Some(PathBuf::from("/r")));
+        assert_eq!(model.folder_for(Path::new("/elsewhere")), Some(PathBuf::from("/r")));
+
+        let folders = [PathBuf::from("/r/b/c"), PathBuf::from("/r/a")];
+        assert_eq!(plan_command_refresh(&model, false, &folders), Some(Refresh::Folder("/r".into())));
+        assert_eq!(
+            plan_command_refresh(&model, false, &folders[..1]),
+            Some(Refresh::Folder("/r/b/c".into()))
+        );
+        assert_eq!(plan_command_refresh(&model, true, &folders), Some(Refresh::Full));
+        assert_eq!(plan_command_refresh(&model, false, &[]), None);
+
+        assert_eq!(plan_file_refresh(&model, false, Path::new("/r/x")), Some(Refresh::Entry("/r/x".into())));
+        assert_eq!(plan_file_refresh(&model, true, Path::new("/r/x")), Some(Refresh::Entry("/r/x".into())));
+        assert_eq!(
+            plan_file_refresh(&model, false, Path::new("/r/b/c/brand-new")),
+            Some(Refresh::Folder("/r/b/c".into()))
+        );
+        assert_eq!(plan_file_refresh(&model, true, Path::new("/r/b/c/brand-new")), Some(Refresh::Full));
+        assert_eq!(plan_file_refresh(&model, false, Path::new("/other/file")), None);
+    }
+
+    #[test]
+    fn refreshes_merge() {
+        let entry = |p: &str| Refresh::Entry(p.into());
+        let folder = |p: &str| Refresh::Folder(p.into());
+        assert_eq!(entry("/r/x").merge(entry("/r/x")), entry("/r/x"));
+        assert_eq!(entry("/r/a/1").merge(entry("/r/a/2")), folder("/r/a"));
+        assert_eq!(entry("/r/a/1").merge(folder("/r/b")), folder("/r"));
+        assert_eq!(folder("/r/b/c").merge(folder("/r/b")), folder("/r/b"));
+        assert_eq!(folder("/r/b").merge(Refresh::Full), Refresh::Full);
+    }
+
+    #[test]
+    fn visible_names_for_search() {
+        let model = TreeModel::new(&sample());
+        assert_eq!(model.visible_names(), ["r", "a", "b", "b1", "c", "c1", "x", ""]);
     }
 
     #[test]

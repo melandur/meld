@@ -117,6 +117,56 @@ pub fn overlay<'a, M: Clone + 'a>(
     .into()
 }
 
+/// Draws `items` as a context menu with its top left corner at `point`
+/// (relative to `base`); clicking outside sends `on_dismiss`. Menus that
+/// would run past the right or bottom edge of `base` open to the left
+/// or upwards instead.
+pub fn context<'a, M: Clone + 'a>(
+    base: impl Into<Element<'a, M>>,
+    items: Vec<Item<M>>,
+    point: iced::Point,
+    on_dismiss: M,
+) -> Element<'a, M> {
+    const WIDTH: f32 = 260.0;
+    let estimated_height: f32 = items
+        .iter()
+        .map(|item| match item {
+            Item::Separator => 9.0,
+            Item::Heading(_) => 28.0,
+            _ => 30.0,
+        })
+        .sum::<f32>()
+        + 12.0;
+    let layer = iced::widget::responsive(move |size| {
+        let mut list = column![].spacing(0).width(WIDTH);
+        for item in items.iter().cloned() {
+            list = list.push(item_view(item));
+        }
+        let menu = container(list).padding(6).style(super::popover);
+        let x = if point.x + WIDTH + 12.0 > size.width {
+            (point.x - WIDTH - 12.0).max(0.0)
+        } else {
+            point.x
+        };
+        let y = if point.y + estimated_height > size.height {
+            (point.y - estimated_height).max(0.0)
+        } else {
+            point.y
+        };
+        mouse_area(
+            iced::widget::pin(opaque(menu))
+                .x(x)
+                .y(y)
+                .width(Length::Fill)
+                .height(Length::Fill),
+        )
+        .on_press(on_dismiss.clone())
+        .on_right_press(on_dismiss.clone())
+        .into()
+    });
+    stack![base.into(), layer].into()
+}
+
 fn item_view<'a, M: Clone + 'a>(item: Item<M>) -> Element<'a, M> {
     match item {
         Item::Action {

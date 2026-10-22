@@ -55,32 +55,42 @@ pub struct DarcsStatus {
     pub reverse_renames: HashMap<PathBuf, PathBuf>,
 }
 
-/// Parse `darcs whatsnew -sl --machine-readable` output run in `location`.
+/// Parse `darcs whatsnew -sl --machine-readable` output. Paths are
+/// relative to the repository `root` wherever darcs runs (Python joined
+/// them to the comparison location, which broke sub-folder locations).
 /// Darcs lists moves (`F` old name, then `T` new name) before
 /// modifications.
-pub fn parse_whatsnew(output: &str, location: &Path, root: &Path) -> DarcsStatus {
+///
+/// Lines that aren't status lines, like `No changes!`, are skipped (Python
+/// recorded a file named `changes!`). A file removed with `darcs remove`
+/// stays on disk and is listed twice, as removed (`R`) and unversioned
+/// (`a`); it is shown as removed.
+pub fn parse_whatsnew(output: &str, root: &Path) -> DarcsStatus {
     let mut status = DarcsStatus::default();
     let mut renames: Vec<(PathBuf, PathBuf)> = Vec::new();
     let mut old_name: Option<PathBuf> = None;
     for line in output.lines() {
-        // skip empty lines and lines starting with "What's new in foo"
-        if line.trim().is_empty() || line.starts_with("What") {
-            continue;
-        }
         let Some((key, name)) = line.split_once(' ') else {
             continue;
         };
+        let key = key.trim();
+        if !matches!(key, "a" | "A" | "M" | "M!" | "R" | "F" | "T") {
+            continue;
+        }
         let name = paths::normalize(Path::new(name));
         if key == "F" {
             old_name = Some(name.clone());
         }
-        let path = paths::absolutize(location, &name);
+        let path = paths::absolutize(root, &name);
         if key == "T"
             && let Some(old) = old_name.take()
         {
-            renames.push((paths::absolutize(location, &old), path.clone()));
+            renames.push((paths::absolutize(root, &old), path.clone()));
         }
-        status.states.insert(path, state_for_key(key.trim()));
+        if key == "a" && status.states.contains_key(&path) {
+            continue;
+        }
+        status.states.insert(path, state_for_key(key));
     }
     for (old, new) in renames {
         let rel = |p: &Path| {
@@ -115,8 +125,13 @@ impl Darcs {
         VcCommand::new(CMD, args, files, &self.core.root)
     }
 
+    /// Replace the cached state with `status`, which always covers the
+    /// whole repository; stale entries (e.g. a modified file edited back)
+    /// are dropped.
     fn apply(&mut self, status: DarcsStatus) {
         let cache: &mut TreeCache = &mut self.core.cache;
+        cache.states.clear();
+        cache.missing.clear();
         for (path, state) in &status.states {
             cache.add_missing_entry(path, *state);
         }
@@ -149,20 +164,15 @@ impl Vc for Darcs {
     }
 
     /// `path` is ignored for the darcs call itself (darcs fails when given
-    /// an empty argument), as in Python.
-    fn update_tree_state_cache(&mut self, path: &Path) -> Result<()> {
+    /// an empty argument), as in Python; the whole repository is
+    /// refreshed.
+    fn update_tree_state_cache(&mut self, _path: &Path) -> Result<()> {
         let output = command::output_text(
             CMD,
             &["whatsnew", "-sl", "--machine-readable"],
             Some(&self.core.location),
         )?;
-        let abs = self.core.resolve(path);
-        let has_lines = output.lines().next().is_some();
-        if !has_lines && abs.is_file() {
-            self.core.cache.states.insert(abs, State::Normal);
-            return Ok(());
-        }
-        let status = parse_whatsnew(&output, &self.core.location, &self.core.root);
+        let status = parse_whatsnew(&output, &self.core.root);
         self.apply(status);
         Ok(())
     }
@@ -186,8 +196,24 @@ impl Vc for Darcs {
         )
     }
 
-    fn commit(&self, _files: &[PathBuf], message: &str) -> Result<Vec<VcCommand>> {
-        Ok(vec![self.files_cmd(&["record", "-a", "-m", message], &[])])
+    /// Records the changes to the selected `files` (Python recorded every
+    /// change, although the commit dialog lists only the selection).
+    /// Darcs rejects patch names with line breaks, so a multi-line message
+    /// is passed in a temporary log file (first line: patch name, rest:
+    /// long comment) that darcs deletes after recording.
+    fn commit(&self, files: &[PathBuf], message: &str) -> Result<Vec<VcCommand>> {
+        let message = message.trim_end();
+        if !message.contains('\n') {
+            return Ok(vec![
+                self.files_cmd(&["record", "-a", "-m", message], files),
+            ]);
+        }
+        let logfile = command::write_temp(format!("{message}\n").as_bytes(), "commit", ".txt")?;
+        let logfile = paths::lossy(&logfile);
+        Ok(vec![self.files_cmd(
+            &["record", "-a", "--logfile", &logfile, "--delete-logfile"],
+            files,
+        )])
     }
     fn update(&self) -> Result<Vec<VcCommand>> {
         Ok(vec![self.files_cmd(&["pull", "-a"], &[])])
@@ -227,12 +253,15 @@ A ./new-dir/new-dir-file.txt
 A ./new.txt
 a ./unknown.txt
 M! ./conflict.txt
+R ./kept.txt
+a ./kept.txt
+a ./sub/new file.txt
 ";
 
     #[test]
     fn parses_testdarcs_whatsnew() {
         let root = Path::new("/d");
-        let st = parse_whatsnew(WHATSNEW, root, root);
+        let st = parse_whatsnew(WHATSNEW, root);
         let s = |p: &str| st.states[Path::new(p)];
         assert_eq!(s("/d/conflict2.txt"), State::NonExist);
         assert_eq!(s("/d/conflict2-moved.txt"), State::Renamed);
@@ -243,6 +272,13 @@ M! ./conflict.txt
         assert_eq!(s("/d/new-dir/new-dir-file.txt"), State::New);
         assert_eq!(s("/d/unknown.txt"), State::Unversioned);
         assert_eq!(s("/d/conflict.txt"), State::Conflict);
+        // Removed with `darcs remove`, which keeps the file
+        assert_eq!(s("/d/kept.txt"), State::Removed);
+        assert_eq!(s("/d/sub/new file.txt"), State::Unversioned);
+        assert_eq!(
+            parse_whatsnew("No changes!\n", root),
+            DarcsStatus::default()
+        );
         assert_eq!(
             st.meta[Path::new("/d/renamed-new.txt")],
             "renamed.txt ➡ renamed-new.txt"
@@ -262,8 +298,21 @@ M! ./conflict.txt
         };
         vc.apply(st);
         assert!(vc.core.cache.missing[root].contains("deleted.txt"));
-        let c = &vc.commit(&[], "msg").unwrap()[0];
+        let c = &vc.commit(&[], "msg\n").unwrap()[0];
         assert_eq!(c.argv(), vec!["record", "-a", "-m", "msg"]);
+        let c = &vc.commit(&[root.join("a.txt")], "msg").unwrap()[0];
+        assert_eq!(c.argv(), vec!["record", "-a", "-m", "msg", "a.txt"]);
+
+        let c = &vc.commit(&[root.join("a.txt")], "Title\n\nBody").unwrap()[0];
+        let argv = c.argv();
+        assert_eq!(argv[..3], ["record", "-a", "--logfile"]);
+        assert_eq!(argv[4..], ["--delete-logfile", "a.txt"]);
+        let logfile = PathBuf::from(&argv[3]);
+        assert_eq!(
+            std::fs::read_to_string(&logfile).unwrap(),
+            "Title\n\nBody\n"
+        );
+        std::fs::remove_file(logfile).unwrap();
     }
 
     #[test]

@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use iced::futures::{SinkExt, Stream};
 use meld_vc::commit::{COMMIT_HISTORY_ID, DEFAULT_HISTORY_LENGTH};
 use meld_vc::{
-    Action, DiffOptions, DiffRequest, MessageHistory, StatusFilters, Vc, VcChoices, VcError, VcKind, VcRow,
+    Action, DiffOptions, DiffRequest, Entry, MessageHistory, StatusFilters, Vc, VcChoices, VcError, VcKind, VcRow,
 };
 
 pub type SharedVc = Arc<Mutex<Box<dyn Vc>>>;
@@ -125,6 +125,9 @@ pub struct ScanOutput {
     pub tree: VcRow,
     /// "2 unpushed commits in 1 branch", shown on the root row.
     pub push_summary: Option<String>,
+    /// The folder a partial refresh scanned (`tree` is its row); `None`
+    /// for the whole tree.
+    pub subtree: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
@@ -133,14 +136,40 @@ pub enum ScanEvent {
     Done(Arc<Result<ScanOutput, String>>),
 }
 
+/// What a scan covers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ScanScope {
+    /// The whole tree, first refreshing all of the backend's cached state
+    /// when `refresh`.
+    Full { refresh: bool },
+    /// One folder (`refresh_partial()`): its cached state is refreshed
+    /// and only its rows are rebuilt.
+    Folder(PathBuf),
+}
+
 const CANCELLED: &str = "cancelled";
 
-/// Refreshes the backend's state (when `refresh`) and builds the tree
-/// below its location, reporting progress at most every 100ms.
+/// Forgets the cached state of `path` and everything below it, so that
+/// refreshing it also clears entries that went back to normal.
+fn forget_below(vc: &mut dyn Vc, path: &Path) {
+    let cache = &mut vc.core_mut().cache;
+    cache.states.retain(|p, _| !p.starts_with(path));
+    cache.meta.retain(|p, _| !p.starts_with(path));
+    cache.missing.retain(|folder, _| !folder.starts_with(path));
+    if let (Some(parent), Some(name)) = (path.parent(), path.file_name())
+        && let Some(names) = cache.missing.get_mut(parent)
+    {
+        names.remove(&*name.to_string_lossy());
+    }
+}
+
+/// Builds the tree (or one folder of it, see [`ScanScope`]), reporting
+/// progress at most every 100ms. Setting `cancel` stops the scan before
+/// the next folder or entry.
 pub fn scan(
     vc: SharedVc,
     filters: StatusFilters,
-    refresh: bool,
+    scope: ScanScope,
     cancel: Arc<AtomicBool>,
 ) -> impl Stream<Item = ScanEvent> {
     blocking_stream(move |emit| {
@@ -157,31 +186,68 @@ pub fn scan(
                     None
                 }
             };
-            if refresh {
-                emit(ScanEvent::Progress("Scanning repository".into()));
-                vc.refresh_vc_state(None).map_err(|e| e.to_string())?;
-            }
+            let (start, subtree) = match &scope {
+                ScanScope::Full { refresh } => {
+                    if *refresh {
+                        emit(ScanEvent::Progress("Scanning repository".into()));
+                        vc.refresh_vc_state(None).map_err(|e| e.to_string())?;
+                    }
+                    (vc.location().to_path_buf(), None)
+                }
+                ScanScope::Folder(folder) => {
+                    emit(ScanEvent::Progress("Scanning repository".into()));
+                    forget_below(&mut **vc, folder);
+                    vc.refresh_vc_state(Some(folder)).map_err(|e| e.to_string())?;
+                    (folder.clone(), Some(folder.clone()))
+                }
+            };
             if cancel.load(Ordering::Relaxed) {
                 return Err(CANCELLED.to_string());
             }
-            let start = vc.location().to_path_buf();
             let mut last = Instant::now() - Duration::from_secs(1);
-            let tree = meld_vc::scan_tree_with_progress(&**vc, &start, &filters, &mut |message| {
-                if last.elapsed() >= Duration::from_millis(100) {
-                    last = Instant::now();
-                    emit(ScanEvent::Progress(message.to_string()));
-                }
-            })
+            let mut tree = meld_vc::scan_tree_cancellable(
+                &**vc,
+                &start,
+                &filters,
+                &mut |message| {
+                    if last.elapsed() >= Duration::from_millis(100) {
+                        last = Instant::now();
+                        emit(ScanEvent::Progress(message.to_string()));
+                    }
+                },
+                &cancel,
+            )
             .map_err(|e| e.to_string())?;
+            // A refreshed folder below the location gets its own state.
+            if subtree.is_some()
+                && start != vc.location()
+                && let VcRow::Entry { entry, .. } = &mut tree
+            {
+                let fresh = vc.get_entry(&start);
+                entry.state = fresh.state;
+                entry.options = fresh.options;
+            }
             Ok(ScanOutput {
                 tree,
                 push_summary: summary,
+                subtree,
             })
         })();
         if !cancel.load(Ordering::Relaxed) {
             emit(ScanEvent::Done(Arc::new(result)));
         }
     })
+}
+
+/// Refreshes the state of one entry (`on_file_changed()`).
+pub async fn refresh_entry(vc: SharedVc, path: PathBuf) -> Result<Entry, String> {
+    blocking(move || {
+        let mut vc = lock(&vc);
+        forget_below(&mut **vc, &path);
+        vc.refresh_vc_state(Some(&path)).map_err(|e| e.to_string())?;
+        Ok(vc.get_entry(&path))
+    })
+    .await?
 }
 
 // ----- Commands -----
@@ -197,7 +263,8 @@ pub enum ConsoleKind {
 pub enum CommandEvent {
     Console(ConsoleKind, String),
     Finished {
-        refresh: bool,
+        /// The working folders of commands that asked for a refresh.
+        refresh: Vec<PathBuf>,
         failed: bool,
         error: Option<String>,
     },
@@ -213,14 +280,14 @@ pub fn run_action(vc: SharedVc, action: Action, files: Vec<PathBuf>, message: St
             Ok(c) => c,
             Err(e) => {
                 emit(CommandEvent::Finished {
-                    refresh: false,
+                    refresh: Vec::new(),
                     failed: true,
                     error: Some(e.to_string()),
                 });
                 return;
             }
         };
-        let mut refresh = false;
+        let mut refresh: Vec<PathBuf> = Vec::new();
         let mut failed = false;
         let mut error = None;
         for command in &commands {
@@ -239,7 +306,9 @@ pub fn run_action(vc: SharedVc, action: Action, files: Vec<PathBuf>, message: St
                     error = Some(format!("While running '{}'\nError: {e}", line.trim_end()));
                 }
             }
-            refresh |= command.refresh;
+            if command.refresh && !refresh.contains(&command.working_dir) {
+                refresh.push(command.working_dir.clone());
+            }
         }
         emit(CommandEvent::Finished { refresh, failed, error });
     })
@@ -319,14 +388,16 @@ pub async fn push_summary(vc: SharedVc) -> Result<String, String> {
 // ----- Deleting -----
 
 /// Moves `paths` to the trash (`trash_or_confirm`), returning the files
-/// that can only be deleted permanently, and error messages.
-pub async fn trash(paths: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<String>) {
+/// trashed, the files that can only be deleted permanently, and error
+/// messages.
+pub async fn trash(paths: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<String>) {
     blocking(move || {
+        let mut trashed = Vec::new();
         let mut confirm = Vec::new();
         let mut errors = Vec::new();
         for path in paths {
             match meld_files::trash_or_confirm(&path) {
-                Ok(_) => {}
+                Ok(_) => trashed.push(path),
                 // Like Meld, folders that can't be trashed are not
                 // deleted recursively.
                 Err(meld_files::TrashError::NeedsConfirmation { is_dir: true, .. }) => errors.push(format!(
@@ -337,24 +408,26 @@ pub async fn trash(paths: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<String>) {
                 Err(e) => errors.push(format!("Error deleting {}: {e}", path.display())),
             }
         }
-        (confirm, errors)
+        (trashed, confirm, errors)
+    })
+    .await
+    .unwrap_or_else(|e| (Vec::new(), Vec::new(), vec![e]))
+}
+
+/// Deletes files that could not be trashed. Returns the files deleted
+/// and error messages.
+pub async fn delete_permanently(paths: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<String>) {
+    blocking(move || {
+        let mut deleted = Vec::new();
+        let mut errors = Vec::new();
+        for path in paths {
+            match meld_files::delete_permanently(&path) {
+                Ok(()) => deleted.push(path),
+                Err(e) => errors.push(format!("Error deleting {}: {e}", path.display())),
+            }
+        }
+        (deleted, errors)
     })
     .await
     .unwrap_or_else(|e| (Vec::new(), vec![e]))
-}
-
-/// Deletes files that could not be trashed. Returns error messages.
-pub async fn delete_permanently(paths: Vec<PathBuf>) -> Vec<String> {
-    blocking(move || {
-        paths
-            .iter()
-            .filter_map(|path| {
-                meld_files::delete_permanently(path)
-                    .err()
-                    .map(|e| format!("Error deleting {}: {e}", path.display()))
-            })
-            .collect()
-    })
-    .await
-    .unwrap_or_else(|e| vec![e])
 }

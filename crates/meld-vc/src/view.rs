@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::entry::{Action, ConflictSide, Entry, State};
 use crate::error::{Result, VcError};
@@ -169,13 +170,24 @@ struct Scanner<'a> {
     display_prefix: usize,
     symlinks_followed: HashSet<(u64, u64)>,
     progress: &'a mut dyn FnMut(&str),
+    cancel: Option<&'a AtomicBool>,
 }
 
 impl Scanner<'_> {
-    fn progress_for(&mut self, path: &Path) {
+    fn check_cancelled(&self) -> Result<()> {
+        if self.cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            Err(VcError::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn progress_for(&mut self, path: &Path) -> Result<()> {
+        self.check_cancelled()?;
         let s = paths::lossy(path);
         let rel = s.get(self.display_prefix..).unwrap_or("");
         (self.progress)(&format!("Scanning {rel}"));
+        Ok(())
     }
 
     /// Returns Ok(false) if the folder should be skipped (already followed
@@ -194,10 +206,11 @@ impl Scanner<'_> {
 
     /// Non-flattened scan of folder `path` into `row`.
     fn scan_nested(&mut self, path: &Path) -> Result<(Vec<VcRow>, bool)> {
-        self.progress_for(path);
+        self.progress_for(path)?;
         let entries = filter_and_sort(self.vc.get_entries(path)?, &self.filters);
         let mut rows = Vec::new();
         for e in &entries {
+            self.check_cancelled()?;
             if e.isdir && e.is_present() {
                 match self.check_folder(e) {
                     Err(msg) => {
@@ -235,9 +248,10 @@ impl Scanner<'_> {
         todo.insert(paths::lossy(start));
         while let Some(current) = todo.pop_first() {
             let current = PathBuf::from(current);
-            self.progress_for(&current);
+            self.progress_for(&current)?;
             let entries = filter_and_sort(self.vc.get_entries(&current)?, &self.filters);
             for e in entries {
+                self.check_cancelled()?;
                 if e.isdir && e.is_present() {
                     match self.check_folder(&e) {
                         Err(msg) => {
@@ -306,6 +320,29 @@ pub fn scan_tree_with_progress(
     filters: &StatusFilters,
     progress: &mut dyn FnMut(&str),
 ) -> Result<VcRow> {
+    scan(vc, start, filters, progress, None)
+}
+
+/// [`scan_tree_with_progress`] that stops with [`VcError::Cancelled`]
+/// soon after `cancel` is set; it is checked before each folder and
+/// entry.
+pub fn scan_tree_cancellable(
+    vc: &dyn Vc,
+    start: &Path,
+    filters: &StatusFilters,
+    progress: &mut dyn FnMut(&str),
+    cancel: &AtomicBool,
+) -> Result<VcRow> {
+    scan(vc, start, filters, progress, Some(cancel))
+}
+
+fn scan(
+    vc: &dyn Vc,
+    start: &Path,
+    filters: &StatusFilters,
+    progress: &mut dyn FnMut(&str),
+    cancel: Option<&AtomicBool>,
+) -> Result<VcRow> {
     progress("Scanning repository");
     let start = paths::abspath(start);
     let name = start
@@ -319,6 +356,7 @@ pub fn scan_tree_with_progress(
         display_prefix: paths::lossy(&start).len() + 1,
         symlinks_followed: HashSet::new(),
         progress,
+        cancel,
     };
     let children = if filters.flatten {
         scanner.scan_flat(&start)?
@@ -871,6 +909,39 @@ mod tests {
         assert_eq!(default_vc_index(&cs, Some(VcKind::Git)), 0);
         assert_eq!(default_vc_index(&cs, Some(VcKind::Bazaar)), 1);
         assert_eq!(default_vc_index(&[], None), 0);
+    }
+
+    #[test]
+    fn cancelled_scans_stop() {
+        let dir = tempfile::tempdir().unwrap();
+        for d in ["a", "b", "c"] {
+            std::fs::create_dir_all(dir.path().join(d).join("deeper")).unwrap();
+            std::fs::write(dir.path().join(d).join("f"), "x").unwrap();
+        }
+        let vc = VcKind::Null.open(dir.path()).unwrap();
+        let filters = StatusFilters::from_keys(&["normal"]);
+        let cancel = AtomicBool::new(false);
+        let full = scan_tree_cancellable(&*vc, dir.path(), &filters, &mut |_| {}, &cancel).unwrap();
+        assert_eq!(full.children().len(), 3);
+
+        // Cancelling from the progress callback stops at the next folder
+        let mut folders = 0;
+        let result = scan_tree_cancellable(
+            &*vc,
+            dir.path(),
+            &filters,
+            &mut |message| {
+                if message.starts_with("Scanning ") && message != "Scanning repository" {
+                    folders += 1;
+                    if folders == 2 {
+                        cancel.store(true, Ordering::Relaxed);
+                    }
+                }
+            },
+            &cancel,
+        );
+        assert!(matches!(result, Err(VcError::Cancelled)));
+        assert_eq!(folders, 2);
     }
 
     #[test]

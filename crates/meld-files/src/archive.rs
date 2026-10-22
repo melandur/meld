@@ -200,6 +200,252 @@ pub fn gvfs_mount_path(path: &Path) -> Option<PathBuf> {
     )
 }
 
+/// How an archive was opened as a folder
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ArchiveFolderKind {
+    /// Mounted with `gio mount`; unmounted on close
+    Mounted,
+    /// Already mounted by someone else; left alone on close, as Meld
+    /// doesn't track mounts it didn't make
+    AlreadyMounted,
+    /// Extracted into the temporary folder `temp`; deleted on close
+    Extracted {
+        /// The temporary folder holding [`ArchiveFolder::root`]
+        temp: PathBuf,
+    },
+}
+
+/// An archive opened as a folder by [`open_archive`]
+///
+/// The folder is unmounted or deleted by [`ArchiveFolder::close`], or
+/// when the value is dropped.
+#[derive(Debug)]
+pub struct ArchiveFolder {
+    /// The archive file
+    pub archive: PathBuf,
+    /// The folder showing the archive's contents
+    pub root: PathBuf,
+    /// How the folder was made
+    pub kind: ArchiveFolderKind,
+    closed: bool,
+}
+
+impl ArchiveFolder {
+    /// Unmounts or deletes the folder; later calls do nothing
+    pub fn close(&mut self) -> Result<(), String> {
+        if std::mem::replace(&mut self.closed, true) {
+            return Ok(());
+        }
+        match &self.kind {
+            ArchiveFolderKind::Mounted => {
+                log::info!("Unmounting archive {}", self.archive.display());
+                let output =
+                    run_with_timeout(&unmount_archive_command(&self.archive), GIO_TIMEOUT)?;
+                if output.status.success() {
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "Failed to unmount archive {}: {}",
+                        self.archive.display(),
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    ))
+                }
+            }
+            ArchiveFolderKind::AlreadyMounted => Ok(()),
+            ArchiveFolderKind::Extracted { temp } => std::fs::remove_dir_all(temp)
+                .map_err(|e| format!("Failed to remove {}: {e}", temp.display())),
+        }
+    }
+}
+
+impl Drop for ArchiveFolder {
+    fn drop(&mut self) {
+        if let Err(e) = self.close() {
+            log::error!("{e}");
+        }
+    }
+}
+
+const GIO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Runs a command, killing it if it takes longer than `timeout`
+fn run_with_timeout(
+    argv: &[String],
+    timeout: std::time::Duration,
+) -> Result<std::process::Output, String> {
+    use std::process::{Command, Stdio};
+    let (program, args) = argv.split_first().ok_or("empty command")?;
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Could not run {program}: {e}"))?;
+    let start = std::time::Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().map_err(|e| e.to_string()),
+            Ok(None) if start.elapsed() < timeout => {
+                std::thread::sleep(std::time::Duration::from_millis(20))
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "{program} did not finish in {} seconds",
+                    timeout.as_secs()
+                ));
+            }
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+}
+
+/// Opens an archive as a folder, blocking until it is ready
+///
+/// Like Meld, this mounts the archive with GVfs (`gio mount`) and uses
+/// its FUSE folder. Without GVfs the archive is extracted into a
+/// temporary folder with `bsdtar`, `unzip` or `tar`, whichever works.
+pub fn open_archive(path: &Path) -> Result<ArchiveFolder, String> {
+    let archive = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    match mount_with_gio(&archive) {
+        Ok(folder) => return Ok(folder),
+        Err(e) => log::info!(
+            "Could not mount {} with GVfs ({e}); extracting it",
+            archive.display()
+        ),
+    }
+    extract_archive(&archive)
+}
+
+fn mount_with_gio(archive: &Path) -> Result<ArchiveFolder, String> {
+    let fuse = gvfs_mount_path(archive).ok_or("no XDG_RUNTIME_DIR")?;
+    let output = run_with_timeout(&mount_archive_command(archive), GIO_TIMEOUT)?;
+    let kind = if output.status.success() {
+        ArchiveFolderKind::Mounted
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.to_lowercase().contains("already mounted") {
+            ArchiveFolderKind::AlreadyMounted
+        } else {
+            return Err(stderr.trim().to_string());
+        }
+    };
+    let mut folder = ArchiveFolder {
+        archive: archive.to_path_buf(),
+        root: fuse.clone(),
+        kind,
+        closed: false,
+    };
+    // The FUSE folder can take a moment to appear
+    let start = std::time::Instant::now();
+    while !fuse.is_dir() {
+        if start.elapsed() > std::time::Duration::from_secs(3) {
+            let _ = folder.close();
+            return Err(format!(
+                "the mount's folder {} did not appear",
+                fuse.display()
+            ));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    Ok(folder)
+}
+
+/// Extracts an archive into a new temporary folder
+///
+/// The contents end up in a folder named like the archive, inside the
+/// temporary folder. The extraction tools refuse absolute paths and
+/// `..` components in archive entries.
+pub fn extract_archive(archive: &Path) -> Result<ArchiveFolder, String> {
+    let temp = tempfile::Builder::new()
+        .prefix("meld-archive-")
+        .tempdir()
+        .map_err(|e| format!("Could not create a temporary folder: {e}"))?;
+    let name = archive
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_else(|| "archive".into());
+    let root = temp.path().join(name);
+    std::fs::create_dir(&root).map_err(|e| format!("Could not create {}: {e}", root.display()))?;
+
+    let archive_arg = archive.to_string_lossy().into_owned();
+    let root_arg = root.to_string_lossy().into_owned();
+    let content_type = archive_content_type(archive).unwrap_or_default();
+    let mut commands: Vec<Vec<String>> = vec![vec![
+        "bsdtar".into(),
+        "-x".into(),
+        "-f".into(),
+        archive_arg.clone(),
+        "-C".into(),
+        root_arg.clone(),
+    ]];
+    if content_type.contains("zip")
+        || content_type.contains("java-archive")
+        || content_type.contains("android")
+    {
+        commands.push(vec![
+            "unzip".into(),
+            "-qq".into(),
+            "-o".into(),
+            archive_arg.clone(),
+            "-d".into(),
+            root_arg.clone(),
+        ]);
+    }
+    if content_type.contains("tar") {
+        commands.push(vec![
+            "tar".into(),
+            "-x".into(),
+            "-f".into(),
+            archive_arg,
+            "-C".into(),
+            root_arg,
+        ]);
+    }
+
+    let mut errors = Vec::new();
+    for argv in &commands {
+        let output = match std::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .stdin(std::process::Stdio::null())
+            .output()
+        {
+            Ok(output) => output,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                errors.push(format!("{}: {e}", argv[0]));
+                continue;
+            }
+        };
+        if output.status.success() {
+            return Ok(ArchiveFolder {
+                archive: archive.to_path_buf(),
+                root,
+                kind: ArchiveFolderKind::Extracted { temp: temp.keep() },
+                closed: false,
+            });
+        }
+        errors.push(format!(
+            "{}: {}",
+            argv[0],
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+        // Start again from an empty folder for the next tool
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::create_dir(&root);
+    }
+    if errors.is_empty() {
+        errors.push("no extraction tool (bsdtar, unzip or tar) found".into());
+    }
+    Err(format!(
+        "Could not extract {}: {}",
+        archive.display(),
+        errors.join("; ")
+    ))
+}
+
 /// Archives mounted by the app, keyed by mount root
 #[derive(Clone, Debug, Default)]
 pub struct ArchiveMounts {
@@ -299,6 +545,92 @@ mod tests {
         );
         assert_eq!(mount_archive_command(path)[..2], ["gio", "mount"]);
         assert_eq!(unmount_archive_command(path)[2], "-u");
+    }
+
+    fn tool(name: &str) -> bool {
+        std::process::Command::new(name)
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok()
+    }
+
+    #[test]
+    fn extracts_archives_into_temporary_folders() {
+        if !tool("tar") {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(src.join("sub")).unwrap();
+        std::fs::write(src.join("sub/f.txt"), "hello").unwrap();
+        let tar = dir.path().join("t.tar");
+        let status = std::process::Command::new("tar")
+            .args(["-c", "-f"])
+            .arg(&tar)
+            .arg("-C")
+            .arg(&src)
+            .arg("sub")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert!(is_archive(&tar));
+
+        let mut folder = extract_archive(&tar).unwrap();
+        assert_eq!(folder.root.file_name().unwrap(), "t.tar");
+        assert_eq!(
+            std::fs::read_to_string(folder.root.join("sub/f.txt")).unwrap(),
+            "hello"
+        );
+        let ArchiveFolderKind::Extracted { temp } = folder.kind.clone() else {
+            panic!("not extracted");
+        };
+        assert!(folder.root.starts_with(&temp));
+        folder.close().unwrap();
+        assert!(!temp.exists());
+        folder.close().unwrap();
+
+        // Zip files, when a tool that writes them is around
+        if tool("bsdtar") {
+            let zip = dir.path().join("z.zip");
+            let status = std::process::Command::new("bsdtar")
+                .args(["-a", "-c", "-f"])
+                .arg(&zip)
+                .arg("-C")
+                .arg(&src)
+                .arg("sub")
+                .status()
+                .unwrap();
+            assert!(status.success());
+            assert_eq!(archive_content_type(&zip), Some("application/zip"));
+            let folder = extract_archive(&zip).unwrap();
+            let root = folder.root.clone();
+            assert_eq!(
+                std::fs::read_to_string(root.join("sub/f.txt")).unwrap(),
+                "hello"
+            );
+            drop(folder);
+            assert!(!root.exists(), "dropping the folder deletes it");
+        }
+
+        // Not an archive at all
+        let bogus = dir.path().join("bogus.tar");
+        std::fs::write(&bogus, "not a tar file").unwrap();
+        assert!(extract_archive(&bogus).is_err());
+    }
+
+    #[test]
+    fn timeouts_kill_commands() {
+        let argv: Vec<String> = vec!["sleep".into(), "5".into()];
+        let start = std::time::Instant::now();
+        if let Err(e) = run_with_timeout(&argv, std::time::Duration::from_millis(100)) {
+            assert!(
+                e.contains("did not finish") || e.contains("Could not run"),
+                "{e}"
+            );
+        }
+        assert!(start.elapsed() < std::time::Duration::from_secs(4));
     }
 
     #[test]

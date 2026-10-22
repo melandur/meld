@@ -5,6 +5,9 @@
 //! actions (commit, update, push, add, remove, revert, resolve, unstage)
 //! whose command lines and output appear in the console pane. Backend
 //! detection, scans and commands run on background tasks; see [`jobs`].
+//! After a command or a save only the affected folder or file is
+//! refreshed ([`tree::Refresh`]); rows have a context menu, and typing
+//! searches the tree.
 
 mod dialogs;
 mod jobs;
@@ -21,27 +24,31 @@ use iced::widget::{
     button, checkbox, column, container, mouse_area, pick_list, rich_text, row, scrollable, space, span, text,
     text_editor,
 };
-use iced::{Background, Border, Color, Element, Font, Length, Subscription, Task, Theme, mouse, task};
+use iced::{Background, Border, Color, Element, Font, Length, Point, Subscription, Task, Theme, mouse, task};
 use meld_config::StatusColors;
 use meld_vc::view::{remove_needs_confirmation, tab_labels};
 use meld_vc::{
-    Action, ActionSensitivity, CommitSettings, DiffOptions, DiffRequest, MergeFileOrder, State,
+    Action, ActionSensitivity, CommitSettings, DiffOptions, DiffRequest, Entry, MergeFileOrder, State,
     StatusFilters, Vc, VcChoices, VcKind,
 };
 
 use crate::command::Command;
 use crate::comparison::{Comparison, FileExtras};
 use crate::shared::{self, Shared};
-use crate::ui::{self, icon, menu};
+use crate::ui::search::{self, EntryKey, Step, TreeSearch};
+use crate::ui::{self, icon, menu, pathlabel};
 use crate::views::Event;
 use dialogs::{CommitDialog, Dialog, HistoryItem};
-use jobs::{CommandEvent, ConsoleKind, ScanEvent, SharedVc, Slot};
-use tree::{Activation, Mods, NodeId, NodeKind, TreeModel};
+use jobs::{CommandEvent, ConsoleKind, ScanEvent, ScanScope, SharedVc, Slot};
+use tree::{Activation, Mods, NodeId, NodeKind, Refresh, TreeModel};
 
 const ROW_HEIGHT: f32 = 26.0;
 const INDENT: f32 = 18.0;
 const STATUS_WIDTH: f32 = 110.0;
 const TREE_SCROLL: &str = "vc-tree";
+/// Smallest heights of the tree and the console when resizing them.
+const MIN_TREE_HEIGHT: f32 = 80.0;
+const MIN_CONSOLE_HEIGHT: f32 = 80.0;
 
 /// An entry of the backend chooser.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,11 +175,22 @@ struct ConsoleLine {
     text: String,
 }
 
-/// Dragging the console separator.
+/// Dragging the separator between the tree and the console.
 #[derive(Debug, Clone, Copy)]
 struct Drag {
-    /// Cursor y and console height when the drag started.
+    /// Cursor y and tree height when the drag started.
     start: Option<(f32, f32)>,
+    /// The height the tree and console share.
+    available: f32,
+}
+
+/// Pop-ups over the view.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Popup {
+    /// The rows' context menu, at this point.
+    Context(Point),
+    /// The location label's drop-down, with the picked path segment.
+    Path(Option<usize>),
 }
 
 pub struct VcView {
@@ -206,8 +224,16 @@ pub struct VcView {
     running: usize,
 
     console: Vec<ConsoleLine>,
-    console_height: f32,
+    /// The tree's height when the console is shown
+    /// (`vc-console-pane-position`, the `GtkPaned` position).
+    pane_position: f32,
     drag: Option<Drag>,
+    /// A refresh asked for while a scan was running.
+    pending_refresh: Option<Refresh>,
+    search: Option<TreeSearch>,
+    popup: Option<Popup>,
+    /// A row was right-clicked: the next context menu request opens.
+    context_pending: bool,
     dialog: Option<Dialog>,
     error: Option<(String, Option<String>)>,
 
@@ -228,6 +254,9 @@ pub enum Message {
     Scan(u64, ScanEvent),
 
     RowPressed(usize),
+    RowRightPressed(usize),
+    ContextMenu(Point),
+    ClosePopup,
     RowActivated(usize),
     ToggleRow(NodeId),
     Nav(Nav, bool),
@@ -242,8 +271,8 @@ pub enum Message {
     Command(CommandEvent),
     CommitInfo(jobs::CommitInfo),
     PushSummary(Result<String, String>),
-    Trashed((Vec<PathBuf>, Vec<String>)),
-    Deleted(Vec<String>),
+    Trashed((Vec<PathBuf>, Vec<PathBuf>, Vec<String>)),
+    Deleted((Vec<PathBuf>, Vec<String>)),
     Done,
 
     CloseDialog,
@@ -253,10 +282,24 @@ pub enum Message {
 
     ToggleConsole,
     ClearConsole,
-    DragStart,
+    /// Starts dragging the console separator; the height the tree and
+    /// console share.
+    DragStart(f32),
     DragMove(f32),
     DragEnd,
     DismissError,
+
+    /// An entry's state was refreshed after a save.
+    EntryRefreshed(Result<Entry, String>),
+    SearchStart(String),
+    SearchInput(String),
+    SearchKey(EntryKey),
+    SearchTick,
+    PathLabel,
+    PathPick(usize),
+    PathCopy,
+    PathOpenFolder,
+    OpenedFolder(Option<String>),
 }
 
 impl VcView {
@@ -288,8 +331,12 @@ impl VcView {
             scan_cancel: None,
             running: 0,
             console: Vec::new(),
-            console_height: 180.0,
+            pane_position: shared.settings.vc_console_pane_position.max(0) as f32,
             drag: None,
+            pending_refresh: None,
+            search: None,
+            popup: None,
+            context_pending: false,
             dialog: None,
             error: None,
             modifiers: Modifiers::empty(),
@@ -357,19 +404,49 @@ impl VcView {
         }
     }
 
-    /// Another tab saved `path`: refresh the tree if it is ours
-    /// (`on_file_changed()`).
+    /// Another tab saved `path`: refresh its row, or the folder it
+    /// appeared in (`on_file_changed()`).
     pub fn file_changed(&mut self, path: &std::path::Path) -> Task<Message> {
-        if self.vc.is_some() && path.starts_with(&self.location) {
-            self.scan(true)
-        } else {
-            Task::none()
+        if self.vc.is_none() {
+            return Task::none();
+        }
+        match tree::plan_file_refresh(&self.tree, self.filters.flatten, path) {
+            Some(refresh) => self.request_refresh(refresh),
+            None => Task::none(),
+        }
+    }
+
+    /// Refreshes part of the tree now, or once the running scan is done.
+    fn request_refresh(&mut self, refresh: Refresh) -> Task<Message> {
+        match self.phase {
+            // The backend is being opened; everything is scanned next.
+            Phase::Loading => Task::none(),
+            Phase::Scanning => {
+                self.pending_refresh = Some(match self.pending_refresh.take() {
+                    Some(pending) => pending.merge(refresh),
+                    None => refresh,
+                });
+                Task::none()
+            }
+            Phase::Idle => match refresh {
+                Refresh::Full => self.scan(true),
+                Refresh::Folder(folder) => self.scan_scope(ScanScope::Folder(folder)),
+                Refresh::Entry(path) => match self.vc.clone() {
+                    Some(vc) => Task::perform(jobs::refresh_entry(vc, path), Message::EntryRefreshed),
+                    None => Task::none(),
+                },
+            },
         }
     }
 
     /// Rescans the tree, first refreshing the backend's cached state when
     /// `refresh`.
     fn scan(&mut self, refresh: bool) -> Task<Message> {
+        self.pending_refresh = None;
+        self.scan_scope(ScanScope::Full { refresh })
+    }
+
+    fn scan_scope(&mut self, scope: ScanScope) -> Task<Message> {
         self.cancel_scan();
         let Some(vc) = self.vc.clone() else {
             return Task::none();
@@ -379,7 +456,7 @@ impl VcView {
         self.phase = Phase::Scanning;
         self.progress = "Scanning repository".into();
         let cancel = Arc::new(AtomicBool::new(false));
-        let (task, handle) = Task::run(jobs::scan(vc, self.filters, refresh, cancel.clone()), move |event| {
+        let (task, handle) = Task::run(jobs::scan(vc, self.filters, scope, cancel.clone()), move |event| {
             Message::Scan(generation, event)
         })
         .abortable();
@@ -755,6 +832,8 @@ impl VcView {
             }
 
             Message::RowPressed(row) => {
+                self.search = None;
+                self.popup = None;
                 if self.dialog.is_none() {
                     let mods = Mods {
                         ctrl: self.modifiers.command(),
@@ -777,6 +856,8 @@ impl VcView {
             }
             Message::Nav(nav, extend) => {
                 if self.dialog.is_none() {
+                    self.search = None;
+                    self.popup = None;
                     return self.navigate(nav, extend);
                 }
             }
@@ -811,10 +892,10 @@ impl VcView {
                     if let Some(error) = error {
                         self.report("Error running command", Some(error));
                     }
-                    if refresh {
-                        return self.scan(true);
-                    }
                     self.update_sensitivity();
+                    if let Some(refresh) = tree::plan_command_refresh(&self.tree, self.filters.flatten, &refresh) {
+                        return self.request_refresh(refresh);
+                    }
                 }
             },
             Message::CommitInfo(info) => {
@@ -833,7 +914,7 @@ impl VcView {
                     *state = Some(summary);
                 }
             }
-            Message::Trashed((confirm, errors)) => {
+            Message::Trashed((trashed, confirm, errors)) => {
                 self.running = self.running.saturating_sub(1);
                 if !errors.is_empty() {
                     self.report("Error deleting files", Some(errors.join("\n")));
@@ -841,14 +922,14 @@ impl VcView {
                 if !confirm.is_empty() {
                     self.dialog = Some(Dialog::ConfirmDelete(confirm));
                 }
-                return self.scan(true);
+                return self.refresh_deleted(&trashed);
             }
-            Message::Deleted(errors) => {
+            Message::Deleted((deleted, errors)) => {
                 self.running = self.running.saturating_sub(1);
                 if !errors.is_empty() {
                     self.report("Error deleting files", Some(errors.join("\n")));
                 }
-                return self.scan(true);
+                return self.refresh_deleted(&deleted);
             }
             Message::Done => {}
 
@@ -867,21 +948,158 @@ impl VcView {
 
             Message::ToggleConsole => Self::toggle_console(shared, events),
             Message::ClearConsole => self.console.clear(),
-            Message::DragStart => self.drag = Some(Drag { start: None }),
+            Message::DragStart(available) => {                self.drag = Some(Drag { start: None, available });
+            }
             Message::DragMove(y) => {
                 if let Some(drag) = &mut self.drag {
                     match drag.start {
-                        None => drag.start = Some((y, self.console_height)),
+                        None => drag.start = Some((y, clamp_tree_height(self.pane_position, drag.available))),
                         Some((start_y, start_height)) => {
-                            self.console_height = (start_height + start_y - y).clamp(80.0, 900.0);
+                            self.pane_position = clamp_tree_height(start_height + y - start_y, drag.available);
                         }
                     }
                 }
             }
-            Message::DragEnd => self.drag = None,
+            Message::DragEnd => {
+                if self.drag.take().is_some_and(|d| d.start.is_some()) {
+                    shared.settings.vc_console_pane_position = self.pane_position.round() as i32;
+                    events.push(Event::SettingsChanged);
+                }
+            }
             Message::DismissError => self.error = None,
+
+            Message::EntryRefreshed(result) => match result {
+                Ok(entry) => {
+                    self.tree.update_entry(&entry);
+                    self.update_sensitivity();
+                }
+                Err(e) => log::warn!("could not refresh a file's state: {e}"),
+            },
+            Message::RowRightPressed(row) => {
+                if self.dialog.is_none() {
+                    if let Some(&id) = self.tree.visible().get(row)
+                        && !self.tree.is_selected(id)
+                    {
+                        self.tree.click(row, Mods::default());
+                        self.update_sensitivity();
+                    }
+                    self.search = None;
+                    self.context_pending = true;
+                }
+            }
+            Message::ContextMenu(point) => {
+                if std::mem::take(&mut self.context_pending) {
+                    self.popup = Some(Popup::Context(point));
+                }
+            }
+            Message::ClosePopup => self.popup = None,
+            Message::SearchStart(text) => return self.start_search(text),
+            Message::SearchInput(text) => {
+                if let Some(search) = &mut self.search {
+                    search.set_text(text);
+                    return self.search_step(Step::First);
+                }
+            }
+            Message::SearchKey(key) => match key {
+                EntryKey::Close => self.search = None,
+                EntryKey::Step(step) => {
+                    if let Some(search) = &mut self.search {
+                        search.touch();
+                    }
+                    return self.search_step(step);
+                }
+                EntryKey::Activate => {
+                    self.search = None;
+                    if let Some(id) = self.tree.cursor() {
+                        return self.activate(id, shared);
+                    }
+                }
+            },
+            Message::SearchTick => {
+                if self.search.as_ref().is_some_and(TreeSearch::expired) {
+                    self.search = None;
+                }
+            }
+            Message::PathLabel => {
+                self.popup = match self.popup {
+                    Some(Popup::Path(_)) => None,
+                    _ => Some(Popup::Path(None)),
+                };
+            }
+            Message::PathPick(index) => {
+                if let Some(Popup::Path(picked)) = &mut self.popup {
+                    *picked = Some(index);
+                }
+            }
+            Message::PathCopy | Message::PathOpenFolder => {
+                let Some(Popup::Path(picked)) = self.popup.take() else {
+                    return Task::none();
+                };
+                let path = match picked {
+                    Some(i) => pathlabel::segments(&self.location).get(i).cloned(),
+                    None => Some(self.location.clone()),
+                };
+                let Some(path) = path else {
+                    return Task::none();
+                };
+                if matches!(message, Message::PathCopy) {
+                    return iced::clipboard::write(path.display().to_string());
+                }
+                return Task::perform(
+                    jobs::blocking(move || {
+                        meld_files::external::spawn_detached(&meld_files::external::open_containing_folder_command(
+                            &path,
+                        ))
+                        .err()
+                        .map(|e| e.to_string())
+                    }),
+                    |result| Message::OpenedFolder(result.unwrap_or_else(Some)),
+                );
+            }
+            Message::OpenedFolder(error) => {
+                if let Some(error) = error {
+                    self.report("Could not open the folder", Some(error));
+                }
+            }
         }
         Task::none()
+    }
+
+    /// Refreshes the folder of deleted files (`action_delete()`).
+    fn refresh_deleted(&mut self, files: &[PathBuf]) -> Task<Message> {
+        if files.is_empty() {
+            return Task::none();
+        }
+        let folder = meld_vc::view::delete_workdir(files);
+        match tree::plan_command_refresh(&self.tree, self.filters.flatten, &[folder]) {
+            Some(refresh) => self.request_refresh(refresh),
+            None => Task::none(),
+        }
+    }
+
+    // ----- Type-to-search -----
+
+    fn start_search(&mut self, text: String) -> Task<Message> {
+        if self.dialog.is_some() {
+            return Task::none();
+        }
+        self.popup = None;
+        self.search = Some(TreeSearch::new(text));
+        Task::batch([operation::focus(search::INPUT_ID), self.search_step(Step::First)])
+    }
+
+    fn search_step(&mut self, step: Step) -> Task<Message> {
+        let Some(search) = &self.search else {
+            return Task::none();
+        };
+        match search::find_row(&self.tree.visible_names(), &search.text, self.tree.cursor_row(), step) {
+            Some(row) => {
+                self.tree.move_to_row(row, false);
+                self.update_sensitivity();
+                self.reveal_cursor()
+            }
+            None => Task::none(),
+        }
     }
 
     fn scan_done(&mut self, result: &Result<jobs::ScanOutput, String>, shared: &Shared) -> Task<Message> {
@@ -897,15 +1115,23 @@ impl VcView {
                 return Task::none();
             }
         };
-        let fresh = self.tree.nodes().len() <= 1;
-        if fresh {
-            self.tree = TreeModel::new(&output.tree);
-        } else {
-            self.tree.replace(&output.tree);
+        let mut tasks = Vec::new();
+        match &output.subtree {
+            Some(folder) => {
+                if !self.tree.replace_subtree(folder, &output.tree) {
+                    // The folder is gone from the tree: rescan it all.
+                    self.pending_refresh = Some(Refresh::Full);
+                }
+            }
+            None if self.tree.nodes().len() <= 1 => self.tree = TreeModel::new(&output.tree),
+            None => self.tree.replace(&output.tree),
         }
         self.push_summary = output.push_summary.clone();
         self.update_sensitivity();
-        let mut tasks = vec![self.reveal_cursor()];
+        tasks.push(self.reveal_cursor());
+        if let Some(refresh) = self.pending_refresh.take() {
+            tasks.push(self.request_refresh(refresh));
+        }
         if std::mem::take(&mut self.auto_compare) {
             let paths = meld_vc::auto_compare_paths(&output.tree);
             tasks.push(self.compare(paths, shared));
@@ -920,6 +1146,7 @@ impl VcView {
         match self.phase {
             Phase::Scanning => {
                 self.cancel_scan();
+                self.pending_refresh = None;
                 self.update_sensitivity();
             }
             Phase::Loading => {
@@ -934,6 +1161,9 @@ impl VcView {
 
     pub fn command(&mut self, command: Command, shared: &mut Shared, events: &mut Vec<Event>) -> Task<Message> {
         if command == Command::Stop {
+            if self.popup.take().is_some() || self.search.take().is_some() {
+                return Task::none();
+            }
             self.stop();
             return Task::none();
         }
@@ -955,6 +1185,7 @@ impl VcView {
             }
             Command::NextChange => self.go_to_change(true),
             Command::PreviousChange => self.go_to_change(false),
+            Command::Find => self.start_search(String::new()),
             _ => Task::none(),
         }
     }
@@ -966,6 +1197,9 @@ impl VcView {
     }
 
     pub fn settings_changed(&mut self, shared: &Shared) -> Task<Message> {
+        if self.drag.is_none() {
+            self.pane_position = shared.settings.vc_console_pane_position.max(0) as f32;
+        }
         let filters = StatusFilters::from_keys(&shared.settings.vc_status_filters);
         if filters != self.filters {
             self.filters = filters;
@@ -975,14 +1209,18 @@ impl VcView {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        if self.drag.is_none() {
-            return Subscription::none();
+        let mut subs = Vec::new();
+        if self.drag.is_some() {
+            subs.push(iced::event::listen_with(|event, _status, _window| match event {
+                iced::Event::Mouse(mouse::Event::CursorMoved { position }) => Some(Message::DragMove(position.y)),
+                iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => Some(Message::DragEnd),
+                _ => None,
+            }));
         }
-        iced::event::listen_with(|event, _status, _window| match event {
-            iced::Event::Mouse(mouse::Event::CursorMoved { position }) => Some(Message::DragMove(position.y)),
-            iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => Some(Message::DragEnd),
-            _ => None,
-        })
+        if self.search.is_some() {
+            subs.push(iced::time::every(std::time::Duration::from_millis(500)).map(|_| Message::SearchTick));
+        }
+        Subscription::batch(subs)
     }
 
     // ----- View -----
@@ -1066,25 +1304,119 @@ impl VcView {
     }
 
     pub fn view<'a>(&'a self, shared: &'a Shared) -> Element<'a, Message> {
-        let mut content = column![self.action_bar(), ui::separator(false), self.filter_bar(), ui::separator(false)];
+        let mut content = column![self.action_bar(), ui::separator(false)];
+        let mut lower = column![self.filter_bar(), ui::separator(false)];
         if let Some((primary, secondary)) = &self.error {
-            content = content.push(ui::banner(
+            lower = lower.push(ui::banner(
                 ui::BannerKind::Error,
                 primary.as_str(),
                 secondary.clone(),
                 vec![("Dismiss".to_string(), Message::DismissError)],
             ));
         }
-        let tree = keys::key_handler(self.tree_view(shared), nav_key, Message::Modifiers);
-        content = content.push(tree);
         if shared.settings.vc_console_visible {
-            content = content.push(self.console_view(shared));
+            // The tree and the console share the rest, like a GtkPaned
+            // whose position is the tree's height.
+            lower = lower.push(iced::widget::responsive(move |size| {
+                let tree_height = clamp_tree_height(self.pane_position, size.height);
+                column![
+                    container(self.tree_area(shared)).height(tree_height),
+                    self.console_view(shared, size.height),
+                ]
+                .height(Length::Fill)
+                .into()
+            }));
+        } else {
+            lower = lower.push(self.tree_area(shared));
         }
-        let base: Element<'a, Message> = content.height(Length::Fill).into();
+        let lower: Element<'a, Message> = match self.popup {
+            Some(Popup::Path(picked)) => self.path_popover(lower.height(Length::Fill), picked),
+            _ => lower.height(Length::Fill).into(),
+        };
+        content = content.push(lower);
+        // Right clicks on rows open the context menu where they happened.
+        let mut base: Element<'a, Message> = keys::key_handler(content.height(Length::Fill), |_, _| None, Message::Modifiers)
+            .on_right_click(Message::ContextMenu)
+            .into();
+        if let Some(Popup::Context(point)) = self.popup {
+            base = menu::context(base, self.context_items(), point, Message::ClosePopup);
+        }
         match &self.dialog {
             Some(dialog) => ui::modal::modal(base, dialogs::view(dialog, shared, &self.location), Message::CloseDialog),
             None => base,
         }
+    }
+
+    /// The tree with its keyboard handling and search entry.
+    fn tree_area<'a>(&'a self, shared: &'a Shared) -> Element<'a, Message> {
+        let searching = self.search.is_some();
+        keys::key_handler(
+            search::overlay(self.tree_view(shared), self.search.as_ref(), Message::SearchInput),
+            move |key, modifiers| {
+                nav_key(key, modifiers).or_else(|| {
+                    if searching {
+                        None
+                    } else {
+                        search::start_key(key, modifiers).map(Message::SearchStart)
+                    }
+                })
+            },
+            Message::Modifiers,
+        )
+        .intercept(move |key, modifiers| {
+            if searching {
+                search::entry_key(key, modifiers).map(Message::SearchKey)
+            } else {
+                None
+            }
+        })
+        .into()
+    }
+
+    /// The rows' context menu (`vcview-context-menu`).
+    fn context_items(&self) -> Vec<menu::Item<Message>> {
+        let action = |label: &str, act: Act| menu::Item::Action {
+            label: label.to_string(),
+            shortcut: None,
+            message: self.act_message(act),
+        };
+        vec![
+            action("Compare", Act::Compare),
+            action("Commit…", Act::Commit),
+            menu::Item::Separator,
+            action("Add", Act::Add),
+            action("Unstage", Act::Unstage),
+            action("Remove", Act::Remove),
+            action("Revert", Act::Revert),
+            action("Delete", Act::Delete),
+            menu::Item::Separator,
+            action("Resolve Conflict", Act::Resolve),
+        ]
+    }
+
+    /// The location label's drop-down, below the action bar.
+    fn path_popover<'a>(&'a self, base: impl Into<Element<'a, Message>>, picked: Option<usize>) -> Element<'a, Message> {
+        let popover = pathlabel::popover(
+            &self.location,
+            picked,
+            pathlabel::Actions {
+                pick: Box::new(Message::PathPick),
+                copy: Message::PathCopy,
+                open_folder: Message::PathOpenFolder,
+            },
+        );
+        iced::widget::stack![
+            base.into(),
+            mouse_area(
+                container(iced::widget::opaque(popover))
+                    .padding([2, 8])
+                    .width(Length::Fill)
+                    .height(Length::Fill)
+                    .align_x(iced::Center),
+            )
+            .on_press(Message::ClosePopup),
+        ]
+        .into()
     }
 
     fn action_bar(&self) -> Element<'_, Message> {
@@ -1117,18 +1449,27 @@ impl VcView {
         .height(28)
         .align_y(iced::Center);
 
-        let location = iced::widget::tooltip(
+        let open = matches!(self.popup, Some(Popup::Path(_)));
+        let label = button(
             row![
-                ui::tool_button(icon::FOLDER, "Open version controlled folder", Some(Message::ChooseLocation)),
-                text(display_path(&self.location)).size(14).wrapping(text::Wrapping::None),
+                container(text(display_path(&self.location)).size(14).wrapping(text::Wrapping::None))
+                    .width(Length::Fill)
+                    .clip(true),
+                text(if open { "▴" } else { "▾" }).size(12).style(ui::dim_text),
             ]
             .spacing(4)
             .align_y(iced::Center),
-            container(text(self.location.display().to_string()).size(13))
-                .padding([4, 8])
-                .style(ui::tooltip_box),
-            iced::widget::tooltip::Position::Bottom,
-        );
+        )
+        .padding([3, 6])
+        .width(Length::Fill)
+        .style(ui::tab_button(open))
+        .on_press(Message::PathLabel);
+        let location = row![
+            ui::tool_button(icon::FOLDER, "Open version controlled folder", Some(Message::ChooseLocation)),
+            label,
+        ]
+        .spacing(4)
+        .align_y(iced::Center);
 
         let chooser: Element<'_, Message> = match &self.choices {
             Some(choices) if choices.choices.len() > 1 => {
@@ -1350,18 +1691,21 @@ impl VcView {
             .style(move |theme: &Theme| row_style(theme, selected, cursor));
         mouse_area(background)
             .on_press(Message::RowPressed(row))
+            .on_right_press(Message::RowRightPressed(row))
             .on_double_click(Message::RowActivated(row))
             .into()
     }
 
-    fn console_view<'a>(&'a self, shared: &'a Shared) -> Element<'a, Message> {
+    /// The console below the tree; `available` is the height the two
+    /// share.
+    fn console_view<'a>(&'a self, shared: &'a Shared, available: f32) -> Element<'a, Message> {
         let handle = mouse_area(
             container(ui::separator(false))
                 .padding([3, 0])
                 .width(Length::Fill),
         )
         .interaction(mouse::Interaction::ResizingVertically)
-        .on_press(Message::DragStart);
+        .on_press(Message::DragStart(available));
 
         let font = shared.mono_font();
         let mut lines = column![].spacing(0).width(Length::Fill);
@@ -1404,9 +1748,15 @@ impl VcView {
             bottom: 6.0,
             ..iced::Padding::ZERO
         })
-        .height(self.console_height)
+        .height(Length::Fill)
         .into()
     }
+}
+
+/// The tree's height for a pane position, leaving room for the console
+/// in `available`.
+fn clamp_tree_height(position: f32, available: f32) -> f32 {
+    position.min(available - MIN_CONSOLE_HEIGHT).max(MIN_TREE_HEIGHT)
 }
 
 /// Maps unconsumed key presses over the tree to navigation.
@@ -1554,6 +1904,15 @@ mod tests {
     }
 
     #[test]
+    fn console_pane_position_is_the_tree_height() {
+        assert_eq!(clamp_tree_height(300.0, 800.0), 300.0);
+        // The console keeps a minimum height, the tree too.
+        assert_eq!(clamp_tree_height(780.0, 800.0), 800.0 - MIN_CONSOLE_HEIGHT);
+        assert_eq!(clamp_tree_height(10.0, 800.0), MIN_TREE_HEIGHT);
+        assert_eq!(clamp_tree_height(300.0, 100.0), MIN_TREE_HEIGHT);
+    }
+
+    #[test]
     fn home_is_abbreviated() {
         if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
             assert_eq!(display_path(&home.join("src/x")), "~/src/x");
@@ -1582,11 +1941,14 @@ mod tests {
                 .unwrap()
         };
         git(&["init", "-q"]);
+        // The user's global config may require signed commits.
+        git(&["config", "commit.gpgsign", "false"]);
         std::fs::write(root.join("a.txt"), "one\n").unwrap();
         std::fs::create_dir(root.join("sub")).unwrap();
         std::fs::write(root.join("sub/b.txt"), "two\n").unwrap();
         git(&["add", "."]);
-        git(&["commit", "-q", "-m", "init"]);
+        // Without signing: a user's signing setup may need a key or a touch.
+        git(&["-c", "commit.gpgsign=false", "commit", "-q", "-m", "init"]);
         std::fs::write(root.join("a.txt"), "changed\n").unwrap();
         std::fs::write(root.join("new.txt"), "new\n").unwrap();
 
@@ -1599,7 +1961,7 @@ mod tests {
         let filters = StatusFilters::from_keys(&["flatten", "modified", "unknown"]);
         let events: Vec<ScanEvent> = runtime.block_on(async {
             use iced::futures::StreamExt;
-            jobs::scan(vc.clone(), filters, true, Arc::new(AtomicBool::new(false)))
+            jobs::scan(vc.clone(), filters, ScanScope::Full { refresh: true }, Arc::new(AtomicBool::new(false)))
                 .collect()
                 .await
         });
@@ -1615,6 +1977,43 @@ mod tests {
             .collect();
         assert_eq!(rows[1..], [("a.txt".to_string(), State::Modified), ("new.txt".to_string(), State::Unversioned)]);
 
+        // Partial refreshes: a file edited back to its committed text, and
+        // a folder with a new file.
+        std::fs::write(root.join("a.txt"), "one\n").unwrap();
+        let entry = runtime
+            .block_on(jobs::refresh_entry(vc.clone(), root.join("a.txt")))
+            .unwrap();
+        assert_eq!(entry.state, State::Normal);
+        std::fs::write(root.join("sub/c.txt"), "three\n").unwrap();
+        let filters = StatusFilters::from_keys(&["modified", "unknown"]);
+        let events: Vec<ScanEvent> = runtime.block_on(async {
+            use iced::futures::StreamExt;
+            jobs::scan(vc.clone(), filters, ScanScope::Folder(root.join("sub")), Arc::new(AtomicBool::new(false)))
+                .collect()
+                .await
+        });
+        let Some(ScanEvent::Done(result)) = events.last() else {
+            panic!("scan did not finish");
+        };
+        let output = result.as_ref().as_ref().unwrap();
+        assert_eq!(output.subtree.as_deref(), Some(root.join("sub").as_path()));
+        let names: Vec<(String, State)> = output
+            .tree
+            .children()
+            .iter()
+            .filter_map(|r| r.entry().map(|e| (e.name.clone(), e.state)))
+            .collect();
+        assert_eq!(names, [("c.txt".to_string(), State::Unversioned)]);
+
+        // Cancelled scans finish without a result
+        let cancel = Arc::new(AtomicBool::new(true));
+        let events: Vec<ScanEvent> = runtime.block_on(async {
+            use iced::futures::StreamExt;
+            jobs::scan(vc.clone(), filters, ScanScope::Full { refresh: true }, cancel).collect().await
+        });
+        assert!(events.iter().all(|e| !matches!(e, ScanEvent::Done(_))));
+
+        std::fs::write(root.join("a.txt"), "changed\n").unwrap();
         let diffs = runtime.block_on(jobs::prepare_diffs(vc, vec![root.join("a.txt")], DiffOptions::default()));
         match &diffs[0] {
             Ok(DiffRequest::Files { paths, temp_files, .. }) => {
