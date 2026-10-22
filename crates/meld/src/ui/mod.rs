@@ -33,6 +33,31 @@ pub mod icon {
     pub const STOP: &str = "■";
 }
 
+/// A small cross, drawn as an SVG so it doesn't depend on which font has
+/// a "✕" glyph (system fonts draw it thin, grey or off-centre).
+const CLOSE_SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M4.5 4.5 11.5 11.5M11.5 4.5 4.5 11.5" fill="none" stroke="#000" stroke-width="1.7" stroke-linecap="round"/></svg>"##;
+
+/// The close icon in the text colour, `size` pixels square.
+pub fn close_icon<'a, M: 'a>(size: f32) -> Element<'a, M> {
+    use std::sync::LazyLock;
+    static HANDLE: LazyLock<iced::widget::svg::Handle> =
+        LazyLock::new(|| iced::widget::svg::Handle::from_memory(CLOSE_SVG));
+    iced::widget::svg(HANDLE.clone())
+        .width(size)
+        .height(size)
+        .style(|theme: &Theme, status| {
+            let text = theme.extended_palette().background.base.text;
+            let alpha = match status {
+                iced::widget::svg::Status::Hovered => 1.0,
+                iced::widget::svg::Status::Idle => 0.7,
+            };
+            iced::widget::svg::Style {
+                color: Some(text.scale_alpha(alpha)),
+            }
+        })
+        .into()
+}
+
 pub const HEADER_HEIGHT: f32 = 40.0;
 
 /// A flat icon button for header bars and toolbars, with a tooltip.

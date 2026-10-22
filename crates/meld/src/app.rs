@@ -667,8 +667,8 @@ impl Meld {
                 .padding(iced::Padding::from([4, 6]).right(2))
                 .style(ui::flat_button)
                 .on_press(Message::SelectTab(entry.id));
-            let close = button(text(icon::CLOSE).size(11))
-                .padding([1, 5])
+            let close = button(ui::close_icon(14.0))
+                .padding(3)
                 .style(ui::flat_button)
                 .on_press(Message::CloseTab(entry.id));
             let tab_button = iced::widget::mouse_area(
