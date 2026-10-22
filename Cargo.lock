@@ -2334,6 +2334,7 @@ dependencies = [
  "env_logger",
  "iced",
  "log",
+ "meld-ailens",
  "meld-config",
  "meld-diff",
  "meld-files",
