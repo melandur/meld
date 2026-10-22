@@ -222,6 +222,7 @@ impl Tab {
         match self {
             Tab::Folder(t) => t.file_changed(path).map(Message::Folder),
             Tab::Vc(t) => t.file_changed(path).map(Message::Vc),
+            Tab::Git(t) => t.file_changed(path).map(Message::Git),
             _ => Task::none(),
         }
     }

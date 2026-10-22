@@ -41,6 +41,7 @@ pub fn dialog<'a, M: Clone + 'a>(
             .max_width(640),
     )
     .padding(20)
+    .max_width(680)
     .style(super::popover)
     .into()
 }

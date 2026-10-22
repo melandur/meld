@@ -1063,7 +1063,6 @@ impl GitCompare {
     /// Another tab saved `path` (`on_file_changed()`): if it is in the
     /// repository, the next check compares again (when the comparison
     /// follows the repository's changes).
-    #[allow(dead_code)] // for `Tab::file_changed`
     pub fn file_changed(&mut self, path: &Path) -> Task<Message> {
         if self.info.as_ref().is_some_and(|info| path.starts_with(&info.root)) {
             self.changed_elsewhere = true;

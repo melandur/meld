@@ -2345,6 +2345,7 @@ dependencies = [
  "meld-widgets",
  "open",
  "regex",
+ "resvg",
  "rfd",
  "tempfile",
  "tokio",

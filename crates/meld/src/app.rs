@@ -137,6 +137,7 @@ impl Meld {
             size: shared_size,
             min_size: Some(Size::new(500.0, 350.0)),
             exit_on_close_request: false,
+            icon: window_icon(),
             ..window::Settings::default()
         }
     }
@@ -552,7 +553,7 @@ impl Meld {
             if modified {
                 label = label.push(text(icon::MODIFIED).size(10));
             }
-            label = label.push(text(entry.tab.title()).size(14).wrapping(text::Wrapping::None));
+            label = label.push(text(shorten_middle(&entry.tab.title(), 36)).size(14).wrapping(text::Wrapping::None));
             label = label.push(
                 button(text(icon::CLOSE).size(11))
                     .padding([1, 5])
@@ -654,5 +655,63 @@ impl Meld {
             .into_iter()
             .map(|(label, comparison)| menu::Item::action(label, None, Message::Open(comparison)))
             .collect()
+    }
+}
+
+/// The dark Meld icon, rasterised from the bundled SVG for the window.
+fn window_icon() -> Option<window::Icon> {
+    const SVG: &[u8] = include_bytes!("../../../data/icons/hicolor/scalable/apps/org.gnome.Meld-dark.svg");
+    const SIZE: u32 = 256;
+
+    let tree = resvg::usvg::Tree::from_data(SVG, &resvg::usvg::Options::default()).ok()?;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(SIZE, SIZE)?;
+    let scale = SIZE as f32 / tree.size().width().max(tree.size().height());
+    resvg::render(&tree, resvg::tiny_skia::Transform::from_scale(scale, scale), &mut pixmap.as_mut());
+
+    let rgba = pixmap
+        .pixels()
+        .iter()
+        .flat_map(|p| {
+            let c = p.demultiply();
+            [c.red(), c.green(), c.blue(), c.alpha()]
+        })
+        .collect();
+    window::icon::from_rgba(rgba, SIZE, SIZE).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn window_icon_renders() {
+        assert!(super::window_icon().is_some());
+    }
+}
+
+/// Shortens `text` to at most `max` characters with an ellipsis in the
+/// middle, keeping both ends readable (tab labels).
+fn shorten_middle(text: &str, max: usize) -> String {
+    let count = text.chars().count();
+    if count <= max {
+        return text.to_string();
+    }
+    let keep = max.saturating_sub(1);
+    let head = keep.div_ceil(2);
+    let tail = keep - head;
+    let start: String = text.chars().take(head).collect();
+    let end: String = text.chars().skip(count - tail).collect();
+    format!("{start}…{end}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shorten_middle;
+
+    #[test]
+    fn shortens_long_tab_titles_in_the_middle() {
+        assert_eq!(shorten_middle("short", 36), "short");
+        let long = "7182167 → Staged (agent-a0836974b5990db9e)";
+        let short = shorten_middle(long, 20);
+        assert_eq!(short.chars().count(), 20);
+        assert!(short.starts_with("7182167") && short.ends_with("db9e)"));
     }
 }
