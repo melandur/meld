@@ -19,6 +19,14 @@
 //! overview next to it is the vertical scrolling control. A thin horizontal
 //! scrollbar appears at the bottom when lines are wider than the view.
 //!
+//! With a [`WrapLayout`] that wraps ([`TextPane::wrap`]), long lines are
+//! laid out on several visual rows: the pane reports how many character
+//! cells fit a row with [`Action::WrapColumns`], draws, hit-tests and
+//! moves the cursor up and down by visual row, numbers only the first row
+//! of each line, and shows no horizontal scrollbar. Pass the same layout
+//! to the link maps, gutters, chunk maps and [`crate::scroll_sync`] so
+//! everything stays aligned.
+//!
 //! Key presses the pane does not act on (Ctrl+S, Ctrl+Z, Alt+arrows,
 //! F-keys, Escape, ...) are left uncaptured so that
 //! `iced::keyboard::listen()` sees them.
@@ -34,7 +42,7 @@ use iced::advanced::clipboard::{self, Clipboard};
 use iced::advanced::input_method::{self, InputMethod};
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::renderer::{self, Quad};
-use iced::advanced::text::{self, Paragraph as _, Span};
+use iced::advanced::text::{self, Span};
 use iced::advanced::widget::{self, Tree, Widget, operation, tree};
 use iced::advanced::{Shell, mouse};
 use iced::keyboard::{self, key};
@@ -46,9 +54,10 @@ use unicode_segmentation::UnicodeSegmentation;
 
 pub use crate::buffer::{Action, Buffer, EditAction, Motion, Position};
 use crate::buffer::{char_len, column_for_display};
-use crate::chunk::{InlineHighlight, LineHighlight};
+use crate::chunk::{InlineHighlight, LineFlash, LineHighlight};
 use crate::highlight::Highlighter;
 use crate::style::{PaneStyle, TextStyle};
+use crate::wrap::{WrapLayout, wrap_line};
 
 /// Text size and line height in logical pixels. Use the same metrics for
 /// the panes, link maps and gutters so that they line up.
@@ -145,6 +154,10 @@ pub struct TextPane<'a, Message> {
     show_whitespace: bool,
     highlight_current_line: bool,
     overscroll_lines: usize,
+    wrap: Option<&'a WrapLayout>,
+    dimmed: &'a [InlineHighlight],
+    matches: &'a [InlineHighlight],
+    flashes: &'a [LineFlash],
     width: Length,
     height: Length,
 }
@@ -168,6 +181,10 @@ impl<'a, Message> TextPane<'a, Message> {
             show_whitespace: false,
             highlight_current_line: false,
             overscroll_lines: DEFAULT_OVERSCROLL_LINES,
+            wrap: None,
+            dimmed: &[],
+            matches: &[],
+            flashes: &[],
             width: Length::Fill,
             height: Length::Fill,
         }
@@ -264,6 +281,32 @@ impl<'a, Message> TextPane<'a, Message> {
         self
     }
 
+    /// Wraps lines with `layout` (see the module docs). The pane asks for
+    /// the layout's width with [`Action::WrapColumns`].
+    pub fn wrap(mut self, layout: &'a WrapLayout) -> Self {
+        self.wrap = Some(layout);
+        self
+    }
+
+    /// Character ranges drawn in the dimmed colour (text hidden from the
+    /// comparison by text filters), sorted by line.
+    pub fn dimmed(mut self, ranges: &'a [InlineHighlight]) -> Self {
+        self.dimmed = ranges;
+        self
+    }
+
+    /// Find matches, drawn with the search-match background.
+    pub fn search_matches(mut self, matches: &'a [InlineHighlight]) -> Self {
+        self.matches = matches;
+        self
+    }
+
+    /// Fading highlights drawn over the chunks.
+    pub fn flashes(mut self, flashes: &'a [LineFlash]) -> Self {
+        self.flashes = flashes;
+        self
+    }
+
     /// Sets the width.
     pub fn width(mut self, width: impl Into<Length>) -> Self {
         self.width = width.into();
@@ -307,19 +350,57 @@ enum Drag {
     HScrollbar { grab_x: f32, start: f32 },
 }
 
-/// A shaped line.
-struct LineLayout<P> {
+/// One visual row of a shaped line.
+struct RowLayout<P> {
     paragraph: P,
-    /// Expanded display text (tabs as spaces).
+    /// Expanded display text of the row (tabs as spaces).
     display: String,
-    /// Display byte offset of each source char boundary (`chars + 1`).
+    /// Character column of the line where the row starts.
+    start: usize,
+    /// Display byte offset of each source char boundary of the row
+    /// (`chars + 1`).
     offsets: Vec<u32>,
-    /// Display column of each source char boundary (`chars + 1`).
+    /// Display column (from the row start) of each char boundary.
     columns: Vec<u32>,
-    /// Source line is ASCII: positions follow the monospace grid.
+    /// Row text is ASCII: positions follow the monospace grid.
     ascii: bool,
+}
+
+impl<P> RowLayout<P> {
+    /// Character column of the line where the row ends.
+    fn end(&self) -> usize {
+        self.start + self.offsets.len() - 1
+    }
+}
+
+/// A shaped line: one row, or several when wrapped.
+struct LineLayout<P> {
+    rows: Vec<RowLayout<P>>,
     /// Background quads from syntax styles: char ranges and colours.
     backgrounds: Vec<(Range<usize>, Color)>,
+}
+
+impl<P> LineLayout<P> {
+    /// The row showing character column `col` (a column at a row
+    /// boundary belongs to the later row).
+    fn row_of(&self, col: usize) -> usize {
+        self.rows
+            .partition_point(|r| r.start <= col)
+            .saturating_sub(1)
+    }
+}
+
+/// X of character column `col` within `row`, relative to the text origin.
+fn x_in_row<P: text::Paragraph>(row: &RowLayout<P>, col: usize, cw: f32) -> f32 {
+    let rel = col.saturating_sub(row.start).min(row.offsets.len() - 1);
+    if row.ascii || rel == 0 {
+        return row.columns[rel] as f32 * cw;
+    }
+    let byte = row.offsets[rel] as usize;
+    let graphemes = row.display[..byte].graphemes(true).count();
+    row.paragraph
+        .grapheme_position(0, graphemes)
+        .map_or(row.columns[rel] as f32 * cw, |p| p.x)
 }
 
 struct CacheEntry<P> {
@@ -352,6 +433,11 @@ pub struct State<P> {
     drag: Option<Drag>,
     last_cursor_rev: Option<u64>,
     last_size: Option<Size>,
+    /// Wrap columns last asked for with `Action::WrapColumns`.
+    reported_columns: Option<usize>,
+    /// Where the last up/down move by visual row put the cursor, and the
+    /// x it aims for (kept while moving through shorter rows).
+    goal: Option<(Position, f32)>,
     preedit: Option<input_method::Preedit>,
     modifiers: keyboard::Modifiers,
     cache: RefCell<LineCache<P>>,
@@ -380,7 +466,7 @@ impl<P> operation::Focusable for State<P> {
 
 /// Pixel geometry of one frame.
 #[derive(Debug, Clone, Copy)]
-struct Geometry {
+struct Geometry<'w> {
     bounds: Rectangle,
     gutter: Rectangle,
     text: Rectangle,
@@ -388,15 +474,33 @@ struct Geometry {
     lh: f32,
     cw: f32,
     scroll: Vector,
+    wrap: &'w WrapLayout,
 }
 
-impl Geometry {
+impl Geometry<'_> {
+    /// Top of `line` (of its first row) in window coordinates.
     fn line_y(&self, line: usize) -> f32 {
-        self.bounds.y + line as f32 * self.lh - self.scroll.y
+        self.bounds.y + self.wrap.y_for_line(line, self.lh) - self.scroll.y
+    }
+
+    /// Top of row `row` of `line`.
+    fn row_y(&self, line: usize, row: usize) -> f32 {
+        self.line_y(line) + row as f32 * self.lh
     }
 }
 
 impl<'a, Message> TextPane<'a, Message> {
+    fn wrapping(&self) -> bool {
+        self.wrap.is_some_and(WrapLayout::is_wrapping)
+    }
+
+    fn rows_layout(&self) -> &'a WrapLayout {
+        match self.wrap {
+            Some(w) if w.is_wrapping() => w,
+            _ => WrapLayout::identity(),
+        }
+    }
+
     fn gutter_width(&self, cw: f32) -> f32 {
         if !self.show_line_numbers {
             return 0.0;
@@ -405,7 +509,7 @@ impl<'a, Message> TextPane<'a, Message> {
         digits as f32 * cw + 2.0 * GUTTER_PAD + 2.0
     }
 
-    fn geometry(&self, bounds: Rectangle, cw: f32) -> Geometry {
+    fn geometry(&self, bounds: Rectangle, cw: f32) -> Geometry<'a> {
         let gw = self.gutter_width(cw);
         let gutter = Rectangle {
             width: gw,
@@ -416,39 +520,54 @@ impl<'a, Message> TextPane<'a, Message> {
             width: (bounds.width - gw).max(0.0),
             ..bounds
         };
+        let wrapping = self.wrapping();
+        let scroll = Vector::new(if wrapping { 0.0 } else { self.scroll.x }, self.scroll.y);
         Geometry {
             bounds,
             gutter,
             text,
-            origin_x: text.x + TEXT_MARGIN - self.scroll.x,
+            origin_x: text.x + TEXT_MARGIN - scroll.x,
             lh: self.metrics.line_height,
             cw,
-            scroll: self.scroll,
+            scroll,
+            wrap: self.rows_layout(),
         }
+    }
+
+    /// Cells that fit a row of the text area (for wrapping), keeping room
+    /// for the cursor.
+    fn wrap_columns(&self, g: &Geometry<'_>) -> Option<usize> {
+        let usable = g.text.width - 2.0 * TEXT_MARGIN - g.cw;
+        (g.text.width > 0.0).then(|| ((usable / g.cw).floor().max(1.0)) as usize)
     }
 
     fn content_width(&self, cw: f32) -> f32 {
         self.buffer.max_display_columns() as f32 * cw + 2.0 * TEXT_MARGIN + cw
     }
 
-    fn max_scroll(&self, g: &Geometry) -> Vector {
-        Vector::new(
-            (self.content_width(g.cw) - g.text.width).max(0.0),
-            max_scroll_y(
-                self.buffer.line_count(),
-                g.lh,
-                self.overscroll_lines,
-                g.bounds.height,
-            ),
-        )
+    fn max_scroll(&self, g: &Geometry<'_>) -> Vector {
+        let x = if self.wrapping() {
+            0.0
+        } else {
+            (self.content_width(g.cw) - g.text.width).max(0.0)
+        };
+        let y = (g
+            .wrap
+            .content_height(self.buffer.line_count(), g.lh, self.overscroll_lines)
+            - g.bounds.height)
+            .max(0.0);
+        Vector::new(x, y)
     }
 
-    fn clamp_scroll(&self, g: &Geometry, s: Vector) -> Vector {
+    fn clamp_scroll(&self, g: &Geometry<'_>, s: Vector) -> Vector {
         let max = self.max_scroll(g);
         Vector::new(s.x.clamp(0.0, max.x), s.y.clamp(0.0, max.y))
     }
 
-    fn hscrollbar(&self, g: &Geometry) -> Option<(Rectangle, Rectangle)> {
+    fn hscrollbar(&self, g: &Geometry<'_>) -> Option<(Rectangle, Rectangle)> {
+        if self.wrapping() {
+            return None;
+        }
         let content = self.content_width(g.cw);
         if content <= g.text.width || g.text.width <= 0.0 {
             return None;
@@ -472,6 +591,14 @@ impl<'a, Message> TextPane<'a, Message> {
         Some((track, thumb))
     }
 
+    /// Dimmed ranges of `line`.
+    fn dimmed_on(&self, line: usize) -> impl Iterator<Item = &'a InlineHighlight> + 'a {
+        let start = self.dimmed.partition_point(|h| h.line < line);
+        self.dimmed[start..]
+            .iter()
+            .take_while(move |h| h.line == line)
+    }
+
     fn line_key(&self, line: usize, text: &str) -> u64 {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         text.hash(&mut h);
@@ -480,6 +607,16 @@ impl<'a, Message> TextPane<'a, Message> {
         self.metrics.line_height.to_bits().hash(&mut h);
         hash_font(&self.font, &mut h);
         self.style.text.r.to_bits().hash(&mut h);
+        if let Some(w) = self.wrap.filter(|w| w.is_wrapping()) {
+            (w.columns(), w.mode()).hash(&mut h);
+        }
+        let mut dimmed = self.dimmed_on(line).peekable();
+        if dimmed.peek().is_some() {
+            for d in dimmed {
+                d.columns.hash(&mut h);
+            }
+            hash_color(self.style.dimmed, &mut h);
+        }
         if let Some(hl) = self.syntax {
             hl.with_line_spans(line, |spans| {
                 for s in spans {
@@ -522,32 +659,18 @@ impl<'a, Message> TextPane<'a, Message> {
         line: usize,
         text: &str,
     ) -> LineLayout<P> {
-        let tab = self.buffer.tab_width();
-        let ascii = text.is_ascii();
-        let mut display = String::with_capacity(text.len());
-        let mut offsets = Vec::with_capacity(text.len() + 1);
-        let mut columns = Vec::with_capacity(text.len() + 1);
-        let mut col = 0usize;
-        for ch in text.chars() {
-            offsets.push(display.len() as u32);
-            columns.push(col as u32);
-            if ch == '\t' {
-                let n = tab - col % tab;
-                display.extend(std::iter::repeat_n(' ', n));
-                col += n;
-            } else {
-                display.push(ch);
-                col += 1;
-            }
-        }
-        offsets.push(display.len() as u32);
-        columns.push(col as u32);
+        let tab = self.buffer.tab_width().max(1);
+        let chars: Vec<char> = text.chars().collect();
+        let n = chars.len();
+        let starts = match self.wrap.filter(|w| w.is_wrapping()) {
+            Some(w) => wrap_line(text, tab, w.columns(), w.mode()),
+            None => vec![0],
+        };
 
-        // Syntax spans → display byte ranges.
+        // Syntax spans (character ranges).
         let mut styled: Vec<(Range<usize>, TextStyle)> = Vec::new();
         if let Some(hl) = self.syntax {
             hl.with_line_spans(line, |spans| {
-                let n = offsets.len() - 1;
                 for s in spans {
                     let (a, b) = ((s.start as usize).min(n), (s.end as usize).min(n));
                     if a < b
@@ -562,18 +685,99 @@ impl<'a, Message> TextPane<'a, Message> {
             .iter()
             .filter_map(|(r, st)| st.bg.map(|bg| (r.clone(), bg)))
             .collect();
+        // Style and dimming of each character.
+        const PLAIN: u32 = u32::MAX;
+        let mut style_at = vec![PLAIN; n];
+        for (k, (r, _)) in styled.iter().enumerate() {
+            for s in &mut style_at[r.clone()] {
+                if *s == PLAIN {
+                    *s = k as u32;
+                }
+            }
+        }
+        let mut dim = vec![false; n];
+        for d in self.dimmed_on(line) {
+            let (a, b) = (d.columns.start.min(n), d.columns.end.min(n));
+            dim[a..b.max(a)].fill(true);
+        }
 
-        let mut spans: Vec<Span<'_, (), Font>> = Vec::new();
-        let mut pos = 0usize;
-        let byte = |c: usize| offsets[c] as usize;
-        for (r, st) in &styled {
-            let (a, b) = (byte(r.start), byte(r.end));
-            if a < pos {
-                continue;
+        let mut rows = Vec::with_capacity(starts.len());
+        for (ri, &s) in starts.iter().enumerate() {
+            let e = starts.get(ri + 1).copied().unwrap_or(n).clamp(s, n);
+            let mut display = String::with_capacity(e - s);
+            let mut offsets = Vec::with_capacity(e - s + 1);
+            let mut columns = Vec::with_capacity(e - s + 1);
+            let mut col = 0usize;
+            for &ch in &chars[s..e] {
+                offsets.push(display.len() as u32);
+                columns.push(col as u32);
+                if ch == '\t' {
+                    let k = tab - col % tab;
+                    display.extend(std::iter::repeat_n(' ', k));
+                    col += k;
+                } else {
+                    display.push(ch);
+                    col += 1;
+                }
             }
-            if a > pos {
-                spans.push(Span::new(&display[pos..a]));
-            }
+            offsets.push(display.len() as u32);
+            columns.push(col as u32);
+
+            let paragraph = {
+                let mut spans: Vec<Span<'_, (), Font>> = Vec::new();
+                let mut i = s;
+                while i < e {
+                    let key = (style_at[i], dim[i]);
+                    let mut j = i + 1;
+                    while j < e && (style_at[j], dim[j]) == key {
+                        j += 1;
+                    }
+                    let (a, b) = (offsets[i - s] as usize, offsets[j - s] as usize);
+                    let st = (key.0 != PLAIN).then(|| styled[key.0 as usize].1);
+                    spans.push(self.styled_span(&display[a..b], st, key.1));
+                    i = j;
+                }
+                if spans.is_empty() {
+                    spans.push(Span::new(""));
+                }
+                P::with_spans(text::Text {
+                    content: spans.as_slice(),
+                    bounds: Size::new(f32::INFINITY, self.metrics.line_height),
+                    size: Pixels(self.metrics.text_size),
+                    line_height: text::LineHeight::Absolute(Pixels(self.metrics.line_height)),
+                    font: self.font,
+                    align_x: text::Alignment::Left,
+                    align_y: iced::alignment::Vertical::Top,
+                    shaping: if display.is_ascii() {
+                        text::Shaping::Basic
+                    } else {
+                        text::Shaping::Advanced
+                    },
+                    wrapping: text::Wrapping::None,
+                })
+            };
+            let ascii = chars[s..e].iter().all(char::is_ascii);
+            rows.push(RowLayout {
+                paragraph,
+                display,
+                start: s,
+                offsets,
+                columns,
+                ascii,
+            });
+        }
+
+        LineLayout { rows, backgrounds }
+    }
+
+    fn styled_span<'s>(
+        &self,
+        text: &'s str,
+        st: Option<TextStyle>,
+        dim: bool,
+    ) -> Span<'s, (), Font> {
+        let mut span = Span::new(text);
+        if let Some(st) = st {
             let mut font = self.font;
             if st.bold {
                 font.weight = iced::font::Weight::Bold;
@@ -581,47 +785,18 @@ impl<'a, Message> TextPane<'a, Message> {
             if st.italic {
                 font.style = iced::font::Style::Italic;
             }
-            let mut span = Span::new(&display[a..b])
-                .underline(st.underline)
-                .strikethrough(st.strikethrough);
+            span = span.underline(st.underline).strikethrough(st.strikethrough);
             if let Some(fg) = st.fg {
                 span = span.color(fg);
             }
             if font != self.font {
                 span = span.font(font);
             }
-            spans.push(span);
-            pos = b;
         }
-        if pos < display.len() || spans.is_empty() {
-            spans.push(Span::new(&display[pos..]));
+        if dim {
+            span = span.color(self.style.dimmed);
         }
-
-        let paragraph = P::with_spans(text::Text {
-            content: spans.as_slice(),
-            bounds: Size::new(f32::INFINITY, self.metrics.line_height),
-            size: Pixels(self.metrics.text_size),
-            line_height: text::LineHeight::Absolute(Pixels(self.metrics.line_height)),
-            font: self.font,
-            align_x: text::Alignment::Left,
-            align_y: iced::alignment::Vertical::Top,
-            shaping: if display.is_ascii() {
-                text::Shaping::Basic
-            } else {
-                text::Shaping::Advanced
-            },
-            wrapping: text::Wrapping::None,
-        });
-        drop(spans);
-
-        LineLayout {
-            paragraph,
-            display,
-            offsets,
-            columns,
-            ascii,
-            backgrounds,
-        }
+        span
     }
 
     fn measure<P: text::Paragraph<Font = Font>>(&self, cache: &mut LineCache<P>) {
@@ -651,58 +826,96 @@ impl<'a, Message> TextPane<'a, Message> {
         cache.entries.clear();
     }
 
-    /// Character column under `x` (window coordinates) on `line`.
+    /// Character column under `x` (window coordinates) on visual row
+    /// `row` of `line`.
     fn column_at<P: text::Paragraph<Font = Font>>(
         &self,
         cache: &mut LineCache<P>,
-        g: &Geometry,
+        g: &Geometry<'_>,
         line: usize,
+        row: usize,
         x: f32,
     ) -> usize {
         let rel = x - g.origin_x;
-        if rel <= 0.0 {
-            return 0;
-        }
         let text = self.buffer.line(line);
-        if text.is_ascii() {
+        if !self.wrapping() && text.is_ascii() {
+            if rel <= 0.0 {
+                return 0;
+            }
             let dcol = (rel / g.cw).round() as usize;
             return column_for_display(text, dcol, self.buffer.tab_width());
         }
         let key = self.ensure_line(cache, line);
         let layout = &cache.entries[&key].layout;
-        let Some(hit) = layout.paragraph.hit_test(Point::new(rel, g.lh / 2.0)) else {
-            return char_len(text);
-        };
-        let byte = hit.cursor() as u32;
-        let i = layout
-            .offsets
-            .partition_point(|o| *o <= byte)
-            .saturating_sub(1);
-        if i + 1 < layout.offsets.len() {
-            let (a, b) = (layout.offsets[i], layout.offsets[i + 1]);
-            if byte - a > (b - a) / 2 {
-                return i + 1;
+        let k = row.min(layout.rows.len() - 1);
+        let r = &layout.rows[k];
+        let len = r.offsets.len() - 1;
+        let mut i = if rel <= 0.0 {
+            0
+        } else if r.ascii {
+            let target = rel / g.cw;
+            let p = r.columns.partition_point(|&c| (c as f32) < target);
+            if p == 0 {
+                0
+            } else if p > len {
+                len
+            } else if target - r.columns[p - 1] as f32 <= r.columns[p] as f32 - target {
+                p - 1
+            } else {
+                p
             }
+        } else {
+            match r.paragraph.hit_test(Point::new(rel, g.lh / 2.0)) {
+                None => len,
+                Some(hit) => {
+                    let byte = hit.cursor() as u32;
+                    let i = r.offsets.partition_point(|o| *o <= byte).saturating_sub(1);
+                    if i < len {
+                        let (a, b) = (r.offsets[i], r.offsets[i + 1]);
+                        if byte - a > (b - a) / 2 { i + 1 } else { i }
+                    } else {
+                        i
+                    }
+                }
+            }
+        };
+        // Past the end of a wrapped row: before its last character, since
+        // the row's end is the start of the next row.
+        if k + 1 < layout.rows.len() && i >= len && len > 0 {
+            i = len - 1;
         }
-        i
+        (r.start + i).min(char_len(text))
     }
 
     fn position_at<P: text::Paragraph<Font = Font>>(
         &self,
         cache: &mut LineCache<P>,
-        g: &Geometry,
+        g: &Geometry<'_>,
         point: Point,
     ) -> Position {
-        let line = ((point.y - g.bounds.y + g.scroll.y) / g.lh).floor();
-        let max_line = self.buffer.line_count().saturating_sub(1);
-        if line < 0.0 {
+        let y = point.y - g.bounds.y + g.scroll.y;
+        if y < 0.0 {
             return Position::new(0, 0);
         }
-        let line = line as usize;
-        if line > max_line {
+        let (line, row) = g.wrap.line_at_row((y / g.lh).floor() as usize);
+        if line >= self.buffer.line_count() {
             return self.buffer.end_position();
         }
-        Position::new(line, self.column_at(cache, g, line, point.x))
+        Position::new(line, self.column_at(cache, g, line, row, point.x))
+    }
+
+    /// The cursor's visual row within its line and its x (relative to the
+    /// text origin).
+    fn cursor_location<P: text::Paragraph<Font = Font>>(
+        &self,
+        cache: &mut LineCache<P>,
+        g: &Geometry<'_>,
+    ) -> (usize, f32) {
+        let c = self.buffer.cursor();
+        let key = self.ensure_line(cache, c.line);
+        let layout = &cache.entries[&key].layout;
+        let k = layout.row_of(c.column);
+        (k, x_in_row(&layout.rows[k], c.column, g.cw))
     }
 
     fn publish(&self, shell: &mut Shell<'_, Message>, action: Action) {
@@ -711,7 +924,7 @@ impl<'a, Message> TextPane<'a, Message> {
         }
     }
 
-    fn scroll_to(&self, shell: &mut Shell<'_, Message>, g: &Geometry, target: Vector) {
+    fn scroll_to(&self, shell: &mut Shell<'_, Message>, g: &Geometry<'_>, target: Vector) {
         let target = self.clamp_scroll(g, target);
         if (target.x - self.scroll.x).abs() > 0.01 || (target.y - self.scroll.y).abs() > 0.01 {
             self.publish(
@@ -725,17 +938,26 @@ impl<'a, Message> TextPane<'a, Message> {
     }
 
     /// Scroll offsets that bring the cursor into view.
-    fn reveal_cursor(&self, g: &Geometry) -> Vector {
+    fn reveal_cursor<P: text::Paragraph<Font = Font>>(
+        &self,
+        cache: &mut LineCache<P>,
+        g: &Geometry<'_>,
+    ) -> Vector {
         let c = self.buffer.cursor();
+        let (row, x) = self.cursor_location(cache, g);
         let mut s = self.scroll;
-        let top = c.line as f32 * g.lh;
+        let top = g.wrap.y_for_line(c.line, g.lh) + row as f32 * g.lh;
         let view_h = g.bounds.height;
         if top < s.y {
             s.y = top;
         } else if top + g.lh > s.y + view_h {
             s.y = top + g.lh - view_h;
         }
-        let x = self.buffer.display_column(c) as f32 * g.cw + TEXT_MARGIN;
+        if self.wrapping() {
+            s.x = 0.0;
+            return s;
+        }
+        let x = x + TEXT_MARGIN;
         let view_w = g.text.width;
         if x - TEXT_MARGIN < s.x {
             s.x = (x - TEXT_MARGIN - 4.0 * g.cw).max(0.0);
@@ -745,16 +967,45 @@ impl<'a, Message> TextPane<'a, Message> {
         s
     }
 
-    fn page_lines(&self, g: &Geometry) -> usize {
+    fn page_lines(&self, g: &Geometry<'_>) -> usize {
         ((g.bounds.height / g.lh).floor() as usize)
             .saturating_sub(1)
             .max(1)
     }
 
-    fn handle_key(
+    /// Where moving `delta` visual rows from the cursor lands, keeping
+    /// the goal x of earlier moves.
+    fn vertical_target<P: text::Paragraph<Font = Font>>(
+        &self,
+        cache: &mut LineCache<P>,
+        g: &Geometry<'_>,
+        goal: Option<(Position, f32)>,
+        delta: isize,
+    ) -> (Position, f32) {
+        let c = self.buffer.cursor();
+        let (k, x) = self.cursor_location(cache, g);
+        let goal = match goal {
+            Some((p, gx)) if p == c => gx,
+            _ => x,
+        };
+        let row = (g.wrap.rows_before(c.line) + k) as isize + delta;
+        if row < 0 {
+            return (Position::new(0, 0), goal);
+        }
+        let total = g.wrap.total_rows(self.buffer.line_count()) as isize;
+        if row >= total {
+            return (self.buffer.end_position(), goal);
+        }
+        let (line, k2) = g.wrap.line_at_row(row as usize);
+        let column = self.column_at(cache, g, line, k2, g.origin_x + goal);
+        (Position::new(line, column), goal)
+    }
+
+    fn handle_key<P: text::Paragraph<Font = Font>>(
         &self,
         (key, physical_key, modifiers, text): KeyInput<'_>,
-        g: &Geometry,
+        g: &Geometry<'_>,
+        state: &mut State<P>,
         clipboard: &mut dyn Clipboard,
         shell: &mut Shell<'_, Message>,
     ) {
@@ -800,6 +1051,34 @@ impl<'a, Message> TextPane<'a, Message> {
         }
 
         use key::Named;
+        // Up/down by visual row when wrapping.
+        if self.wrapping()
+            && !ctrl
+            && let keyboard::Key::Named(
+                named @ (Named::ArrowUp | Named::ArrowDown | Named::PageUp | Named::PageDown),
+            ) = key.as_ref()
+        {
+            let page = self.page_lines(g) as isize;
+            let delta = match named {
+                Named::ArrowUp => -1,
+                Named::ArrowDown => 1,
+                Named::PageUp => -page,
+                _ => page,
+            };
+            let goal = state.goal;
+            let (target, goal) = self.vertical_target(state.cache.get_mut(), g, goal, delta);
+            state.goal = Some((target, goal));
+            shell.capture_event();
+            self.publish(
+                shell,
+                if shift {
+                    Action::ExtendTo(target)
+                } else {
+                    Action::Click(target)
+                },
+            );
+            return;
+        }
         let motion = |m: Motion| {
             if shift {
                 Action::Select(m)
@@ -907,12 +1186,16 @@ fn hash_font(font: &Font, h: &mut impl Hasher) {
     font.hash(h);
 }
 
+fn hash_color(c: Color, h: &mut impl Hasher) {
+    c.r.to_bits().hash(h);
+    c.g.to_bits().hash(h);
+    c.b.to_bits().hash(h);
+    c.a.to_bits().hash(h);
+}
+
 fn hash_text_style(st: &TextStyle, h: &mut impl Hasher) {
     for c in [st.fg, st.bg].into_iter().flatten() {
-        c.r.to_bits().hash(h);
-        c.g.to_bits().hash(h);
-        c.b.to_bits().hash(h);
-        c.a.to_bits().hash(h);
+        hash_color(c, h);
     }
     (st.bold, st.italic, st.underline, st.strikethrough).hash(h);
 }
@@ -923,6 +1206,36 @@ fn quad(bounds: Rectangle) -> Quad {
         border: Border::default(),
         ..Quad::default()
     }
+}
+
+/// Column ranges of `line` in `list` (sorted by line).
+fn ranges_on(list: &[InlineHighlight], line: usize) -> Vec<Range<usize>> {
+    let start = list.partition_point(|h| h.line < line);
+    list[start..]
+        .iter()
+        .take_while(|h| h.line == line)
+        .map(|h| h.columns.clone())
+        .collect()
+}
+
+/// The part of `row` covering line columns `a..b`, as a rectangle at
+/// `y` (`None` when the row has none of it).
+fn span_rect<P: text::Paragraph>(
+    row: &RowLayout<P>,
+    g: &Geometry<'_>,
+    y: f32,
+    a: usize,
+    b: usize,
+) -> Option<Rectangle> {
+    let (a, b) = (a.max(row.start), b.min(row.end()));
+    if a >= b {
+        return None;
+    }
+    let (xa, xb) = (x_in_row(row, a, g.cw), x_in_row(row, b, g.cw));
+    Some(Rectangle::new(
+        Point::new(g.origin_x + xa, y),
+        Size::new(xb - xa, g.lh),
+    ))
 }
 
 impl<Message, Theme, Renderer> Widget<Message, Theme, Renderer> for TextPane<'_, Message>
@@ -940,6 +1253,8 @@ where
             drag: None,
             last_cursor_rev: None,
             last_size: None,
+            reported_columns: None,
+            goal: None,
             preedit: None,
             modifiers: keyboard::Modifiers::empty(),
             cache: RefCell::new(LineCache::default()),
@@ -1017,17 +1332,34 @@ where
                     state.last_size = Some(size);
                     self.publish(shell, Action::Resized(size));
                 }
+                if let Some(w) = self
+                    .wrap
+                    .filter(|w| w.mode() != crate::wrap::WrapMode::None)
+                    && let Some(cols) = self.wrap_columns(&g)
+                {
+                    if w.columns() == cols {
+                        state.reported_columns = None;
+                    } else if state.reported_columns != Some(cols) {
+                        state.reported_columns = Some(cols);
+                        self.publish(shell, Action::WrapColumns(cols));
+                    }
+                }
                 let rev = self.buffer.cursor_revision();
                 if state.last_cursor_rev != Some(rev) {
                     let first = state.last_cursor_rev.is_none();
                     state.last_cursor_rev = Some(rev);
                     if !first {
-                        self.scroll_to(shell, &g, self.reveal_cursor(&g));
+                        let target = self.reveal_cursor(state.cache.get_mut(), &g);
+                        self.scroll_to(shell, &g, target);
                     }
                 }
                 if let Some(hl) = self.syntax {
-                    let vis =
-                        visible_lines(self.scroll.y, bounds.height, g.lh, self.buffer.line_count());
+                    let vis = g.wrap.visible_lines(
+                        self.scroll.y,
+                        bounds.height,
+                        g.lh,
+                        self.buffer.line_count(),
+                    );
                     if !hl.is_valid_through(vis.end) {
                         shell.request_redraw();
                     }
@@ -1036,10 +1368,10 @@ where
                     && f.is_window_focused
                 {
                     let c = self.buffer.cursor();
-                    let x = g.origin_x + self.buffer.display_column(c) as f32 * g.cw;
-                    let y = g.line_y(c.line);
+                    let (row, x) = self.cursor_location(state.cache.get_mut(), &g);
+                    let y = g.row_y(c.line, row);
                     shell.request_input_method(&InputMethod::Enabled {
-                        cursor: Rectangle::new(Point::new(x, y), Size::new(1.0, g.lh)),
+                        cursor: Rectangle::new(Point::new(g.origin_x + x, y), Size::new(1.0, g.lh)),
                         purpose: input_method::Purpose::Normal,
                         preedit: state.preedit.as_ref().map(input_method::Preedit::as_ref),
                     });
@@ -1194,6 +1526,7 @@ where
                 self.handle_key(
                     (key, *physical_key, *modifiers, text.as_deref()),
                     &g,
+                    state,
                     clipboard,
                     shell,
                 );
@@ -1271,7 +1604,9 @@ where
         let g = self.geometry(bounds, guard.char_width);
         let lh = g.lh;
         let line_count = self.buffer.line_count();
-        let vis = visible_lines(self.scroll.y, bounds.height, lh, line_count);
+        let vis = g
+            .wrap
+            .visible_lines(self.scroll.y, bounds.height, lh, line_count);
 
         if let Some(hl) = self.syntax {
             hl.highlight_visible(self.buffer.lines(), vis.clone(), Some(HIGHLIGHT_BUDGET));
@@ -1332,7 +1667,7 @@ where
                 renderer.fill_quad(
                     quad(Rectangle::new(
                         Point::new(g.text.x, g.line_y(cursor_pos.line)),
-                        Size::new(g.text.width, lh),
+                        Size::new(g.text.width, g.wrap.line_height(cursor_pos.line, lh)),
                     )),
                     style.current_line,
                 );
@@ -1349,6 +1684,39 @@ where
                     );
                 }
             }
+
+            // Fading highlights (Meld's animating_chunks).
+            for f in self.flashes {
+                if f.end < vis.start || f.start > vis.end || f.color.a <= 0.0 {
+                    continue;
+                }
+                let mut y0 = g.line_y(f.start);
+                let y1 = g.line_y(f.end);
+                if y0 == y1 {
+                    y0 -= 1.0;
+                }
+                let r = Rectangle::new(Point::new(full_x, y0), Size::new(full_w, y1 - y0 + 1.0));
+                if f.stroke {
+                    for edge in [
+                        Rectangle { height: 1.0, ..r },
+                        Rectangle {
+                            y: r.y + r.height - 1.0,
+                            height: 1.0,
+                            ..r
+                        },
+                        Rectangle { width: 1.0, ..r },
+                        Rectangle {
+                            x: r.x + r.width - 1.0,
+                            width: 1.0,
+                            ..r
+                        },
+                    ] {
+                        renderer.fill_quad(quad(edge), f.color);
+                    }
+                } else {
+                    renderer.fill_quad(quad(r), f.color);
+                }
+            }
         });
 
         // Make sure all visible lines are shaped.
@@ -1358,104 +1726,120 @@ where
             .map(|l| (l, self.ensure_line(&mut guard, l)))
             .collect();
         let cache = &*guard;
-        let x_of = |layout: &LineLayout<Renderer::Paragraph>, col: usize| -> f32 {
-            let col = col.min(layout.offsets.len() - 1);
-            if layout.ascii || col == 0 {
-                return layout.columns[col] as f32 * g.cw;
-            }
-            let byte = layout.offsets[col] as usize;
-            let graphemes = layout.display[..byte].graphemes(true).count();
-            layout
-                .paragraph
-                .grapheme_position(0, graphemes)
-                .map_or(layout.columns[col] as f32 * g.cw, |p| p.x)
-        };
 
         let focused = state.focus.is_some();
         let selection = self.buffer.selection();
-        let inline: Vec<&InlineHighlight> = self
-            .inline
-            .iter()
-            .filter(|h| h.line >= vis.start && h.line < vis.end)
-            .collect();
+        let inline_sorted = self.inline.is_sorted_by_key(|h| h.line);
+        let top = bounds.y;
+        let bottom = bounds.y + bounds.height;
 
         if let Some(text_clip) = g.text.intersection(&clip) {
             renderer.with_layer(text_clip, |renderer| {
                 for &(line, key) in &keys {
                     let layout = &cache.entries[&key].layout;
-                    let y = g.line_y(line);
-                    let span_rect = |a: usize, b: usize| {
-                        let (xa, xb) = (x_of(layout, a), x_of(layout, b));
-                        Rectangle::new(Point::new(g.origin_x + xa, y), Size::new(xb - xa, lh))
+                    let n = layout.rows.last().map_or(0, RowLayout::end);
+                    let last_row = layout.rows.len() - 1;
+                    // Inline changes are usually few; avoid assuming order.
+                    let inline: Vec<Range<usize>> = if inline_sorted {
+                        ranges_on(self.inline, line)
+                    } else {
+                        self.inline
+                            .iter()
+                            .filter(|h| h.line == line)
+                            .map(|h| h.columns.clone())
+                            .collect()
                     };
-                    for h in inline.iter().filter(|h| h.line == line) {
-                        renderer.fill_quad(
-                            quad(span_rect(h.columns.start, h.columns.end)),
-                            style.inline,
-                        );
-                    }
-                    for (r, bg) in &layout.backgrounds {
-                        renderer.fill_quad(quad(span_rect(r.start, r.end)), *bg);
-                    }
-                    if let Some((s, e)) = selection
-                        && line >= s.line
-                        && line <= e.line
-                    {
-                        let n = layout.offsets.len() - 1;
-                        let a = if line == s.line { s.column } else { 0 };
-                        let (b, extra) = if line == e.line {
-                            (e.column, 0.0)
-                        } else {
-                            (n, g.cw)
-                        };
-                        let mut r = span_rect(a, b);
-                        r.width += extra;
-                        let color = if focused {
-                            style.selection
-                        } else {
-                            style.selection_unfocused
-                        };
-                        if r.width > 0.0 {
-                            renderer.fill_quad(quad(r), color);
+                    let matches = ranges_on(self.matches, line);
+                    let sel = selection.and_then(|(s, e)| {
+                        (line >= s.line && line <= e.line).then(|| {
+                            let a = if line == s.line { s.column } else { 0 };
+                            let (b, extra) = if line == e.line {
+                                (e.column, false)
+                            } else {
+                                (n, true)
+                            };
+                            (a, b, extra)
+                        })
+                    });
+                    for (k, row) in layout.rows.iter().enumerate() {
+                        let y = g.row_y(line, k);
+                        if y > bottom || y + lh < top {
+                            continue;
                         }
-                    }
-                    if self.show_whitespace {
-                        for (i, ch) in self.buffer.line(line).chars().enumerate() {
-                            let xa = g.origin_x + x_of(layout, i);
-                            let xb = g.origin_x + x_of(layout, i + 1);
-                            if ch == ' ' {
-                                let d = (g.cw * 0.18).clamp(1.5, 3.0);
-                                renderer.fill_quad(
-                                    quad(Rectangle::new(
-                                        Point::new((xa + xb - d) / 2.0, y + (lh - d) / 2.0),
-                                        Size::new(d, d),
-                                    )),
-                                    style.whitespace,
-                                );
-                            } else if ch == '\t' {
-                                renderer.fill_quad(
-                                    quad(Rectangle::new(
-                                        Point::new(xa + 2.0, (y + lh / 2.0).floor()),
-                                        Size::new((xb - xa - 4.0).max(1.0), 1.0),
-                                    )),
-                                    style.whitespace,
-                                );
-                                renderer.fill_quad(
-                                    quad(Rectangle::new(
-                                        Point::new(xb - 3.0, (y + lh / 2.0).floor() - 2.0),
-                                        Size::new(1.0, 5.0),
-                                    )),
-                                    style.whitespace,
-                                );
+                        for r in &inline {
+                            if let Some(rect) = span_rect(row, &g, y, r.start, r.end) {
+                                renderer.fill_quad(quad(rect), style.inline);
                             }
                         }
+                        for r in &matches {
+                            if let Some(rect) = span_rect(row, &g, y, r.start, r.end) {
+                                renderer.fill_quad(quad(rect), style.search_match);
+                            }
+                        }
+                        for (r, bg) in &layout.backgrounds {
+                            if let Some(rect) = span_rect(row, &g, y, r.start, r.end) {
+                                renderer.fill_quad(quad(rect), *bg);
+                            }
+                        }
+                        if let Some((a, b, extra)) = sel {
+                            let color = if focused {
+                                style.selection
+                            } else {
+                                style.selection_unfocused
+                            };
+                            let mut rect = span_rect(row, &g, y, a, b);
+                            if extra && k == last_row && a <= n {
+                                let x = g.origin_x + x_in_row(row, b.min(n), g.cw);
+                                let r = rect.get_or_insert(Rectangle::new(
+                                    Point::new(x, y),
+                                    Size::new(0.0, lh),
+                                ));
+                                r.width += g.cw;
+                            }
+                            if let Some(r) = rect.filter(|r| r.width > 0.0) {
+                                renderer.fill_quad(quad(r), color);
+                            }
+                        }
+                        if self.show_whitespace {
+                            let text = self.buffer.line(line);
+                            for (i, ch) in text.chars().enumerate().take(row.end()).skip(row.start)
+                            {
+                                let xa = g.origin_x + x_in_row(row, i, g.cw);
+                                let xb = g.origin_x + x_in_row(row, i + 1, g.cw);
+                                if ch == ' ' {
+                                    let d = (g.cw * 0.18).clamp(1.5, 3.0);
+                                    renderer.fill_quad(
+                                        quad(Rectangle::new(
+                                            Point::new((xa + xb - d) / 2.0, y + (lh - d) / 2.0),
+                                            Size::new(d, d),
+                                        )),
+                                        style.whitespace,
+                                    );
+                                } else if ch == '\t' {
+                                    renderer.fill_quad(
+                                        quad(Rectangle::new(
+                                            Point::new(xa + 2.0, (y + lh / 2.0).floor()),
+                                            Size::new((xb - xa - 4.0).max(1.0), 1.0),
+                                        )),
+                                        style.whitespace,
+                                    );
+                                    renderer.fill_quad(
+                                        quad(Rectangle::new(
+                                            Point::new(xb - 3.0, (y + lh / 2.0).floor() - 2.0),
+                                            Size::new(1.0, 5.0),
+                                        )),
+                                        style.whitespace,
+                                    );
+                                }
+                            }
+                        }
+                        renderer.fill_paragraph(
+                            &row.paragraph,
+                            Point::new(g.origin_x, y),
+                            style.text,
+                            text_clip,
+                        );
                     }
-                    renderer.fill_paragraph(
-                        &layout.paragraph,
-                        Point::new(g.origin_x, y),
-                        style.text,
-                        text_clip,
-                    );
                 }
 
                 if let Some(f) = &state.focus
@@ -1464,10 +1848,11 @@ where
                     && let Some(&(_, key)) = keys.iter().find(|(l, _)| *l == cursor_pos.line)
                 {
                     let layout = &cache.entries[&key].layout;
-                    let x = g.origin_x + x_of(layout, cursor_pos.column);
+                    let k = layout.row_of(cursor_pos.column);
+                    let x = g.origin_x + x_in_row(&layout.rows[k], cursor_pos.column, g.cw);
                     renderer.fill_quad(
                         quad(Rectangle::new(
-                            Point::new(x.floor(), g.line_y(cursor_pos.line)),
+                            Point::new(x.floor(), g.row_y(cursor_pos.line, k)),
                             Size::new(1.5, lh),
                         )),
                         style.cursor,

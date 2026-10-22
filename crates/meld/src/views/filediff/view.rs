@@ -19,13 +19,12 @@ use crate::ui::{self, icon, menu};
 
 const GUTTER_WIDTH: f32 = 20.0;
 const LINK_WIDTH: f32 = 50.0;
-const MAP_WIDTH: f32 = 20.0;
 /// Width between two panes: gutter, link map, gutter.
 const BETWEEN: f32 = GUTTER_WIDTH * 2.0 + LINK_WIDTH;
 
 /// Height of the file header row above the panes.
 pub const HEADER_ROW_HEIGHT: f32 = 30.0;
-/// Height of the message area row of embedded comparisons.
+/// Height of a pane's message area in embedded comparisons.
 pub const EMBEDDED_BANNER_HEIGHT: f32 = 64.0;
 
 const SPINNER: [&str; 4] = ["◐", "◓", "◑", "◒"];
@@ -51,6 +50,58 @@ const NEWLINES: [NewlineChoice; 3] = [
 
 fn act(a: Act) -> Message {
     Message::Act(a)
+}
+
+/// Which status bar items fit a pane `width` wide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct StatusItems {
+    pub display_label: bool,
+    pub encoding: bool,
+    pub newline: bool,
+    pub language: bool,
+    pub long_position: bool,
+    pub overwrite: bool,
+}
+
+pub(super) fn status_items(width: f32) -> StatusItems {
+    StatusItems {
+        display_label: width > 300.0,
+        long_position: width > 240.0,
+        newline: width > 340.0,
+        language: width > 400.0,
+        encoding: width > 480.0,
+        overwrite: width > 540.0,
+    }
+}
+
+pub(super) fn encoding_label(p: &super::Pane) -> String {
+    if p.file.encoding.bom {
+        format!("{} (BOM)", p.file.encoding.name())
+    } else {
+        p.file.encoding.name().to_string()
+    }
+}
+
+pub(super) fn language_label(p: &super::Pane) -> &'static str {
+    p.language
+        .and_then(|id| meld_files::LANGUAGES.iter().find(|l| l.id == id))
+        .map(|l| l.name)
+        .unwrap_or("Plain Text")
+}
+
+pub(super) fn newline_picker<'a>(pane: usize, newline: NewlineType) -> Element<'a, Message> {
+    pick_list(NEWLINES, Some(NewlineChoice(newline)), move |c: NewlineChoice| {
+        act(Act::SetNewline(pane, c.0))
+    })
+    .text_size(12)
+    .padding([2, 6])
+    .style(|theme: &Theme, status| {
+        let mut s = pick_list::default(theme, status);
+        s.background = Background::Color(iced::Color::TRANSPARENT);
+        s.border = s.border.width(0);
+        s
+    })
+    .into()
 }
 
 fn small_button<'a>(label: impl text::IntoFragment<'a>, message: Option<Message>) -> button::Button<'a, Message> {
@@ -85,7 +136,7 @@ impl FileDiff {
     pub(super) fn main_view<'a>(&'a self, shared: &'a Shared) -> Element<'a, Message> {
         let n = self.panes.len();
         let maps_width = if self.show_overview_map && n > 0 {
-            MAP_WIDTH * n as f32 + 2.0
+            self.map_style.width() * n as f32 + 2.0
         } else {
             0.0
         };
@@ -106,36 +157,8 @@ impl FileDiff {
             .align_y(Alignment::Center)
             .style(bar_style);
 
-        // Message areas.
-        let banners = if self.panes.iter().any(|p| p.banner.is_some()) {
-            let mut r = row![];
-            for i in 0..n {
-                if i > 0 {
-                    r = r.push(Space::new().width(BETWEEN));
-                }
-                let cell: Element<'a, Message> = match &self.panes[i].banner {
-                    Some(b) => ui::banner(
-                        b.kind,
-                        b.primary.as_str(),
-                        b.secondary.clone(),
-                        b.actions
-                            .iter()
-                            .map(|(label, a)| (label.clone(), Message::Banner(i, *a)))
-                            .collect(),
-                    ),
-                    None => Space::new().into(),
-                };
-                r = r.push(container(cell).width(Length::FillPortion(1)));
-            }
-            if maps_width > 0.0 {
-                r = r.push(Space::new().width(maps_width));
-            }
-            Some(r)
-        } else {
-            None
-        };
-
-        // Row 1: the panes.
+        // Row 1: the panes, each with its message area above it
+        // (`msgarea_mgr` in each pane's box).
         let lh = self.metrics.line_height;
         let mut body = row![].height(Length::Fill);
         for i in 0..n {
@@ -144,13 +167,32 @@ impl FileDiff {
                 body = body.push(self.link(i - 1));
                 body = body.push(self.gutter(i, i - 1, Direction::Left));
             }
-            body = body.push(container(self.pane_view(i)).width(Length::FillPortion(1)));
+            let mut cell = column![];
+            if let Some(b) = &self.panes[i].banner {
+                let banner = ui::pane_banner(
+                    b.kind,
+                    b.primary.as_str(),
+                    b.secondary.clone(),
+                    b.actions
+                        .iter()
+                        .map(|(label, a)| (label.clone(), Message::Banner(i, *a)))
+                        .collect(),
+                );
+                cell = cell.push(if self.embedded {
+                    // A fixed height keeps `pane_geometry` exact for the parent.
+                    container(banner).height(EMBEDDED_BANNER_HEIGHT).clip(true)
+                } else {
+                    container(banner)
+                });
+            }
+            cell = cell.push(self.pane_view(i));
+            body = body.push(container(cell).width(Length::FillPortion(1)));
         }
         if maps_width > 0.0 {
-            let max_lines = self
+            let max_rows = self
                 .panes
                 .iter()
-                .map(|p| p.buffer.display_line_count())
+                .map(|p| p.wrap.total_rows(p.buffer.display_line_count()))
                 .max()
                 .unwrap_or(1);
             let mut maps = row![].spacing(0).padding([0, 1]);
@@ -159,10 +201,13 @@ impl FileDiff {
                 let chunks = self.derived.maps.get(i).map(Vec::as_slice).unwrap_or(&[]);
                 maps = maps.push(
                     chunk_map(chunks, &self.styles[i])
-                        .lines(p.buffer.display_line_count(), max_lines)
+                        .lines(p.buffer.display_line_count(), max_rows)
+                        .wrap(Some(&p.wrap))
                         .viewport(p.scroll.y, p.viewport.height, lh)
                         .overscroll_lines(OVERSCROLL_LINES)
-                        .width(MAP_WIDTH)
+                        .map_style(self.map_style)
+                        .source(&p.buffer)
+                        .width(self.map_style.width())
                         .on_scroll(move |s| Message::MapScroll(i, s)),
                 );
             }
@@ -190,14 +235,6 @@ impl FileDiff {
         };
 
         let mut content = column![headers, ui::separator(false)];
-        if let Some(b) = banners {
-            if self.embedded {
-                // A fixed height keeps `header_height` exact for the parent.
-                content = content.push(container(b).height(EMBEDDED_BANNER_HEIGHT).clip(true));
-            } else {
-                content = content.push(b);
-            }
-        }
         content = content.push(body);
         if self.find.visible {
             content = content.push(ui::separator(false));
@@ -293,6 +330,10 @@ impl FileDiff {
             .show_whitespace(self.view_options.show_whitespace)
             .highlight_current_line(self.view_options.highlight_current_line)
             .overscroll_lines(OVERSCROLL_LINES)
+            .wrap(&p.wrap)
+            .dimmed(&p.dimmed)
+            .search_matches(&p.matches)
+            .flashes(&p.flashes)
             .on_action(move |a| Message::Pane(i, a));
         if self.highlight_syntax {
             pane = pane.syntax(&p.highlighter);
@@ -306,6 +347,8 @@ impl FileDiff {
         match self.derived.pair(from, to) {
             Some(pair) => action_gutter(&pair.chunks, style)
                 .scroll(self.panes[from].scroll.y)
+                .wrap(Some(&self.panes[from].wrap))
+                .pane_height(self.panes[from].viewport.height)
                 .line_height(lh)
                 .editable(self.editable_now(from), self.editable_now(to))
                 .direction(direction)
@@ -323,6 +366,9 @@ impl FileDiff {
         match self.derived.pair(left, right) {
             Some(pair) => link_map(&pair.chunks, &self.neutral_style)
                 .scroll(self.panes[left].scroll.y, self.panes[right].scroll.y)
+                .wrap(Some(&self.panes[left].wrap), Some(&self.panes[right].wrap))
+                .pane_heights(self.panes[left].viewport.height, self.panes[right].viewport.height)
+                .on_scroll(Message::LinkScroll)
                 .line_height(lh)
                 .line_counts(
                     self.panes[left].buffer.display_line_count(),
@@ -331,7 +377,10 @@ impl FileDiff {
                 .current(pair.position(self.cursor.chunk))
                 .width(LINK_WIDTH)
                 .into(),
-            None => link_map(&[], &self.neutral_style).width(LINK_WIDTH).into(),
+            None => link_map(&[], &self.neutral_style)
+                .on_scroll(Message::LinkScroll)
+                .width(LINK_WIDTH)
+                .into(),
         }
     }
 
@@ -431,47 +480,30 @@ impl FileDiff {
         container(r).padding([1, 0]).style(bar_style).into()
     }
 
-    /// `MeldStatusBar`
+    /// `MeldStatusBar`. Narrow panes (three-way comparisons) hide the
+    /// less used items first; the Display menu always offers them.
     fn status_bar(&self, i: usize, width: f32) -> Element<'_, Message> {
         let p = &self.panes[i];
         let cursor = p.buffer.cursor();
         let column = p.buffer.display_column(cursor);
+        let shown = status_items(width);
         let mut r = row![space::horizontal()]
             .spacing(4)
             .align_y(Alignment::Center)
             .padding([0, 6]);
-        if width > 420.0 {
-            r = r.push(small_button("Display ▾", Some(act(Act::Display))));
+        r = r.push(small_button(
+            if shown.display_label { "Display ▾" } else { "☰" },
+            Some(act(Act::Display(i))),
+        ));
+        if shown.encoding {
+            r = r.push(small_button(encoding_label(p), Some(act(Act::ChooseEncoding(i)))));
         }
-        let encoding = if p.file.encoding.bom {
-            format!("{} (BOM)", p.file.encoding.name())
-        } else {
-            p.file.encoding.name().to_string()
-        };
-        if width > 300.0 {
-            r = r.push(small_button(encoding, Some(act(Act::ChooseEncoding(i)))));
+        if shown.newline {
+            r = r.push(newline_picker(i, p.file.newline));
         }
-        r = r.push(
-            pick_list(
-                NEWLINES,
-                Some(NewlineChoice(p.file.newline)),
-                move |c: NewlineChoice| act(Act::SetNewline(i, c.0)),
-            )
-            .text_size(12)
-            .padding([2, 6])
-            .style(|theme: &Theme, status| {
-                let mut s = pick_list::default(theme, status);
-                s.background = Background::Color(iced::Color::TRANSPARENT);
-                s.border = s.border.width(0);
-                s
-            }),
-        );
-        let language = p
-            .language
-            .and_then(|id| meld_files::LANGUAGES.iter().find(|l| l.id == id))
-            .map(|l| l.name)
-            .unwrap_or("Plain Text");
-        r = r.push(small_button(language, Some(act(Act::ChooseLanguage(i)))));
+        if shown.language {
+            r = r.push(small_button(language_label(p), Some(act(Act::ChooseLanguage(i)))));
+        }
         if let Some((pane, line)) = &self.go_to
             && *pane == i
         {
@@ -485,12 +517,14 @@ impl FileDiff {
                     .on_submit(Message::GoToLineDone),
             );
         } else {
-            r = r.push(small_button(
-                format!("Ln {}, Col {}", cursor.line + 1, column + 1),
-                (self.focus_pane() == Some(i)).then(|| act(Act::GoToLine)),
-            ));
+            let label = if shown.long_position {
+                format!("Ln {}, Col {}", cursor.line + 1, column + 1)
+            } else {
+                format!("{}:{}", cursor.line + 1, column + 1)
+            };
+            r = r.push(small_button(label, (self.focus_pane() == Some(i)).then(|| act(Act::GoToLine))));
         }
-        if width > 360.0 {
+        if shown.overwrite {
             r = r.push(
                 text(if self.overwrite { "OVR" } else { "INS" })
                     .size(12)

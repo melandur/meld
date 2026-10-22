@@ -4,7 +4,7 @@
 //! and text filter menus and the pane context menu.
 
 use iced::widget::{
-    Space, button, checkbox, column, container, mouse_area, opaque, pin, row, scrollable, space, stack, text,
+    Space, button, checkbox, column, container, mouse_area, opaque, row, scrollable, space, stack, text,
     text_input,
 };
 use iced::{Element, Length, Padding};
@@ -228,21 +228,22 @@ impl FileDiff {
                 (items, true)
             }
         };
-        let menu = opaque(menu_view(items));
-        let layer: Element<'a, Message> = if positioned {
+        if positioned {
+            // At the pointer, in window coordinates, wherever this view is
+            // embedded.
             let Popup::Context { x, y, .. } = popup else {
                 unreachable!()
             };
-            pin(menu).x(x).y(y).into()
-        } else {
-            container(row![space::horizontal(), menu])
-                .padding(Padding {
-                    top: 2.0,
-                    right: 8.0,
-                    ..Padding::ZERO
-                })
-                .into()
-        };
+            return menu::at_point(base, menu_view(items), iced::Point::new(x, y), Message::ClosePopup);
+        }
+        let menu = opaque(menu_view(items));
+        let layer: Element<'a, Message> = container(row![space::horizontal(), menu])
+            .padding(Padding {
+                top: 2.0,
+                right: 8.0,
+                ..Padding::ZERO
+            })
+            .into();
         stack![
             base,
             mouse_area(container(layer).width(Length::Fill).height(Length::Fill)).on_press(Message::ClosePopup)
@@ -453,8 +454,17 @@ impl FileDiff {
                 }
                 self.selector_dialog("Highlighting Mode", filter, list.into(), cancel.clone())
             }
-            Dialog::Display => {
+            Dialog::Display { pane } => {
                 let o = self.view_options;
+                let pane = (*pane).min(self.panes.len() - 1);
+                let p = &self.panes[pane];
+                // The status bar items a narrow pane hides are here too.
+                let row_item = |label: &'a str, value: Element<'a, Message>| -> Element<'a, Message> {
+                    row![text(label).size(14).width(150), value]
+                        .spacing(8)
+                        .align_y(iced::Alignment::Center)
+                        .into()
+                };
                 let body = column![
                     checkbox(o.show_line_numbers)
                         .label("Show line numbers")
@@ -465,6 +475,30 @@ impl FileDiff {
                     checkbox(o.highlight_current_line)
                         .label("Highlight current line")
                         .on_toggle(|_| Message::Act(Act::ToggleCurrentLine)),
+                    checkbox(o.wrap)
+                        .label("Text wrapping")
+                        .on_toggle(|_| Message::Act(Act::ToggleWrap)),
+                    ui::separator(false),
+                    row_item(
+                        "Text encoding",
+                        button(text(super::view::encoding_label(p)).size(13))
+                            .padding([4, 10])
+                            .style(ui::flat_button)
+                            .on_press(Message::Act(Act::ChooseEncoding(pane)))
+                            .into(),
+                    ),
+                    row_item(
+                        "Highlighting",
+                        button(text(super::view::language_label(p)).size(13))
+                            .padding([4, 10])
+                            .style(ui::flat_button)
+                            .on_press(Message::Act(Act::ChooseLanguage(pane)))
+                            .into(),
+                    ),
+                    row_item("Line endings", super::view::newline_picker(pane, p.file.newline)),
+                    checkbox(self.overwrite)
+                        .label("Overwrite mode")
+                        .on_toggle(|_| Message::Act(Act::ToggleOverwrite)),
                 ]
                 .spacing(10);
                 modal::dialog(

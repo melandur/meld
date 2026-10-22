@@ -1,17 +1,23 @@
 //! Editing, undo, chunk actions, navigation, scrolling and the actions
 //! behind shortcuts, buttons and menus.
 
+use std::hash::{Hash, Hasher};
+use std::time::{Duration, Instant};
+
 use iced::Task;
 use meld_diff::{Chunk, EditOutcome, SyncpointAction};
-use meld_widgets::{Action, ChunkAction, EditAction, Motion, Position as WPos, ScrollGeometry, sync_scroll};
+use meld_widgets::{
+    Action, ChunkAction, EditAction, InlineHighlight, LineFlash, Motion, Position as WPos, ScrollGeometry, WrapLayout,
+    sync_scroll,
+};
 
 use super::chunks::{self, CursorDetails, Derived};
 use super::edits::{char_column, to_text_edits, widget_replacement};
 use super::find::{self, FindMessage};
 use super::io;
 use super::{
-    Act, Banner, BannerAction, CloseState, Dialog, DialogMessage, FileDiff, Message, MsgId, OVERSCROLL_LINES, PaneEdit,
-    Pending, Popup, PopupKind,
+    Act, Banner, BannerAction, CloseState, Dialog, DialogMessage, FileDiff, Flash, Message, MsgId, OVERSCROLL_LINES,
+    PaneEdit, Pending, Popup, PopupKind, wrap_mode,
 };
 use crate::shared::Shared;
 use crate::ui::BannerKind;
@@ -42,6 +48,9 @@ impl FileDiff {
                     }
                 }
             }
+            Action::WrapColumns(columns) => {
+                self.relayout(pane, |w| w.set_columns(columns));
+            }
             Action::Focused(true) => {
                 self.focused = Some(pane);
                 self.last_focused = Some(pane);
@@ -63,15 +72,11 @@ impl FileDiff {
                 self.focused = Some(pane);
                 self.last_focused = Some(pane);
                 self.update_cursor(pane, true);
-                let origin_y = if self.embedded {
-                    0.0
-                } else {
-                    crate::ui::HEADER_HEIGHT + 1.0
-                };
+                // Placed at the pointer by an overlay, wherever the view is.
                 self.popup = Some(Popup::Context {
                     pane,
                     x: point.x,
-                    y: (point.y - origin_y).max(0.0),
+                    y: point.y,
                 });
             }
             Action::Edit(edit) => {
@@ -226,21 +231,31 @@ impl FileDiff {
         self.ensure_inline_visible();
     }
 
+    /// Lines of `pane` in view, with a screen of margin above and below.
+    fn lines_around_view(&self, pane: usize) -> std::ops::Range<usize> {
+        let p = &self.panes[pane];
+        let height = if p.viewport.height > 0.0 {
+            p.viewport.height
+        } else {
+            1000.0
+        };
+        p.wrap.visible_lines(
+            p.scroll.y - height,
+            3.0 * height,
+            self.metrics.line_height,
+            p.buffer.line_count(),
+        )
+    }
+
     /// Merged chunk indices visible in any pane (with a screen of margin).
     fn visible_chunks(&self) -> Vec<usize> {
-        let lh = self.metrics.line_height.max(1.0);
         let mut out = Vec::new();
-        for (i, pane) in self.panes.iter().enumerate() {
+        for i in 0..self.panes.len() {
             let (Some(hl), Some(merged)) = (self.derived.highlights.get(i), self.derived.pane_merged.get(i)) else {
                 continue;
             };
-            let height = if pane.viewport.height > 0.0 {
-                pane.viewport.height
-            } else {
-                1000.0
-            };
-            let first = ((pane.scroll.y - height) / lh).max(0.0) as usize;
-            let last = ((pane.scroll.y + 2.0 * height) / lh) as usize + 1;
+            let vis = self.lines_around_view(i);
+            let (first, last) = (vis.start, vis.end + 1);
             let start = hl.partition_point(|h| h.lines.end < first);
             let end = hl.partition_point(|h| h.lines.start <= last);
             out.extend_from_slice(&merged[start..end.max(start)]);
@@ -456,11 +471,8 @@ impl FileDiff {
     }
 
     fn chunk_action(&mut self, action: meld_diff::ChunkAction, src: usize, dst: usize, chunk: Chunk) {
-        let edited = if action == meld_diff::ChunkAction::Delete {
-            src
-        } else {
-            dst
-        };
+        use meld_diff::ChunkAction as CA;
+        let edited = if action == CA::Delete { src } else { dst };
         if !self.editable_now(edited) {
             return;
         }
@@ -470,10 +482,26 @@ impl FileDiff {
         match cmp.chunk_action(action, src, dst, &chunk) {
             Ok(outcome) => {
                 self.apply_outcome(outcome);
-                if action == meld_diff::ChunkAction::Replace {
+                if action == CA::Replace {
                     self.panes[dst].buffer.set_cursor(WPos::new(chunk.start_b, 0), false);
                 }
                 self.after_change();
+                // `copy_chunk`, `replace_chunk`, `delete_chunk`: briefly
+                // highlight the changed lines.
+                let len = chunk.end_a - chunk.start_a;
+                let (insert, conflict) = {
+                    let colors = &self.styles[edited].chunks;
+                    (colors.insert.fill, colors.conflict.fill)
+                };
+                let (start, color) = match action {
+                    CA::CopyUp => (chunk.start_b, insert),
+                    CA::CopyDown => (chunk.end_b, insert),
+                    CA::Replace if len == 0 => (chunk.start_b, conflict),
+                    CA::Replace => (chunk.start_b, insert),
+                    CA::Delete => (chunk.start_a, conflict),
+                };
+                let end = if action == CA::Delete { start } else { start + len };
+                self.add_flash(edited, start, end, color, 1.0, 500, false);
             }
             Err(err) => log::error!("chunk action failed: {err}"),
         }
@@ -611,7 +639,7 @@ impl FileDiff {
 
     // ----- Navigation and scrolling -----
 
-    fn geometry(&self, pane: usize) -> ScrollGeometry {
+    fn geometry(&self, pane: usize) -> ScrollGeometry<'_> {
         let p = &self.panes[pane];
         ScrollGeometry {
             scroll_y: p.scroll.y,
@@ -623,6 +651,144 @@ impl FileDiff {
             line_height: self.metrics.line_height,
             line_count: p.buffer.display_line_count(),
             overscroll_lines: OVERSCROLL_LINES,
+            wrap: Some(&p.wrap),
+        }
+    }
+
+    /// Brings the wrap layouts up to date with the buffers and the wrap
+    /// setting.
+    pub(super) fn refresh_wraps(&mut self) {
+        let mode = wrap_mode(self.wrap_setting, self.view_options.wrap);
+        for pane in 0..self.panes.len() {
+            if self.panes[pane].wrap.mode() != mode {
+                self.relayout(pane, |w| w.set_mode(mode));
+            } else {
+                let p = &mut self.panes[pane];
+                p.wrap.update(&p.buffer);
+            }
+        }
+    }
+
+    /// Changes the wrap layout of `pane`, keeping the line at the top of
+    /// the view in place.
+    fn relayout(&mut self, pane: usize, change: impl FnOnce(&mut WrapLayout)) {
+        let lh = self.metrics.line_height;
+        let p = &mut self.panes[pane];
+        let count = p.buffer.display_line_count();
+        let (line, frac) = p.wrap.line_at_y(p.scroll.y, lh, count);
+        change(&mut p.wrap);
+        if p.wrap.update(&p.buffer) {
+            let y = p.wrap.y_for_line(line, lh) + frac * p.wrap.line_height(line, lh);
+            let viewport = if p.viewport.height > 0.0 {
+                p.viewport.height
+            } else {
+                600.0
+            };
+            let max = (p.wrap.content_height(count, lh, OVERSCROLL_LINES) - viewport).max(0.0);
+            p.scroll.y = y.clamp(0.0, max).floor();
+            if p.wrap.is_wrapping() {
+                p.scroll.x = 0.0;
+            }
+        }
+    }
+
+    /// Recomputes find matches and text filter dimming around the view of
+    /// each pane when the text, the view or the search changed.
+    pub(super) fn refresh_decorations(&mut self) {
+        let search = self.find.compile();
+        let filters = self.active_filters();
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        if let Some(re) = &search {
+            re.as_str().hash(&mut h);
+            self.find.regex.hash(&mut h);
+        }
+        for f in &filters {
+            f.as_str().hash(&mut h);
+        }
+        let base = h.finish();
+        for pane in 0..self.panes.len() {
+            let vis = self.lines_around_view(pane);
+            let p = &self.panes[pane];
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            (base, vis.start, vis.end, p.buffer.revision(), p.buffer.line_count()).hash(&mut h);
+            (p.buffer.lines().as_ptr() as usize).hash(&mut h);
+            let key = h.finish();
+            if p.decorations_key == Some(key) {
+                continue;
+            }
+            let lines = p.buffer.lines();
+            let vis = vis.start.min(lines.len())..vis.end.min(lines.len());
+            let matches = match &search {
+                Some(re) => find::matches_in(re, lines, vis.clone(), self.find.regex),
+                None => Vec::new(),
+            };
+            let mut dimmed = Vec::new();
+            if !filters.is_empty() {
+                for line in vis {
+                    let text = &lines[line];
+                    if let Ok(f) = meld_diff::filters::apply_text_filters(text, &filters) {
+                        for (a, b) in f.ranges {
+                            dimmed.push(InlineHighlight {
+                                line,
+                                columns: char_column(text, a)..char_column(text, b),
+                            });
+                        }
+                    }
+                }
+            }
+            let p = &mut self.panes[pane];
+            p.matches = matches;
+            p.dimmed = dimmed;
+            p.decorations_key = Some(key);
+        }
+    }
+
+    /// Starts a fading highlight of `start..end` in `pane`
+    /// (`add_fading_highlight`).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn add_flash(
+        &mut self,
+        pane: usize,
+        start: usize,
+        end: usize,
+        color: iced::Color,
+        alpha: f32,
+        millis: u64,
+        stroke: bool,
+    ) {
+        if pane >= self.panes.len() {
+            return;
+        }
+        self.flashes.push(Flash {
+            pane,
+            start,
+            end,
+            color: iced::Color { a: alpha, ..color },
+            started: Instant::now(),
+            duration: Duration::from_millis(millis),
+            stroke,
+        });
+        self.animate(Instant::now());
+    }
+
+    /// Advances the fading highlights to `now`.
+    pub(super) fn animate(&mut self, now: Instant) {
+        self.flashes
+            .retain(|f| now.saturating_duration_since(f.started) < f.duration);
+        for p in &mut self.panes {
+            p.flashes.clear();
+        }
+        for f in &self.flashes {
+            let t = now.saturating_duration_since(f.started).as_secs_f32() / f.duration.as_secs_f32().max(1e-3);
+            let alpha = f.color.a * (1.0 - t.clamp(0.0, 1.0));
+            if let Some(p) = self.panes.get_mut(f.pane) {
+                p.flashes.push(LineFlash {
+                    start: f.start,
+                    end: f.end,
+                    color: iced::Color { a: alpha, ..f.color },
+                    stroke: f.stroke,
+                });
+            }
         }
     }
 
@@ -654,17 +820,18 @@ impl FileDiff {
     /// Scrolls `pane` so that `line` is in the middle of the view.
     pub(super) fn center_line(&mut self, pane: usize, line: usize) {
         let g = self.geometry(pane);
+        let max = (g.upper() - g.viewport_height).max(0.0);
+        let top = self.panes[pane].wrap.y_for_line(line, g.line_height);
+        let y = (top + g.line_height / 2.0 - g.viewport_height / 2.0).clamp(0.0, max);
         if self.panes[pane].viewport.height <= 0.0 {
             self.pending_centers.push((pane, line));
         }
-        let max = (g.upper() - g.viewport_height).max(0.0);
-        let y = (line as f32 * g.line_height + g.line_height / 2.0 - g.viewport_height / 2.0).clamp(0.0, max);
         self.panes[pane].scroll.y = y.floor();
     }
 
     fn line_visible(&self, pane: usize, line: usize) -> bool {
         let g = self.geometry(pane);
-        let top = line as f32 * g.line_height;
+        let top = self.panes[pane].wrap.y_for_line(line, g.line_height);
         top >= g.scroll_y && top + g.line_height <= g.scroll_y + g.viewport_height
     }
 
@@ -697,11 +864,47 @@ impl FileDiff {
             self.center_line(pane, chunk.start_a);
         }
         self.update_cursor(pane, true);
+        // Briefly outline the chunk for orientation.
+        let color = self.focus_colors.get(pane).copied().unwrap_or(iced::Color::BLACK);
+        self.add_flash(pane, chunk.start_a, chunk.end_a, color, 0.3, 400, true);
     }
 
     fn next_diff(&mut self, down: bool) {
         let target = if down { self.cursor.next } else { self.cursor.prev };
         self.go_to_chunk(target, None, false);
+    }
+
+    /// `next_diff(use_viewport=True)` for the mouse wheel over a link
+    /// map: when the next or previous change is off screen, go to the
+    /// one after or before the middle of the view instead.
+    pub(super) fn next_diff_in_view(&mut self, down: bool) {
+        let Some(cmp) = self.cmp.as_ref() else {
+            return;
+        };
+        let n = self.panes.len();
+        let pane = self
+            .cursor
+            .pane
+            .or(self.focus_pane())
+            .unwrap_or(if n > 1 { 1 } else { 0 })
+            .min(n - 1);
+        let mut target = if down { self.cursor.next } else { self.cursor.prev };
+        let g = self.geometry(pane);
+        let wrap = &self.panes[pane].wrap;
+        let in_view = target
+            .and_then(|t| cmp.differ().get_chunk(t, pane, None))
+            .is_some_and(|c| {
+                let y = wrap.y_for_line(c.start_a, g.line_height);
+                y >= g.scroll_y && y <= g.scroll_y + g.viewport_height
+            });
+        if !in_view {
+            let half = g.scroll_y + g.viewport_height / 2.0;
+            let (line, _) = wrap.line_at_y(half, g.line_height, g.line_count);
+            let loc = chunks::CursorDetails::locate(cmp.differ(), pane, line);
+            target = if down { loc.next } else { loc.prev };
+            log::debug!("link map scroll: pane {pane}, middle line {line}, target {target:?}");
+        }
+        self.go_to_chunk(target, Some(pane), false);
     }
 
     /// `move_cursor`
@@ -796,8 +999,8 @@ impl FileDiff {
             }
         };
         let lines = buffer.lines();
-        self.find.no_match = !find::has_match(&re, lines);
-        match find::search(&re, lines, from, backwards) {
+        self.find.no_match = !find::has_match(&re, lines, self.find.regex);
+        match find::search(&re, lines, from, backwards, self.find.regex) {
             Some(((s, e), wrapped)) => {
                 self.find.wrapped = wrapped;
                 self.panes[pane].buffer.select(s, e);
@@ -867,11 +1070,9 @@ impl FileDiff {
         // Only replace an already-selected match at the cursor.
         if let (true, Some((s, e)), Some(newsel)) = (found, old, new)
             && (s, e) == newsel
-            && s.line == e.line
         {
-            let line = self.panes[pane].buffer.line(s.line).to_owned();
-            let matched = find::slice(&line, s.column, e.column);
-            let replacement = find::expand_replacement(&re, matched, &self.find.replacement, self.find.regex);
+            let matched = self.panes[pane].buffer.text_range(s, e);
+            let replacement = find::expand_replacement(&re, &matched, &self.find.replacement, self.find.regex);
             let before = self.panes[pane].buffer.line_count().max(1);
             let edit = self.panes[pane].buffer.replace_range(s, e, &replacement);
             self.record_user_edit(pane, edit, before);
@@ -898,6 +1099,19 @@ impl FileDiff {
         if changes.is_empty() {
             return;
         }
+        if let find::Replaced::Text(lines) = changes {
+            // Matches spanning lines: one edit of the whole text.
+            let cursor = self.panes[pane].buffer.cursor();
+            let count = self.panes[pane].buffer.line_count();
+            let before = count.max(1);
+            let edit = self.panes[pane].buffer.replace_lines(0..count, lines);
+            self.record_user_edit(pane, edit, before);
+            self.panes[pane].buffer.set_cursor(cursor, false);
+            return;
+        }
+        let find::Replaced::Lines(changes) = changes else {
+            return;
+        };
         let cursor = self.panes[pane].buffer.cursor();
         self.undo.begin_group();
         for (line, text) in changes {
@@ -1144,6 +1358,10 @@ impl FileDiff {
             Act::ToggleCurrentLine => {
                 self.view_options.highlight_current_line = !self.view_options.highlight_current_line
             }
+            Act::ToggleWrap => {
+                self.view_options.wrap = !self.view_options.wrap;
+                self.refresh_wraps();
+            }
             Act::ToggleReadOnly(pane) => {
                 if let Some(p) = self.panes.get_mut(pane) {
                     p.editable = !p.editable;
@@ -1185,7 +1403,7 @@ impl FileDiff {
                     Message::OpenChosen(pane, h.map(|h| h.path().to_path_buf()))
                 });
             }
-            Act::Display => self.dialog = Some(Dialog::Display),
+            Act::Display(pane) => self.dialog = Some(Dialog::Display { pane }),
             Act::ToggleOverwrite => self.overwrite = !self.overwrite,
             Act::Popup(kind) => {
                 self.popup = match (kind, self.popup) {

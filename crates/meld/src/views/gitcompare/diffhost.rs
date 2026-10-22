@@ -7,10 +7,11 @@
 //!
 //! - `DiffHost::embedded(shared)`, `set_files(Vec<EmbeddedFile>, shared)`
 //! - `pane_geometry(pane) -> Option<PaneGeometry>` (0-based line `i` is at
-//!   `y = i * line_height - scroll_y` from the top of the pane's text)
+//!   `PaneGeometry::line_y(i)` below `header_height`, which accounts for
+//!   wrapped lines and a message shown above that pane)
 //! - `scroll_to_line(pane, line)`, `first_change()`, `is_loading()`
 //! - [`DiffHost::header_height`]: how far below the top of the view the
-//!   panes' text starts, so that the Why column lines up
+//!   file header row ends, so that the Why column lines up
 //! - [`DiffHost::set_hover`]: lines of the hovered card, drawn highlighted
 //! - the tab methods, forwarded unchanged
 
@@ -41,7 +42,7 @@ impl DiffHost {
         self.0.is_loading()
     }
 
-    pub fn pane_geometry(&self, pane: usize) -> Option<PaneGeometry> {
+    pub fn pane_geometry(&self, pane: usize) -> Option<PaneGeometry<'_>> {
         self.0.pane_geometry(pane)
     }
 

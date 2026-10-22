@@ -18,10 +18,15 @@
 //!   builder: `on_action`, `scroll`/`scroll_y`/`scroll_x`, `metrics`,
 //!   `font`, `highlights`, `inline_highlights`, `sync_points`, `syntax`,
 //!   `show_line_numbers`, `show_whitespace`, `highlight_current_line`,
-//!   `overscroll_lines`, `id`), [`Metrics`], `content_height`,
-//!   `max_scroll_y`, `visible_lines`.
-//! - [`link_map`]: [`LinkMap`] canvas between two panes.
-//! - [`chunk_map`]: [`ChunkMap`] overview strip, emitting [`MapScroll`].
+//!   `overscroll_lines`, `wrap`, `dimmed`, `search_matches`, `flashes`,
+//!   `id`), [`Metrics`], `content_height`, `max_scroll_y`, `visible_lines`.
+//! - [`wrap`]: [`WrapMode`], [`WrapLayout`] (visual rows per line and the
+//!   line ↔ y mapping every widget below accepts via `.wrap(..)`),
+//!   [`wrap_line`].
+//! - [`link_map`]: [`LinkMap`] canvas between two panes; wheel scrolling
+//!   over it emits `on_scroll(down)` (Meld jumps between changes).
+//! - [`chunk_map`]: [`ChunkMap`] overview strip, emitting [`MapScroll`],
+//!   drawn as chunk bars or a miniature of the text ([`MapStyle`]).
 //! - [`action_gutter`]: [`ActionGutter`] chunk buttons emitting
 //!   `(chunk index, ChunkAction)`; [`ActionMode`], [`ChunkAction`],
 //!   [`classify`](action_gutter::classify).
@@ -34,13 +39,14 @@
 //!   presets `light()`, `dark()`, `meld_classic()`; `for_new_side()`
 //!   swaps insert/delete colours for the pane on the "new" side.
 //! - [`chunk`]: input types [`DiffChunk`], [`ChunkKind`], [`LineHighlight`],
-//!   [`InlineHighlight`], [`MapChunk`], and converters `line_highlights`,
-//!   `map_chunks`.
+//!   [`InlineHighlight`], [`LineFlash`], [`MapChunk`], and converters
+//!   `line_highlights`, `map_chunks`.
 //! - [`scroll_sync`]: [`sync_scroll`] / [`calc_syncpoint`] for Meld-style
 //!   linked scrolling.
 //!
 //! Wiring: the application owns one `Buffer`, `Highlighter` and scroll
-//! offset per pane. On `Action::Scrolled { x, y }` from pane *i* it stores
+//! offset per pane (and a `WrapLayout` when wrapping lines, updated on
+//! `Action::WrapColumns` and after edits). On `Action::Scrolled { x, y }` from pane *i* it stores
 //! the offsets, then computes the other panes' offsets with
 //! [`sync_scroll`] and passes them all back via `.scroll_y(..)`. The same
 //! offsets and [`Metrics::line_height`] feed the link maps, action gutters
@@ -57,15 +63,18 @@ pub mod link_map;
 pub mod scroll_sync;
 pub mod style;
 pub mod text_pane;
+pub mod wrap;
 
 pub use action_gutter::{ActionGutter, ActionMode, ChunkAction, Direction, action_gutter};
 pub use buffer::{Action, ApplyError, Buffer, Edit, EditAction, Motion, Position};
 pub use chunk::{
-    ChunkKind, DiffChunk, InlineHighlight, LineHighlight, MapChunk, line_highlights, map_chunks,
+    ChunkKind, DiffChunk, InlineHighlight, LineFlash, LineHighlight, MapChunk, line_highlights,
+    map_chunks,
 };
-pub use chunk_map::{ChunkMap, MapScroll, chunk_map};
+pub use chunk_map::{ChunkMap, MapScroll, MapStyle, chunk_map};
 pub use highlight::{Highlighter, StyleSpan, SyntaxStyle};
 pub use link_map::{LinkMap, link_map};
 pub use scroll_sync::{ScrollGeometry, calc_syncpoint, sync_scroll};
 pub use style::{ChunkColor, ChunkColors, PaneStyle, TextStyle};
 pub use text_pane::{Metrics, TextPane, text_pane};
+pub use wrap::{WrapLayout, WrapMode, wrap_line};

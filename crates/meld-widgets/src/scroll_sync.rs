@@ -6,11 +6,11 @@
 //! the chunks between them, and store the returned offset for that pane.
 
 use crate::chunk::DiffChunk;
-use crate::text_pane::content_height;
+use crate::wrap::{WrapLayout, or_identity};
 
 /// Scroll geometry of one pane.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ScrollGeometry {
+#[derive(Debug, Clone, Copy)]
+pub struct ScrollGeometry<'a> {
     /// Current vertical offset (ignored for the target pane).
     pub scroll_y: f32,
     /// Visible height of the pane.
@@ -21,12 +21,19 @@ pub struct ScrollGeometry {
     pub line_count: usize,
     /// Lines that can be scrolled past the end.
     pub overscroll_lines: usize,
+    /// Visual rows of the pane when it wraps lines (`None`: one row per
+    /// line).
+    pub wrap: Option<&'a WrapLayout>,
 }
 
-impl ScrollGeometry {
+impl ScrollGeometry<'_> {
     /// Scrollable content height (the adjustment's `upper`).
     pub fn upper(&self) -> f32 {
-        content_height(self.line_count, self.line_height, self.overscroll_lines)
+        or_identity(self.wrap).content_height(
+            self.line_count,
+            self.line_height,
+            self.overscroll_lines,
+        )
     }
 
     fn max_scroll(&self) -> f32 {
@@ -54,7 +61,13 @@ pub fn sync_scroll(source: &ScrollGeometry, target: &ScrollGeometry, chunks: &[D
     let syncpoint = calc_syncpoint(source.scroll_y, source.viewport_height, source.upper());
     let sync_y = source.scroll_y + source.viewport_height * syncpoint;
     let lh = source.line_height.max(1.0);
-    let target_line = (sync_y / lh).max(0.0);
+    // The line at the sync point, with how far into it the point is (a
+    // wrapped line may be half way through).
+    let sw = or_identity(source.wrap);
+    let row = (sync_y / lh).floor().max(0.0) as usize;
+    let line = sw.line_at_row(row).0.min(source.line_count.max(1) - 1);
+    let height = sw.line_height(line, lh).max(1.0);
+    let target_line = (line as f32 + (sync_y - sw.y_for_line(line, lh)) / height).max(0.0);
 
     let (mut mbegin, mut mend) = (0.0f32, source.line_count as f32);
     let (mut obegin, mut oend) = (0.0f32, target.line_count as f32);
@@ -79,12 +92,14 @@ pub fn sync_scroll(source: &ScrollGeometry, target: &ScrollGeometry, chunks: &[D
     let other_line = obegin + fraction * (oend - obegin);
 
     let tlh = target.line_height;
-    let mut val = other_line.floor() * tlh;
-    let at_end = other_line.floor() as usize >= target.line_count;
-    let line_factor = if at_end { 1.0 } else { other_line.fract() };
-    if !at_end {
-        val += line_factor * tlh;
-    }
+    let tw = or_identity(target.wrap);
+    let other = other_line.floor() as usize;
+    let mut val = if other >= target.line_count {
+        // Special case for EOF.
+        tw.y_for_line(target.line_count, tlh)
+    } else {
+        tw.y_for_line(other, tlh) + other_line.fract() * tw.line_height(other, tlh)
+    };
     if syncpoint > 0.5 {
         let overscroll_scale = (syncpoint - 0.5) / 0.5;
         val += target.overscroll_lines as f32 * tlh * overscroll_scale;
@@ -98,13 +113,14 @@ mod tests {
     use super::*;
     use crate::chunk::ChunkKind;
 
-    fn geo(scroll_y: f32, lines: usize) -> ScrollGeometry {
+    fn geo<'a>(scroll_y: f32, lines: usize) -> ScrollGeometry<'a> {
         ScrollGeometry {
             scroll_y,
             viewport_height: 200.0,
             line_height: 10.0,
             line_count: lines,
             overscroll_lines: 5,
+            wrap: None,
         }
     }
 
@@ -133,6 +149,32 @@ mod tests {
         assert_eq!(sync_scroll(&src, &geo(0.0, 320), &chunks), 1200.0);
         // Before the insert nothing changes.
         assert_eq!(sync_scroll(&geo(0.0, 300), &geo(0.0, 320), &chunks), 0.0);
+    }
+
+    #[test]
+    fn wrapped_source_lines_up_by_line() {
+        use crate::buffer::Buffer;
+        use crate::wrap::{WrapLayout, WrapMode};
+        // Line 2 wraps over 11 rows: line 20 starts at row 30 on the
+        // wrapped side and at row 20 on the other.
+        let mut lines: Vec<String> = (0..100).map(|i| format!("line {i}")).collect();
+        lines[2] = "word ".repeat(22);
+        let buffer = Buffer::new(lines);
+        let mut wrap = WrapLayout::new(WrapMode::Word);
+        wrap.set_columns(10);
+        wrap.update(&buffer);
+        assert_eq!(wrap.rows_before(20), 30);
+        // The middle of the page (100px down) half way through line 20.
+        let mut src = geo(305.0 - 100.0, 100);
+        src.wrap = Some(&wrap);
+        assert_eq!(sync_scroll(&src, &geo(0.0, 100), &[]), 205.0 - 100.0);
+        // And back.
+        let mut tgt = geo(0.0, 100);
+        tgt.wrap = Some(&wrap);
+        assert_eq!(
+            sync_scroll(&geo(205.0 - 100.0, 100), &tgt, &[]),
+            305.0 - 100.0
+        );
     }
 
     #[test]

@@ -120,6 +120,22 @@ pub struct InlineHighlight {
     pub columns: Range<usize>,
 }
 
+/// A fading highlight over lines (Meld's `add_fading_highlight`, shown
+/// after jumping to a chunk or copying one). The application animates the
+/// colour's alpha and drops the flash when it reaches zero.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LineFlash {
+    /// First line covered.
+    pub start: usize,
+    /// End of the covered lines (exclusive; equal to `start` for a
+    /// zero-height marker).
+    pub end: usize,
+    /// Current colour, including the animated alpha.
+    pub color: iced::Color,
+    /// Draw an outline instead of filling the lines.
+    pub stroke: bool,
+}
+
 /// A chunk in the overview strip of one pane.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MapChunk {

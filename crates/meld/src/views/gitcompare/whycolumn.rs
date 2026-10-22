@@ -72,10 +72,7 @@ pub fn wanted_tops(cards: &[Card], panes: [Option<PaneGeometry>; 2]) -> Vec<f32>
                 Side::Old => 0,
                 Side::New => 1,
             };
-            let top = panes[pane].map(|g| {
-                let line = line.saturating_sub(1).min(g.line_count);
-                line as f32 * g.line_height - g.scroll_y
-            });
+            let top = panes[pane].map(|g| g.line_y(line.saturating_sub(1)));
             last = top.unwrap_or(last);
             last
         })
@@ -638,12 +635,14 @@ mod tests {
         }
     }
 
-    fn geometry(scroll_y: f32) -> Option<PaneGeometry> {
+    fn geometry(scroll_y: f32) -> Option<PaneGeometry<'static>> {
         Some(PaneGeometry {
             scroll_y,
             line_height: 20.0,
             viewport_height: 400.0,
             line_count: 100,
+            top: 0.0,
+            wrap: None,
         })
     }
 

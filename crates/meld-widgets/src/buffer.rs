@@ -84,7 +84,7 @@ pub enum EditAction {
 /// An action emitted by the text pane.
 ///
 /// Pass everything except [`Action::Scrolled`], [`Action::Resized`],
-/// [`Action::Focused`] and [`Action::ContextMenu`] (which concern the
+/// [`Action::WrapColumns`], [`Action::Focused`] and [`Action::ContextMenu`] (which concern the
 /// application, not the text) to [`Buffer::perform`]; those are ignored by
 /// it anyway.
 #[derive(Debug, Clone, PartialEq)]
@@ -115,6 +115,10 @@ pub enum Action {
     },
     /// The text area (excluding gutter) changed size.
     Resized(Size),
+    /// Character cells that fit in a row of the text area, sent when the
+    /// pane wraps lines and its [`WrapLayout`](crate::wrap::WrapLayout)
+    /// has a different width: pass it to `WrapLayout::set_columns`.
+    WrapColumns(usize),
     /// The pane gained (`true`) or lost (`false`) keyboard focus.
     Focused(bool),
     /// Secondary click: the line/column under the pointer and the pointer
@@ -474,6 +478,7 @@ impl Buffer {
             }
             Action::Scrolled { .. }
             | Action::Resized(_)
+            | Action::WrapColumns(_)
             | Action::Focused(_)
             | Action::ContextMenu(..) => None,
         }

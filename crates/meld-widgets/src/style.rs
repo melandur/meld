@@ -138,6 +138,10 @@ pub struct PaneStyle {
     pub overscroll: Color,
     /// Intraline change background (`meld:inline`).
     pub inline: Color,
+    /// Text hidden from the comparison by text filters (`meld:dimmed`).
+    pub dimmed: Color,
+    /// Background of find matches (`search-match`).
+    pub search_match: Color,
     /// Chunk colours.
     pub chunks: ChunkColors,
     /// Widget background used by link map and action gutter
@@ -212,6 +216,8 @@ impl PaneStyle {
             sync_point: hex(0x555555),
             overscroll: rgba(50, 50, 50, 0.1),
             inline: hex(0xb6e3ff),
+            dimmed: hex(0x999999),
+            search_match: hex(0xfce94f),
             chunks: ChunkColors {
                 insert: ChunkColor {
                     fill: hex(0xe6ffec),
@@ -284,6 +290,8 @@ impl PaneStyle {
             sync_point: hex(0xbbbbbb),
             overscroll: rgba(255, 255, 255, 0.05),
             inline: hex(0x1f4f80),
+            dimmed: hex(0x6a6a6a),
+            search_match: rgba(196, 160, 0, 0.55),
             chunks: ChunkColors {
                 insert: ChunkColor {
                     fill: hex(0x173d22),

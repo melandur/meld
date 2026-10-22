@@ -24,14 +24,16 @@
 //! - [`FileDiff::set_files`] loads [`EmbeddedFile`]s (path, pane label,
 //!   read-only flag) and compares them.
 //! - [`FileDiff::pane_geometry`] returns a pane's [`PaneGeometry`]; line
-//!   `i` (0-based) is drawn at `y = i * line_height - scroll_y` from the
-//!   top of the pane's text area.
+//!   `i` (0-based) is drawn at [`PaneGeometry::line_y`]`(i)` below
+//!   [`FileDiff::header_height`] (which accounts for a message shown above
+//!   that pane only, and for wrapped lines).
 //! - [`FileDiff::scroll_to_line`], [`FileDiff::first_change`] (the
 //!   pane-1 line of the first chunk), [`FileDiff::is_loading`].
 //! - [`FileDiff::header_height`]: how far below the top of the view the
-//!   panes' text starts (file header row, plus a fixed-height message row
-//!   while a message is shown); [`FileDiff::set_hover`]: extra line
-//!   highlights per pane drawn over the chunks.
+//!   file header row ends; a pane's message area (fixed height when
+//!   embedded) is included in its [`PaneGeometry::top`];
+//!   [`FileDiff::set_hover`]: extra line highlights per pane drawn over
+//!   the chunks.
 //! - The parent maps [`Message`] into its own and forwards `update`,
 //!   `command`, `view`, `toolbar`, `menu_items`, `unsaved`,
 //!   `request_close`, `settings_changed` and `subscription`.
@@ -49,14 +51,17 @@ mod view;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use iced::keyboard;
 use iced::widget::Id;
 use iced::{Element, Font, Size, Subscription, Task, Vector};
 use meld_diff::{FileComparison, InlineCache, Syncpoints, TextBuffer, UndoAction, UndoSequence};
 use meld_files::{NewlineType, Newlines, TextEncoding};
-use meld_widgets::{Action, Buffer, ChunkAction, Highlighter, InlineHighlight, MapScroll, Metrics, PaneStyle};
+use meld_widgets::{
+    Action, Buffer, ChunkAction, Highlighter, InlineHighlight, LineFlash, MapScroll, MapStyle, Metrics, PaneStyle,
+    WrapLayout, WrapMode,
+};
 
 use crate::command::Command;
 use crate::shared::Shared;
@@ -89,12 +94,27 @@ pub struct EmbeddedFile {
 
 /// Vertical geometry of a pane's text area.
 #[allow(dead_code)] // used by views embedding a comparison
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PaneGeometry {
+#[derive(Debug, Clone, Copy)]
+pub struct PaneGeometry<'a> {
     pub scroll_y: f32,
     pub line_height: f32,
     pub viewport_height: f32,
     pub line_count: usize,
+    /// How far below [`FileDiff::header_height`] the pane's text starts
+    /// (a message area above this pane only).
+    pub top: f32,
+    /// Visual rows of the lines when they are wrapped.
+    pub wrap: Option<&'a WrapLayout>,
+}
+
+#[allow(dead_code)] // used by views embedding a comparison
+impl PaneGeometry<'_> {
+    /// Top of 0-based `line` (clamped to the end of the text) relative to
+    /// [`FileDiff::header_height`].
+    pub fn line_y(&self, line: usize) -> f32 {
+        let wrap = self.wrap.unwrap_or(WrapLayout::identity());
+        self.top + wrap.y_for_line(line.min(self.line_count), self.line_height) - self.scroll_y
+    }
 }
 
 const OVERSCROLL_LINES: usize = meld_widgets::text_pane::DEFAULT_OVERSCROLL_LINES;
@@ -245,6 +265,16 @@ struct Pane {
     /// the chunk highlights; when set, the chunk highlights plus these.
     hover_lines: Vec<std::ops::Range<usize>>,
     hover: Vec<meld_widgets::LineHighlight>,
+    /// Visual rows when wrapping lines.
+    wrap: WrapLayout,
+    /// Text hidden by text filters, in the lines around the view.
+    dimmed: Vec<InlineHighlight>,
+    /// Find matches in the lines around the view.
+    matches: Vec<InlineHighlight>,
+    /// What `dimmed` and `matches` were computed for.
+    decorations_key: Option<u64>,
+    /// Fading highlights, as drawn now.
+    flashes: Vec<LineFlash>,
 }
 
 impl Pane {
@@ -267,8 +297,25 @@ impl Pane {
             sync_lines: Vec::new(),
             hover_lines: Vec::new(),
             hover: Vec::new(),
+            wrap: WrapLayout::default(),
+            dimmed: Vec::new(),
+            matches: Vec::new(),
+            decorations_key: None,
+            flashes: Vec::new(),
         }
     }
+}
+
+/// A fading highlight being animated (`TextviewLineAnimation`).
+#[derive(Debug, Clone, Copy)]
+struct Flash {
+    pane: usize,
+    start: usize,
+    end: usize,
+    color: iced::Color,
+    started: Instant,
+    duration: Duration,
+    stroke: bool,
 }
 
 /// A running comparison job.
@@ -292,6 +339,8 @@ struct ViewOptions {
     show_line_numbers: bool,
     show_whitespace: bool,
     highlight_current_line: bool,
+    /// Text wrapping (`wrap-mode-bool`).
+    wrap: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -338,7 +387,9 @@ enum Dialog {
         pane: usize,
         filter: String,
     },
-    Display,
+    Display {
+        pane: usize,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -399,12 +450,13 @@ pub enum Act {
     ToggleLineNumbers,
     ToggleWhitespace,
     ToggleCurrentLine,
+    ToggleWrap,
     ToggleReadOnly(usize),
     ChooseEncoding(usize),
     ChooseLanguage(usize),
     SetNewline(usize, NewlineType),
     OpenFile(usize),
-    Display,
+    Display(usize),
     ToggleOverwrite,
     Popup(Option<PopupKind>),
 }
@@ -436,6 +488,10 @@ pub enum DialogMessage {
 pub enum Message {
     Pane(usize, Action),
     MapScroll(usize, MapScroll),
+    /// Mouse wheel over a link map: `true` for down.
+    LinkScroll(bool),
+    /// Animation frame for fading highlights.
+    Tick(Instant),
     /// Action gutter: pair `(from, to)`, chunk index in that pair's list.
     Gutter(usize, usize, usize, ChunkAction),
     Loaded(u64, usize, Result<Box<Loaded>, LoadFailure>),
@@ -493,6 +549,9 @@ pub struct FileDiff {
     text_filters: Vec<TextFilter>,
     ignore_blank_lines: bool,
     show_overview_map: bool,
+    map_style: MapStyle,
+    /// The `wrap-mode` setting.
+    wrap_setting: meld_config::WrapMode,
     view_options: ViewOptions,
     settings_view_options: ViewOptions,
     highlight_syntax: bool,
@@ -513,6 +572,9 @@ pub struct FileDiff {
     embedded: bool,
     /// Pane and line to centre once the pane knows its size.
     pending_centers: Vec<(usize, usize)>,
+    flashes: Vec<Flash>,
+    /// `focus-highlight` colour per pane (fading highlight after jumps).
+    focus_colors: Vec<iced::Color>,
     spinner: usize,
 }
 
@@ -524,6 +586,7 @@ impl FileDiff {
             show_line_numbers: settings.show_line_numbers,
             show_whitespace: settings.enable_space_drawer,
             highlight_current_line: settings.highlight_current_line,
+            wrap: settings.wrap_mode != meld_config::WrapMode::None,
         };
         let mut diff = FileDiff {
             panes: (0..n).map(|_| Pane::new()).collect(),
@@ -553,6 +616,8 @@ impl FileDiff {
             text_filters: text_filters_from(settings),
             ignore_blank_lines: settings.ignore_blank_lines,
             show_overview_map: settings.show_overview_map,
+            map_style: map_style(settings.overview_map_style),
+            wrap_setting: settings.wrap_mode,
             view_options,
             settings_view_options: view_options,
             highlight_syntax: settings.highlight_syntax,
@@ -572,12 +637,15 @@ impl FileDiff {
             force_load: false,
             embedded: false,
             pending_centers: Vec::new(),
+            flashes: Vec::new(),
+            focus_colors: Vec::new(),
             spinner: 0,
         };
         diff.refresh_styles(shared);
         for pane in &mut diff.panes {
             pane.buffer.set_indentation(diff.tab_width, diff.insert_spaces);
         }
+        diff.refresh_wraps();
         diff
     }
 
@@ -652,14 +720,43 @@ impl FileDiff {
 
     /// The vertical geometry of `pane`.
     #[allow(dead_code)] // embedding API
-    pub fn pane_geometry(&self, pane: usize) -> Option<PaneGeometry> {
+    pub fn pane_geometry(&self, pane: usize) -> Option<PaneGeometry<'_>> {
         let p = self.panes.get(pane)?;
         Some(PaneGeometry {
             scroll_y: p.scroll.y,
             line_height: self.metrics.line_height,
             viewport_height: p.viewport.height,
             line_count: p.buffer.display_line_count(),
+            top: self.banner_height(pane),
+            wrap: p.wrap.is_wrapping().then_some(&p.wrap),
         })
+    }
+
+    /// Height of the message area above `pane`, when it is known (fixed
+    /// for embedded comparisons; otherwise measured from the panes).
+    fn banner_height(&self, pane: usize) -> f32 {
+        let Some(p) = self.panes.get(pane) else {
+            return 0.0;
+        };
+        if p.banner.is_none() {
+            return 0.0;
+        }
+        if self.embedded {
+            return view::EMBEDDED_BANNER_HEIGHT;
+        }
+        // The panes share the body's height; one without a message shows
+        // how tall that is.
+        let full = self
+            .panes
+            .iter()
+            .filter(|q| q.banner.is_none())
+            .map(|q| q.viewport.height)
+            .fold(0.0, f32::max);
+        if full > 0.0 {
+            (full - p.viewport.height).max(0.0)
+        } else {
+            0.0
+        }
     }
 
     /// Scrolls `pane` so that `line` is centred, syncing the other panes.
@@ -686,12 +783,7 @@ impl FileDiff {
     /// How far below the top of [`FileDiff::view`] the panes' text starts.
     #[allow(dead_code)] // embedding API
     pub fn header_height(&self) -> f32 {
-        let banner = if self.panes.iter().any(|p| p.banner.is_some()) {
-            view::EMBEDDED_BANNER_HEIGHT
-        } else {
-            0.0
-        };
-        view::HEADER_ROW_HEIGHT + 1.0 + banner
+        view::HEADER_ROW_HEIGHT + 1.0
     }
 
     /// Highlights lines of the two panes on top of the chunks (the
@@ -772,6 +864,7 @@ impl FileDiff {
         let n = self.panes.len();
         let sides = meld_config::diff_sides(n, self.extras.diff_sides.as_ref().map(|s| s.as_slice()));
         self.styles = (0..n).map(|i| style::pane_style(shared, sides[i])).collect();
+        self.focus_colors = (0..n).map(|i| style::focus_color(shared, sides[i])).collect();
         self.neutral_style = style::pane_style(shared, None);
     }
 
@@ -811,10 +904,17 @@ impl FileDiff {
 
     pub fn update(&mut self, message: Message, shared: &mut Shared, events: &mut Vec<Event>) -> Task<Message> {
         let task = self.handle(message, shared, events);
+        self.after_message();
+        task
+    }
+
+    /// Bookkeeping after every message or command.
+    fn after_message(&mut self) {
         self.process_undo_events();
+        self.refresh_wraps();
         self.ensure_inline_visible();
         self.rebuild_hover();
-        task
+        self.refresh_decorations();
     }
 
     fn handle(&mut self, message: Message, shared: &mut Shared, events: &mut Vec<Event>) -> Task<Message> {
@@ -825,6 +925,14 @@ impl FileDiff {
                     p.scroll.y = s.scroll_y;
                     self.sync_scroll(pane);
                 }
+                Task::none()
+            }
+            Message::LinkScroll(down) => {
+                self.next_diff_in_view(down);
+                Task::none()
+            }
+            Message::Tick(now) => {
+                self.animate(now);
                 Task::none()
             }
             Message::Gutter(from, to, index, action) => {
@@ -972,9 +1080,7 @@ impl FileDiff {
             _ => return Task::none(),
         };
         let task = self.act(act, shared, events);
-        self.process_undo_events();
-        self.ensure_inline_visible();
-        self.rebuild_hover();
+        self.after_message();
         task
     }
 
@@ -1025,17 +1131,22 @@ impl FileDiff {
             pane.buffer.set_indentation(self.tab_width, self.insert_spaces);
         }
         self.show_overview_map = settings.show_overview_map;
+        self.map_style = map_style(settings.overview_map_style);
         self.highlight_syntax = settings.highlight_syntax;
         self.detect_encodings = settings.detect_encodings.clone();
         let view_options = ViewOptions {
             show_line_numbers: settings.show_line_numbers,
             show_whitespace: settings.enable_space_drawer,
             highlight_current_line: settings.highlight_current_line,
+            wrap: settings.wrap_mode != meld_config::WrapMode::None,
         };
         if view_options != self.settings_view_options {
             self.settings_view_options = view_options;
             self.view_options = view_options;
         }
+        self.wrap_setting = settings.wrap_mode;
+        self.refresh_wraps();
+        self.refresh_decorations();
 
         // `on_text_filters_changed`: refresh only if the active filters
         // changed.
@@ -1095,6 +1206,9 @@ impl FileDiff {
         if self.is_loading() {
             subs.push(iced::time::every(std::time::Duration::from_millis(120)).map(|_| Message::Spin));
         }
+        if !self.flashes.is_empty() {
+            subs.push(iced::window::frames().map(Message::Tick));
+        }
         Subscription::batch(subs)
     }
 
@@ -1108,6 +1222,27 @@ impl FileDiff {
 
     pub fn view<'a>(&'a self, shared: &'a Shared) -> Element<'a, Message> {
         self.main_view(shared)
+    }
+}
+
+fn map_style(style: meld_config::OverviewMapStyle) -> MapStyle {
+    match style {
+        meld_config::OverviewMapStyle::Chunkmap => MapStyle::Chunks,
+        meld_config::OverviewMapStyle::CompactSourcemap => MapStyle::CompactSource,
+        meld_config::OverviewMapStyle::FullSourcemap => MapStyle::FullSource,
+    }
+}
+
+/// The wrap mode of the panes: the setting's when wrapping is on
+/// (word wrapping if the setting is "none"), as `wrap_mode_from_bool`.
+fn wrap_mode(setting: meld_config::WrapMode, on: bool) -> WrapMode {
+    if !on {
+        return WrapMode::None;
+    }
+    match setting {
+        meld_config::WrapMode::None | meld_config::WrapMode::Word => WrapMode::Word,
+        meld_config::WrapMode::Char => WrapMode::Char,
+        meld_config::WrapMode::WordChar => WrapMode::WordChar,
     }
 }
 

@@ -165,7 +165,35 @@ pub fn banner<'a, M: Clone + 'a>(
     for (label, msg) in actions {
         r = r.push(button(text(label).size(13)).padding([4, 10]).on_press(msg));
     }
-    container(r)
+    banner_box(kind, r.into())
+}
+
+/// A banner over a single pane: like [`banner`], with the buttons below
+/// the text so that it stays readable in narrow panes.
+pub fn pane_banner<'a, M: Clone + 'a>(
+    kind: BannerKind,
+    primary: impl text::IntoFragment<'a>,
+    secondary: Option<String>,
+    actions: Vec<(String, M)>,
+) -> Element<'a, M> {
+    use iced::widget::{column, row};
+
+    let mut body = column![text(primary).size(14).font(bold())].spacing(4);
+    if let Some(s) = secondary {
+        body = body.push(text(s).size(13));
+    }
+    if !actions.is_empty() {
+        let mut buttons = row![].spacing(8);
+        for (label, msg) in actions {
+            buttons = buttons.push(button(text(label).size(13)).padding([4, 10]).on_press(msg));
+        }
+        body = body.push(buttons.wrap());
+    }
+    banner_box(kind, body.width(Length::Fill).into())
+}
+
+fn banner_box<'a, M: 'a>(kind: BannerKind, content: Element<'a, M>) -> Element<'a, M> {
+    container(content)
         .padding([8, 12])
         .width(Length::Fill)
         .style(move |theme: &Theme| {

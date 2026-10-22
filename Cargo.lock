@@ -2422,7 +2422,9 @@ dependencies = [
  "log",
  "syntect",
  "thiserror 2.0.21",
+ "unicode-linebreak",
  "unicode-segmentation",
+ "unicode-width",
 ]
 
 [[package]]

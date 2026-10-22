@@ -50,13 +50,14 @@ impl Pane {
         }
     }
 
-    fn geometry(&self, lh: f32) -> ScrollGeometry {
+    fn geometry(&self, lh: f32) -> ScrollGeometry<'_> {
         ScrollGeometry {
             scroll_y: self.scroll.y,
             viewport_height: self.viewport_height,
             line_height: lh,
             line_count: self.buffer.line_count(),
             overscroll_lines: DEFAULT_OVERSCROLL_LINES,
+            wrap: None,
         }
     }
 }

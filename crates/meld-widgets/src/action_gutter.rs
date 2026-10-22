@@ -30,6 +30,7 @@ use iced::{Color, Element, Length, Point, Rectangle, Renderer, Size};
 
 use crate::chunk::{ChunkKind, DiffChunk};
 use crate::style::PaneStyle;
+use crate::wrap::{WrapLayout, or_identity};
 
 /// What a chunk button does (Meld's `ActionMode`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -93,6 +94,8 @@ pub struct ActionGutter<'a, Message> {
     style: &'a PaneStyle,
     scroll_y: f32,
     offset: f32,
+    pane_height: f32,
+    wrap: Option<&'a WrapLayout>,
     line_height: f32,
     source_editable: bool,
     target_editable: bool,
@@ -112,6 +115,8 @@ impl<'a, Message> ActionGutter<'a, Message> {
             style,
             scroll_y: 0.0,
             offset: 0.0,
+            pane_height: 0.0,
+            wrap: None,
             line_height: 18.0,
             source_editable: true,
             target_editable: true,
@@ -133,6 +138,19 @@ impl<'a, Message> ActionGutter<'a, Message> {
     /// Offset of the source pane's first line relative to the gutter top.
     pub fn pane_offset(mut self, offset: f32) -> Self {
         self.offset = offset;
+        self
+    }
+
+    /// Height of the source pane's text area: when shorter than the
+    /// gutter, the pane sits at its bottom (a message area above it).
+    pub fn pane_height(mut self, height: f32) -> Self {
+        self.pane_height = height;
+        self
+    }
+
+    /// Wrap layout of the source pane (`None`: one row per line).
+    pub fn wrap(mut self, layout: Option<&'a WrapLayout>) -> Self {
+        self.wrap = layout;
         self
     }
 
@@ -179,8 +197,20 @@ impl<'a, Message> ActionGutter<'a, Message> {
         self
     }
 
-    fn y_for_line(&self, line: usize) -> f32 {
-        line as f32 * self.line_height - self.scroll_y + self.offset
+    /// Offset of the source pane's first line in a gutter `height` tall.
+    fn offset(&self, height: f32) -> f32 {
+        let h = self.pane_height;
+        self.offset
+            + if h > 0.0 && h < height {
+                height - h
+            } else {
+                0.0
+            }
+    }
+
+    fn y_for_line(&self, line: usize, height: f32) -> f32 {
+        or_identity(self.wrap).y_for_line(line, self.line_height) - self.scroll_y
+            + self.offset(height)
     }
 
     /// Port of `_classify_change_actions`.
@@ -189,20 +219,23 @@ impl<'a, Message> ActionGutter<'a, Message> {
     }
 
     fn visible(&self, height: f32) -> std::ops::Range<usize> {
-        let top = self.scroll_y - self.offset;
-        let first = (top / self.line_height).floor().max(0.0) as usize;
-        let last = ((top + height) / self.line_height).ceil().max(0.0) as usize;
+        let top = self.scroll_y - self.offset(height);
+        let vis = or_identity(self.wrap).visible_lines(top, height, self.line_height, usize::MAX);
+        let (first, last) = (vis.start, vis.end);
         // Chunks starting at or before `last` and ending at or after `first`.
         let start = self.chunks.partition_point(|c| c.a.end < first);
         let end = self.chunks.partition_point(|c| c.a.start <= last);
         start..end.max(start)
     }
 
-    fn button_rect(&self, chunk: &DiffChunk, width: f32) -> Rectangle {
-        let y = self.y_for_line(chunk.a.start) + 1.0;
+    fn button_rect(&self, chunk: &DiffChunk, size: Size) -> Rectangle {
+        let y = self.y_for_line(chunk.a.start, size.height) + 1.0;
         Rectangle::new(
             Point::new(1.0, y),
-            Size::new((width - 2.0).max(1.0), (self.line_height - 2.0).max(1.0)),
+            Size::new(
+                (size.width - 2.0).max(1.0),
+                (self.line_height - 2.0).max(1.0),
+            ),
         )
     }
 
@@ -214,7 +247,7 @@ impl<'a, Message> ActionGutter<'a, Message> {
             .enumerate()
             .find_map(|(i, c)| {
                 let action = self.classify(c, mode)?;
-                self.button_rect(c, size.width)
+                self.button_rect(c, size)
                     .contains(p)
                     .then_some((range.start + i, action))
             })
@@ -287,7 +320,7 @@ impl<Message, Theme> canvas::Program<Message, Theme, Renderer> for ActionGutter<
         let mode = self.mode(state);
         let hit = cursor.position_in(bounds).and_then(|p| {
             self.hit(p, bounds.size(), mode).map(|(i, m)| {
-                let r = self.button_rect(&self.chunks[i], bounds.width);
+                let r = self.button_rect(&self.chunks[i], bounds.size());
                 let upper = p.y < r.center_y();
                 (i, m, upper)
             })
@@ -343,8 +376,8 @@ impl<Message, Theme> canvas::Program<Message, Theme, Renderer> for ActionGutter<
         for (i, chunk) in self.chunks[range.clone()].iter().enumerate() {
             let index = range.start + i;
             let colors = style.chunks.get(chunk.kind);
-            let y = self.y_for_line(chunk.a.start);
-            let h = (self.y_for_line(chunk.a.end) - y + 1.0).max(2.0);
+            let y = self.y_for_line(chunk.a.start, bounds.height);
+            let h = (self.y_for_line(chunk.a.end, bounds.height) - y + 1.0).max(2.0);
             if !chunk.a.is_empty() {
                 frame.fill_rectangle(Point::new(-0.5, y), Size::new(width + 1.0, h), colors.fill);
                 if self.current == Some(index) {
@@ -365,7 +398,7 @@ impl<Message, Theme> canvas::Program<Message, Theme, Renderer> for ActionGutter<
             let Some(action) = self.classify(chunk, mode) else {
                 continue;
             };
-            let r = self.button_rect(chunk, width);
+            let r = self.button_rect(chunk, bounds.size());
             let half = |upper: bool| {
                 if action == ActionMode::Insert {
                     Rectangle {

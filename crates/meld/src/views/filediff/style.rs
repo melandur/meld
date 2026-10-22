@@ -58,6 +58,10 @@ pub fn pane_style(shared: &Shared, side: Option<DiffSide>) -> PaneStyle {
     style.sync_point = color(colors.syncpoint_outline);
     style.overscroll = color(colors.overscroll);
     style.inline = color(colors.inline);
+    style.dimmed = color(colors.dimmed);
+    if let Some(c) = look("search-match", StyleAttr::Background) {
+        style.search_match = c;
+    }
     style.chunks = ChunkColors {
         insert: chunk(colors.insert),
         delete: chunk(colors.delete),
@@ -77,6 +81,12 @@ pub fn pane_style(shared: &Shared, side: Option<DiffSide>) -> PaneStyle {
         style.syntax = syntax_styles(shared);
     }
     style
+}
+
+/// The `focus-highlight` colour of a pane on `side` (the outline flashed
+/// after jumping to a chunk).
+pub fn focus_color(shared: &Shared, side: Option<DiffSide>) -> Color {
+    color(shared.style.diff_colors(shared.settings.diff_colors, side).focus_highlight)
 }
 
 /// Syntax styles (`def:*` and language styles) from the scheme.
