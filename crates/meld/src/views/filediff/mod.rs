@@ -560,7 +560,7 @@ pub struct FileDiff {
     metrics: Metrics,
     font: Font,
     styles: Vec<PaneStyle>,
-    neutral_style: PaneStyle,
+    link_style: PaneStyle,
     tab_width: usize,
     insert_spaces: bool,
     detect_encodings: Vec<String>,
@@ -626,7 +626,7 @@ impl FileDiff {
             metrics: Metrics::new(shared.mono_size()),
             font: shared.mono_font(),
             styles: Vec::new(),
-            neutral_style: PaneStyle::default(),
+            link_style: PaneStyle::default(),
             tab_width: settings.indent_width.max(1) as usize,
             insert_spaces: settings.insert_spaces_instead_of_tabs,
             detect_encodings: settings.detect_encodings.clone(),
@@ -869,9 +869,13 @@ impl FileDiff {
     fn refresh_styles(&mut self, shared: &Shared) {
         let n = self.panes.len();
         let sides = meld_config::diff_sides(n, self.extras.diff_sides.as_ref().map(|s| s.as_slice()));
-        self.styles = (0..n).map(|i| style::pane_style(shared, sides[i])).collect();
+        self.styles = (0..n)
+            .map(|i| style::pane_style(shared, &style::pane_colors(shared, sides[i])))
+            .collect();
         self.focus_colors = (0..n).map(|i| style::focus_color(shared, sides[i])).collect();
-        self.neutral_style = style::pane_style(shared, None);
+        // Link maps are side-less; only a two-way comparison has a side on
+        // its left pane, and three-way ones have none.
+        self.link_style = style::pane_style(shared, &style::link_colors(shared, sides[0]));
     }
 
     fn active_filters(&self) -> Vec<regex::Regex> {

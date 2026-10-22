@@ -77,6 +77,24 @@ impl DiffColors {
         }
     }
 
+    /// The colours with the `diff-color-opacity` setting (in percent)
+    /// applied; see [`diff_color_alphas`]. 100% leaves them unchanged.
+    pub fn with_opacity(mut self, percent: i32) -> DiffColors {
+        let (fill, line) = diff_color_alphas(percent);
+        for chunk in [
+            &mut self.insert,
+            &mut self.delete,
+            &mut self.replace,
+            &mut self.conflict,
+            &mut self.error,
+        ] {
+            chunk.fill.a *= fill;
+            chunk.line.a *= line;
+        }
+        self.inline.a *= fill;
+        self
+    }
+
     fn chunk_mut(&mut self, tag: PaletteTag) -> &mut ChunkColors {
         match tag {
             PaletteTag::Insert => &mut self.insert,
@@ -84,6 +102,19 @@ impl DiffColors {
             PaletteTag::Replace => &mut self.replace,
         }
     }
+}
+
+/// Alpha factors for chunk fills (and inline highlights) and for chunk
+/// outlines at a `diff-color-opacity` of `percent`, which is clamped to
+/// [`crate::settings::DIFF_COLOR_OPACITY_RANGE`].
+///
+/// Fills scale with the opacity. Outlines fade only half as much, so
+/// that chunk edges, zero-height chunks and the link map's curves stay
+/// visible on faint fills.
+pub fn diff_color_alphas(percent: i32) -> (f32, f32) {
+    let (lo, hi) = crate::settings::DIFF_COLOR_OPACITY_RANGE;
+    let opacity = percent.clamp(lo, hi) as f32 / 100.0;
+    (opacity, 0.5 + 0.5 * opacity)
 }
 
 /// Foreground colours for file states in folder and version control
@@ -224,6 +255,15 @@ impl Theme {
     /// [`get_diff_palette`]. Everything else comes from the scheme.
     pub fn diff_colors(&self, mode: DiffColorMode, side: Option<DiffSide>) -> DiffColors {
         let mut colors = self.scheme_diff_colors();
+        if mode == DiffColorMode::SchemeChanges {
+            // By change, as the palettes do: lines only in the old file
+            // are removed, lines only in the new file added.
+            let (removed, added) = (self.removed_colors(), colors.insert);
+            (colors.insert, colors.delete) = match side {
+                Some(DiffSide::New) => (removed, added),
+                _ => (added, removed),
+            };
+        }
         if let Some(palette) = get_diff_palette(mode, self.dark, side) {
             for tag in PaletteTag::ALL {
                 let tone = palette.tone(tag);
@@ -233,6 +273,60 @@ impl Theme {
                 };
             }
             colors.inline = Rgba::parse(palette.inline()).unwrap_or(colors.inline);
+        }
+        colors
+    }
+
+    /// Colours of removed lines for [`DiffColorMode::SchemeChanges`].
+    ///
+    /// Meld's base schemes only use `meld:delete` as a text colour (its
+    /// background is white), so the scheme's own `meld:delete` chunk
+    /// colours are used only when the scheme itself defines both its
+    /// background and line background. Otherwise the fill is the
+    /// `meld:delete` foreground blended into the text background, with
+    /// the foreground as the outline.
+    fn removed_colors(&self) -> ChunkColors {
+        use StyleAttr::{Background as Bg, Foreground as Fg, LineBackground as Line};
+        let is_base = [BASE_SCHEME, DARK_BASE_SCHEME].contains(&self.scheme.id());
+        let own = self.scheme.style("meld:delete").filter(|_| !is_base);
+        if let Some(style) = own
+            && let (Some(fill), Some(line)) = (style.color(Bg), style.color(Line))
+        {
+            return ChunkColors { fill, line };
+        }
+        let line = self.color("meld:delete", Fg);
+        let base = self
+            .scheme
+            .style("text")
+            .and_then(|s| s.color(Bg))
+            .unwrap_or(if self.dark {
+                Rgba::from_rgb8(0x1e, 0x1e, 0x1e)
+            } else {
+                Rgba::WHITE
+            });
+        let amount = if self.dark { 0.3 } else { 0.18 };
+        let mix = |b: f32, o: f32| b + (o - b) * amount;
+        let fill = Rgba::new(
+            mix(base.r, line.r),
+            mix(base.g, line.g),
+            mix(base.b, line.b),
+            1.0,
+        );
+        ChunkColors { fill, line }
+    }
+
+    /// Colours for a link map between `left_side` and the pane to its
+    /// right (`LinkMap.update_diff_colors`).
+    ///
+    /// Link maps use the side-less colours, which assume the left pane is
+    /// the old side; if it's actually the new side (e.g., a version
+    /// control comparison with the working copy on the left), insert and
+    /// delete colours swap to keep removed and added text coloured
+    /// correctly.
+    pub fn link_diff_colors(&self, mode: DiffColorMode, left_side: Option<DiffSide>) -> DiffColors {
+        let mut colors = self.diff_colors(mode, None);
+        if left_side == Some(DiffSide::New) {
+            std::mem::swap(&mut colors.insert, &mut colors.delete);
         }
         colors
     }

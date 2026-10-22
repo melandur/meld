@@ -55,11 +55,15 @@
 //! Diff colours:
 //! - `Theme::new(&SchemeManager, scheme_id, ui_dark)`,
 //!   `Theme::from_settings`, `Theme::diff_colors(DiffColorMode,
-//!   Option<DiffSide>) -> DiffColors`, `Theme::pane_diff_colors(mode,
+//!   Option<DiffSide>) -> DiffColors`, `Theme::link_diff_colors(mode,
+//!   left_side)`, `DiffColors::with_opacity(percent)`,
+//!   `style::diff_color_alphas(percent)`, `Theme::pane_diff_colors(mode,
 //!   num_panes, pane)`, `Theme::status_colors()`, `Theme::color(name,
 //!   StyleAttr) -> Rgba`.
 //! - `diff_sides(num_panes, Option<&[DiffSide]>) -> [Option<DiffSide>; 3]`,
-//!   `get_diff_palette(mode, dark, side) -> Option<DiffPalette>`.
+//!   `get_diff_palette(mode, dark, side) -> Option<DiffPalette>`,
+//!   `diff_tones(mode, dark) -> Option<DiffTones>`, `DiffColorMode::model()
+//!   -> ColorModel` (by side or by change).
 
 mod color;
 mod error;
@@ -72,7 +76,8 @@ pub mod style;
 pub use color::Rgba;
 pub use error::ConfigError;
 pub use palette::{
-    DiffColorMode, DiffPalette, DiffSide, DiffTone, PaletteTag, diff_sides, get_diff_palette,
+    ColorModel, DiffColorMode, DiffPalette, DiffSide, DiffTone, DiffTones, PaletteTag, diff_sides,
+    diff_tones, get_diff_palette,
 };
 pub use recent::{
     ComparisonType, MAX_RECENT, RecentComparison, RecentComparisons, parse_meldcmp, read_meldcmp,

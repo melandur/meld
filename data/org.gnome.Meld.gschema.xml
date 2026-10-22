@@ -29,6 +29,11 @@
     <value nick="scheme" value="0"/>
     <value nick="red-green" value="1"/>
     <value nick="colorblind" value="2"/>
+    <value nick="scheme-changes" value="3"/>
+    <value nick="red-green-blue" value="4"/>
+    <value nick="blue-orange" value="5"/>
+    <value nick="purple-green" value="6"/>
+    <value nick="high-contrast" value="7"/>
   </enum>
 
   <flags id="org.gnome.meld.spacesflags">
@@ -108,7 +113,13 @@
       <key name="diff-colors" enum="org.gnome.meld.diffcolors">
           <default>"scheme"</default>
           <summary>Colors used to highlight differences</summary>
-          <description>Which colors to use for changed, inserted and deleted text. "scheme" uses the colors of the current color scheme; "red-green" shows removed text in red and added text in green; "colorblind" shows removed text in orange and added text in blue.</description>
+          <description>Which colors to use for changed, inserted and deleted text. "scheme" uses the colors of the current color scheme; "scheme-changes" uses them too, with removed lines in the scheme's delete color. "red-green" colors everything in the old pane red and in the new pane green; "colorblind" does the same in orange and blue. The other palettes color each change the same in both panes: "red-green-blue" shows removed lines red, added green and changed blue; "blue-orange" orange, blue and teal; "purple-green" purple, green and slate; "high-contrast" uses saturated fills and strong outlines.</description>
+      </key>
+      <key name="diff-color-opacity" type="i">
+          <range min="10" max="100"/>
+          <default>100</default>
+          <summary>Opacity of difference colors</summary>
+          <description>Opacity of the colors highlighting differences, in percent. Chunk outlines fade half as much, so that they stay visible.</description>
       </key>
       <key name="enable-space-drawer" type='b'>
           <default>false</default>

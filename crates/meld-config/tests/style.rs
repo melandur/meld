@@ -4,8 +4,9 @@
 use std::collections::BTreeSet;
 
 use meld_config::{
-    ChunkColors, DiffColorMode, DiffColors, DiffSide, FontSpec, FontZoom, PaletteTag, Rgba,
-    SchemeManager, StyleAttr, StyleScheme, Theme, Underline, Variant, get_diff_palette,
+    ChunkColors, ChunkTag, ColorModel, DiffColorMode, DiffColors, DiffSide, FontSpec, FontZoom,
+    PaletteTag, Rgba, SchemeManager, StyleAttr, StyleScheme, Theme, Underline, Variant,
+    get_diff_palette,
 };
 
 const BASE_XML: &str = include_str!("../../../data/styles/meld-base.style-scheme.xml.in");
@@ -14,7 +15,9 @@ fn scheme_xml(id: &str) -> &'static str {
     match id {
         "meld-base" => BASE_XML,
         "meld-dark" => include_str!("../../../data/styles/meld-dark.style-scheme.xml.in"),
-        "meld-lens-light" => include_str!("../../../data/styles/meld-lens-light.style-scheme.xml.in"),
+        "meld-lens-light" => {
+            include_str!("../../../data/styles/meld-lens-light.style-scheme.xml.in")
+        }
         "meld-lens-dark" => include_str!("../../../data/styles/meld-lens-dark.style-scheme.xml.in"),
         "meld-monokai" => include_str!("../../../data/styles/meld-monokai.style-scheme.xml.in"),
         _ => unreachable!(),
@@ -348,7 +351,14 @@ fn zoom_reports_changes_correctly() {
 
 // test_diffpalette.py: meld.style integration
 
-const PALETTES: [DiffColorMode; 2] = [DiffColorMode::RedGreen, DiffColorMode::Colorblind];
+const PALETTES: [DiffColorMode; 6] = [
+    DiffColorMode::RedGreen,
+    DiffColorMode::Colorblind,
+    DiffColorMode::RedGreenBlue,
+    DiffColorMode::BlueOrange,
+    DiffColorMode::PurpleGreen,
+    DiffColorMode::HighContrast,
+];
 const SIDES: [Option<DiffSide>; 3] = [None, Some(DiffSide::Old), Some(DiffSide::New)];
 
 fn theme(id: &str) -> Theme {
@@ -461,6 +471,194 @@ fn pane_diff_colors_use_default_sides() {
         theme.pane_diff_colors(mode, 2, 7),
         theme.diff_colors(mode, None)
     );
+}
+
+/// The colours each widget of a two-way comparison draws a chunk with.
+/// Lines only in the left (old) file are a delete in the left pane, its
+/// action gutter and the link map, and an insert in the right pane;
+/// lines only in the right file the other way round.
+struct ChunkViews {
+    removed: [ChunkColors; 3],
+    added: [ChunkColors; 3],
+    changed: [ChunkColors; 3],
+}
+
+fn chunk_views(theme: &Theme, mode: DiffColorMode) -> ChunkViews {
+    let left = theme.pane_diff_colors(mode, 2, 0);
+    let right = theme.pane_diff_colors(mode, 2, 1);
+    let link = theme.link_diff_colors(mode, Some(DiffSide::Old));
+    ChunkViews {
+        removed: [left.delete, link.delete, right.insert],
+        added: [left.insert, link.insert, right.delete],
+        changed: [left.replace, link.replace, right.replace],
+    }
+}
+
+const ALL_SCHEMES: [&str; 7] = [
+    "meld-base",
+    "meld-dark",
+    "meld-lens-light",
+    "meld-lens-dark",
+    "meld-monokai",
+    "classic",
+    "solarized-dark",
+];
+
+#[test]
+fn chunks_match_across_panes() {
+    for id in ALL_SCHEMES {
+        for dark in [false, true] {
+            let theme = Theme::new(&manager(), id, dark);
+            for mode in DiffColorMode::ALL {
+                let views = chunk_views(&theme, mode);
+                let by_side = mode.model() == ColorModel::BySide;
+                for colors in [views.removed, views.added, views.changed] {
+                    let same = colors.iter().all(|c| *c == colors[0]);
+                    // Meld's by-side palettes colour each pane in one tone
+                    // and only the link map by change
+                    assert_eq!(same, !by_side, "{id} {mode:?}");
+                }
+                if !by_side && mode != DiffColorMode::Scheme {
+                    let [removed, added, changed] =
+                        [views.removed[0], views.added[0], views.changed[0]];
+                    assert_ne!(removed, added, "{id} {mode:?}");
+                    assert_ne!(removed, changed, "{id} {mode:?}");
+                    assert_ne!(added, changed, "{id} {mode:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn by_side_palettes_follow_meld() {
+    // As meld/diffpalette.py: the old pane is all removed, the new pane
+    // all added, and the link map is side-less.
+    let theme = Theme::new(&manager(), "meld-lens-dark", true);
+    for mode in [DiffColorMode::RedGreen, DiffColorMode::Colorblind] {
+        let views = chunk_views(&theme, mode);
+        let removed = get_diff_palette(mode, true, Some(DiffSide::Old))
+            .unwrap()
+            .replace;
+        let added = get_diff_palette(mode, true, Some(DiffSide::New))
+            .unwrap()
+            .replace;
+        let neutral = get_diff_palette(mode, true, None).unwrap();
+        let fill = |c: ChunkColors| c.fill.to_hex();
+        assert_eq!(fill(views.removed[0]), removed.fill);
+        assert_eq!(fill(views.changed[0]), removed.fill);
+        assert_eq!(fill(views.added[0]), removed.fill);
+        assert_eq!(fill(views.removed[2]), added.fill);
+        assert_eq!(fill(views.changed[2]), added.fill);
+        assert_eq!(fill(views.added[2]), added.fill);
+        assert_eq!(fill(views.removed[1]), neutral.delete.fill);
+        assert_eq!(fill(views.added[1]), neutral.insert.fill);
+        assert_eq!(fill(views.changed[1]), neutral.replace.fill);
+    }
+}
+
+#[test]
+fn link_map_swaps_when_left_pane_is_new() {
+    let theme = theme("meld-lens-light");
+    for mode in DiffColorMode::ALL {
+        let old = theme.link_diff_colors(mode, Some(DiffSide::Old));
+        assert_eq!(old, theme.diff_colors(mode, None));
+        assert_eq!(theme.link_diff_colors(mode, None), old);
+        let new = theme.link_diff_colors(mode, Some(DiffSide::New));
+        assert_eq!(new.insert, old.delete, "{mode:?}");
+        assert_eq!(new.delete, old.insert, "{mode:?}");
+        assert_eq!(new.replace, old.replace, "{mode:?}");
+        // With the left pane new, its deletes are added lines
+        let left = theme.diff_colors(mode, Some(DiffSide::New));
+        if mode.model() == ColorModel::ByChange {
+            assert_eq!(new.delete, left.delete, "{mode:?}");
+            assert_eq!(new.insert, left.insert, "{mode:?}");
+        }
+    }
+}
+
+#[test]
+fn scheme_changes_use_delete_colours() {
+    use StyleAttr::{Background as Bg, Foreground as Fg, LineBackground as Line};
+    // Schemes with their own meld:delete chunk colours
+    for id in ["meld-lens-light", "meld-lens-dark", "meld-monokai"] {
+        let theme = Theme::from_scheme(&manager(), scheme(id));
+        let old = theme.diff_colors(DiffColorMode::SchemeChanges, Some(DiffSide::Old));
+        let new = theme.diff_colors(DiffColorMode::SchemeChanges, Some(DiffSide::New));
+        let delete = ChunkColors {
+            fill: theme.color("meld:delete", Bg),
+            line: theme.color("meld:delete", Line),
+        };
+        let insert = theme.scheme_diff_colors().insert;
+        assert_eq!(old.delete, delete, "{id}");
+        assert_eq!(old.insert, insert, "{id}");
+        assert_eq!(new.insert, delete, "{id}");
+        assert_eq!(new.delete, insert, "{id}");
+        assert_eq!(old.replace, theme.scheme_diff_colors().replace);
+        assert_eq!(old.inline, theme.scheme_diff_colors().inline);
+    }
+    // Meld's base schemes only have a text colour for deletes; their
+    // white background is no chunk colour
+    for (id, dark) in [("meld-base", false), ("meld-dark", true)] {
+        let theme = Theme::new(&manager(), id, dark);
+        let removed = theme.diff_colors(DiffColorMode::SchemeChanges, None).delete;
+        assert_eq!(removed.line, theme.color("meld:delete", Fg), "{id}");
+        assert_ne!(removed.fill, Rgba::WHITE, "{id}");
+        assert_eq!(removed.fill.is_dark(), dark, "{id}");
+        assert!(
+            removed.fill.r > removed.fill.g,
+            "{id}: removed fill is reddish"
+        );
+    }
+}
+
+#[test]
+fn opacity_scales_fills_more_than_outlines() {
+    use meld_config::style::diff_color_alphas;
+    assert_eq!(diff_color_alphas(100), (1.0, 1.0));
+    assert_eq!(diff_color_alphas(50), (0.5, 0.75));
+    // Clamped to the setting's range
+    assert_eq!(diff_color_alphas(0), diff_color_alphas(10));
+    assert_eq!(diff_color_alphas(-5), (0.1, 0.55));
+    assert_eq!(diff_color_alphas(250), (1.0, 1.0));
+    for percent in 10..=100 {
+        let (fill, line) = diff_color_alphas(percent);
+        assert!(line >= fill && line >= 0.55);
+    }
+
+    for id in ["meld-base", "meld-lens-dark"] {
+        let theme = theme(id);
+        for mode in DiffColorMode::ALL {
+            for side in SIDES {
+                let full = theme.diff_colors(mode, side);
+                assert_eq!(full.with_opacity(100), full);
+                let faint = full.with_opacity(40);
+                for tag in [
+                    ChunkTag::Insert,
+                    ChunkTag::Delete,
+                    ChunkTag::Replace,
+                    ChunkTag::Conflict,
+                    ChunkTag::Error,
+                ] {
+                    let (a, b) = (full.chunk(tag), faint.chunk(tag));
+                    assert!((b.fill.a - a.fill.a * 0.4).abs() < 1e-6);
+                    assert!((b.line.a - a.line.a * 0.7).abs() < 1e-6);
+                    assert_eq!(b.fill.with_alpha(a.fill.a), a.fill);
+                }
+                assert!((faint.inline.a - full.inline.a * 0.4).abs() < 1e-6);
+                // Highlights that aren't difference colours stay as they are
+                assert_eq!(faint.current_chunk_highlight, full.current_chunk_highlight);
+                assert_eq!(faint.current_line_highlight, full.current_line_highlight);
+                assert_eq!(faint.overscroll, full.overscroll);
+            }
+        }
+        // Both panes still match after scaling
+        let mode = DiffColorMode::BlueOrange;
+        let left = theme.pane_diff_colors(mode, 2, 0).with_opacity(30);
+        let right = theme.pane_diff_colors(mode, 2, 1).with_opacity(30);
+        assert_eq!(left.replace, right.replace);
+        assert_eq!(left.delete, right.insert);
+    }
 }
 
 // set_base_style_scheme / adapt_style_scheme behaviour

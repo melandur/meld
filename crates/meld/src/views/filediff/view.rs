@@ -364,7 +364,7 @@ impl FileDiff {
         let lh = self.metrics.line_height;
         let right = left + 1;
         match self.derived.pair(left, right) {
-            Some(pair) => link_map(&pair.chunks, &self.neutral_style)
+            Some(pair) => link_map(&pair.chunks, &self.link_style)
                 .scroll(self.panes[left].scroll.y, self.panes[right].scroll.y)
                 .wrap(Some(&self.panes[left].wrap), Some(&self.panes[right].wrap))
                 .pane_heights(self.panes[left].viewport.height, self.panes[right].viewport.height)
@@ -377,7 +377,7 @@ impl FileDiff {
                 .current(pair.position(self.cursor.chunk))
                 .width(LINK_WIDTH)
                 .into(),
-            None => link_map(&[], &self.neutral_style)
+            None => link_map(&[], &self.link_style)
                 .on_scroll(Message::LinkScroll)
                 .width(LINK_WIDTH)
                 .into(),

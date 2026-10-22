@@ -18,9 +18,10 @@ use iced::widget::{
     text_input, toggler, tooltip,
 };
 use iced::{Background, Border, Element, Length, Task, Theme};
+use meld_config::settings::DIFF_COLOR_OPACITY_RANGE;
 use meld_config::{
-    DiffColorMode, FilterSetting, FolderColumn, FontSpec, MergeFileOrder, OverviewMapStyle,
-    Settings, StyleVariant, TIMESTAMP_RESOLUTIONS, WrapMode,
+    DiffColorMode, DiffSide, FilterSetting, FolderColumn, FontSpec, MergeFileOrder,
+    OverviewMapStyle, Settings, StyleAttr, StyleVariant, TIMESTAMP_RESOLUTIONS, WrapMode,
 };
 
 use crate::shared::Shared;
@@ -320,6 +321,8 @@ pub enum Message {
     FontSizeStep(i32),
     FontSizeInput(String),
     FontFamilyInput(String),
+    /// `diff-color-opacity`, in percent.
+    DiffColorOpacity(i32),
     Choose(Choice),
     Filter(FilterKind, FilterAction),
     ColumnVisible(usize, bool),
@@ -486,6 +489,13 @@ impl Preferences {
                 self.font_family_draft = Some(input);
                 edit_font(settings, |spec| spec.family = family);
                 Outcome::changed(true)
+            }
+            Message::DiffColorOpacity(percent) => {
+                let (lo, hi) = DIFF_COLOR_OPACITY_RANGE;
+                let percent = percent.clamp(lo, hi);
+                let changed = percent != settings.diff_color_opacity;
+                settings.diff_color_opacity = percent;
+                Outcome::changed(changed)
             }
             Message::Choose(choice) => {
                 match choice {
@@ -767,13 +777,7 @@ impl Preferences {
             )],
         );
 
-        let diff_colors = choice_row(
-            "Difference Colors",
-            Some("How removed, added and changed text is highlighted"),
-            DiffColorMode::ALL.map(|v| (v, v.label())).to_vec(),
-            &s.diff_colors,
-            Choice::DiffColors,
-        );
+        let diff_colors = diff_colors_section(shared);
 
         let wrap = choice_row(
             "Wrap Text",
@@ -1438,6 +1442,171 @@ fn switch_row<'a>(
         .on_toggle_maybe(enabled.then_some(move |v| Message::Bool(key, v)))
         .size(20);
     setting_row(title, subtitle, switch, enabled)
+}
+
+/// The difference colour palettes, each with a preview of how its
+/// chunks look, and the opacity slider. The previews use the current
+/// scheme and opacity, so moving the slider updates them along with any
+/// open comparison.
+fn diff_colors_section(shared: &Shared) -> Element<'_, Message> {
+    let s = &shared.settings;
+    let header = setting_row(
+        "Difference Colors",
+        Some("How removed, added and changed lines are highlighted"),
+        diff_preview_legend(),
+        true,
+    );
+    let mut col = column![header];
+    for mode in DiffColorMode::ALL {
+        let selected = mode == s.diff_colors;
+        // A radio button's circle
+        let dot = container(space::horizontal())
+            .width(6)
+            .height(6)
+            .style(move |theme: &Theme| container::Style {
+                background: selected
+                    .then(|| Background::Color(theme.extended_palette().primary.base.color)),
+                border: Border {
+                    radius: 3.0.into(),
+                    ..Border::default()
+                },
+                ..container::Style::default()
+            });
+        let mark = container(dot)
+            .center(14)
+            .style(move |theme: &Theme| {
+                let palette = theme.extended_palette();
+                container::Style {
+                    border: Border {
+                        color: if selected {
+                            palette.primary.base.color
+                        } else {
+                            palette.background.base.text.scale_alpha(0.5)
+                        },
+                        width: 1.5,
+                        radius: 7.0.into(),
+                    },
+                    ..container::Style::default()
+                }
+            });
+        let label = column![
+            text(mode.label()).size(14),
+            text(mode.description()).size(12).style(ui::dim_text),
+        ]
+        .spacing(2)
+        .width(Length::Fill);
+        let content = row![mark, label, diff_preview(shared, mode)]
+            .spacing(10)
+            .align_y(iced::Center);
+        col = col.push(
+            button(content)
+                .width(Length::Fill)
+                .padding([6, 14])
+                .style(move |theme: &Theme, status| {
+                    let mut style = ui::flat_button(theme, status);
+                    if selected {
+                        style.background = Some(Background::Color(
+                            theme.extended_palette().primary.weak.color.scale_alpha(0.25),
+                        ));
+                    }
+                    style.border = Border::default();
+                    style
+                })
+                .on_press(Message::Choose(Choice::DiffColors(mode))),
+        );
+    }
+    let (lo, hi) = DIFF_COLOR_OPACITY_RANGE;
+    let opacity = s.diff_color_opacity.clamp(lo, hi);
+    col = col.push(ui::separator(false));
+    col = col.push(setting_row(
+        "Difference Color Opacity",
+        Some("Fainter colors keep the text easier to read; outlines stay visible"),
+        row![
+            iced::widget::slider(lo..=hi, opacity, Message::DiffColorOpacity)
+                .step(5)
+                .width(180),
+            text(format!("{opacity}%")).size(13).width(40),
+        ]
+        .spacing(10)
+        .align_y(iced::Center),
+        true,
+    ));
+    col.into()
+}
+
+/// Column captions for [`diff_preview`].
+fn diff_preview_legend<'a>() -> Element<'a, Message> {
+    let caption = |label: &'a str| {
+        text(label)
+            .size(11)
+            .width(PREVIEW_PANE_WIDTH)
+            .align_x(iced::Center)
+            .style(ui::dim_text)
+    };
+    row![caption("Left pane"), caption("Right pane")]
+        .spacing(PREVIEW_GAP)
+        .into()
+}
+
+const PREVIEW_CHIP: (f32, f32) = (24.0, 14.0);
+const PREVIEW_GAP: f32 = 6.0;
+const PREVIEW_PANE_WIDTH: f32 = 3.0 * PREVIEW_CHIP.0 + 2.0 * 2.0 + 2.0 * 3.0;
+
+/// How a palette colours lines removed from the left file, changed lines
+/// and lines added in the right file, in the left and the right pane of
+/// a two-way comparison, drawn on the scheme's text background.
+fn diff_preview(shared: &Shared, mode: DiffColorMode) -> Element<'_, Message> {
+    let theme = &shared.style;
+    let opacity = shared.settings.diff_color_opacity;
+    let background = shared
+        .scheme_color("text", StyleAttr::Background)
+        .unwrap_or(if theme.is_dark() {
+            iced::Color::from_rgb8(0x1e, 0x1e, 0x1e)
+        } else {
+            iced::Color::WHITE
+        });
+    let chip = |c: meld_config::ChunkColors| {
+        let (fill, line) = (crate::shared::color(c.fill), crate::shared::color(c.line));
+        container(space::horizontal())
+            .width(PREVIEW_CHIP.0)
+            .height(PREVIEW_CHIP.1)
+            .style(move |_: &Theme| container::Style {
+                background: Some(Background::Color(fill)),
+                border: Border {
+                    color: line,
+                    width: 1.0,
+                    radius: 2.0.into(),
+                },
+                ..container::Style::default()
+            })
+    };
+    // In each pane, lines only that pane has are a delete and lines only
+    // the other pane has an insert; replaced lines are a replace.
+    let pane = |side: DiffSide| {
+        let colors = theme.diff_colors(mode, Some(side)).with_opacity(opacity);
+        let (removed, added) = match side {
+            DiffSide::Old => (colors.delete, colors.insert),
+            DiffSide::New => (colors.insert, colors.delete),
+        };
+        container(row![chip(removed), chip(colors.replace), chip(added)].spacing(2))
+            .padding(3)
+            .style(move |_: &Theme| container::Style {
+                background: Some(Background::Color(background)),
+                border: Border {
+                    radius: 3.0.into(),
+                    ..Border::default()
+                },
+                ..container::Style::default()
+            })
+    };
+    tooltip(
+        row![pane(DiffSide::Old), pane(DiffSide::New)].spacing(PREVIEW_GAP),
+        container(text("Removed, changed and added lines").size(12))
+            .padding([4, 8])
+            .style(ui::tooltip_box),
+        tooltip::Position::Top,
+    )
+    .into()
 }
 
 /// A drop-down row (`PreferenceComboRow`).

@@ -14,9 +14,30 @@ fn chunk(c: meld_config::ChunkColors) -> ChunkColor {
     }
 }
 
-/// The style for a pane on `side` of the comparison (`None` for
-/// three-way panes and the link maps).
-pub fn pane_style(shared: &Shared, side: Option<DiffSide>) -> PaneStyle {
+/// The difference colours of a pane on `side` of the comparison
+/// (`None` for three-way panes), with the `diff-colors` and
+/// `diff-color-opacity` settings applied.
+pub fn pane_colors(shared: &Shared, side: Option<DiffSide>) -> DiffColors {
+    let settings = &shared.settings;
+    shared
+        .style
+        .diff_colors(settings.diff_colors, side)
+        .with_opacity(settings.diff_color_opacity)
+}
+
+/// The difference colours of the link map to the right of a pane on
+/// `left_side`; see `Theme::link_diff_colors`.
+pub fn link_colors(shared: &Shared, left_side: Option<DiffSide>) -> DiffColors {
+    let settings = &shared.settings;
+    shared
+        .style
+        .link_diff_colors(settings.diff_colors, left_side)
+        .with_opacity(settings.diff_color_opacity)
+}
+
+/// The style for a pane, link map or action gutter drawing chunks with
+/// `colors` (see [`pane_colors`] and [`link_colors`]).
+pub fn pane_style(shared: &Shared, colors: &DiffColors) -> PaneStyle {
     let theme = &shared.style;
     let mut style = if theme.is_dark() {
         PaneStyle::dark()
@@ -24,7 +45,6 @@ pub fn pane_style(shared: &Shared, side: Option<DiffSide>) -> PaneStyle {
         PaneStyle::light()
     };
     let look = |name: &str, attr| shared.scheme_color(name, attr);
-    let colors: DiffColors = theme.diff_colors(shared.settings.diff_colors, side);
 
     if let Some(c) = look("text", StyleAttr::Foreground) {
         style.text = c;

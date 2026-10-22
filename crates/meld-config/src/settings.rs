@@ -201,6 +201,8 @@ pub const TIMESTAMP_RESOLUTIONS: [(i32, &str); 5] = [
     (-1, "Ignore timestamp"),
 ];
 
+/// Range of `diff-color-opacity`, in percent.
+pub const DIFF_COLOR_OPACITY_RANGE: (i32, i32) = (10, 100);
 /// Range of `ailens-file-row-spacing`.
 pub const AILENS_FILE_ROW_SPACING_RANGE: (i32, i32) = (0, 16);
 /// Range of `ailens-file-list-width`.
@@ -218,6 +220,9 @@ pub struct Settings {
     pub highlight_syntax: bool,
     pub style_scheme: String,
     pub diff_colors: DiffColorMode,
+    /// Opacity of difference colours in percent; see
+    /// [`crate::style::diff_color_alphas`].
+    pub diff_color_opacity: i32,
     pub enable_space_drawer: bool,
     pub wrap_mode: WrapMode,
     pub highlight_current_line: bool,
@@ -318,6 +323,7 @@ impl Default for Settings {
             highlight_syntax: true,
             style_scheme: "classic".to_string(),
             diff_colors: DiffColorMode::Scheme,
+            diff_color_opacity: 100,
             enable_space_drawer: false,
             wrap_mode: WrapMode::None,
             highlight_current_line: false,
@@ -458,6 +464,8 @@ impl Settings {
 
     /// Clamp ranged keys into their gschema ranges.
     pub fn sanitized(mut self) -> Settings {
+        let (lo, hi) = DIFF_COLOR_OPACITY_RANGE;
+        self.diff_color_opacity = self.diff_color_opacity.clamp(lo, hi);
         let (lo, hi) = AILENS_FILE_ROW_SPACING_RANGE;
         self.ailens_file_row_spacing = self.ailens_file_row_spacing.clamp(lo, hi);
         let (lo, hi) = AILENS_FILE_LIST_WIDTH_RANGE;
@@ -702,8 +710,8 @@ mod tests {
                 "missing setting {key}"
             );
         }
-        assert_eq!(count, 46);
-        assert_eq!(table.len() - 1 + window.len(), 46);
+        assert_eq!(count, 47);
+        assert_eq!(table.len() - 1 + window.len(), 47);
     }
 
     #[test]
@@ -771,6 +779,28 @@ mod tests {
         assert!(s.show_line_numbers);
         // Clamped into the schema range
         assert_eq!(s.ailens_file_list_width, 120);
+    }
+
+    #[test]
+    fn diff_color_settings() {
+        let s = Settings::default();
+        assert_eq!(s.diff_colors, DiffColorMode::Scheme);
+        assert_eq!(s.diff_color_opacity, 100);
+        // Every palette is a valid value, including Meld's original ones
+        for mode in DiffColorMode::ALL {
+            let s = Settings::from_toml_str(&format!("diff-colors = '{}'", mode.as_str())).unwrap();
+            assert_eq!(s.diff_colors, mode);
+        }
+        let s = Settings::from_toml_str("diff-colors = 'rainbow'\nindent-width = 3").unwrap();
+        assert_eq!(s.diff_colors, DiffColorMode::Scheme);
+        assert_eq!(s.indent_width, 3);
+        // Opacity is clamped into the schema range
+        for (value, expected) in [(5, 10), (10, 10), (55, 55), (100, 100), (150, 100)] {
+            let s = Settings::from_toml_str(&format!("diff-color-opacity = {value}")).unwrap();
+            assert_eq!(s.diff_color_opacity, expected);
+        }
+        let s = Settings::from_toml_str("diff-color-opacity = 'faint'").unwrap();
+        assert_eq!(s.diff_color_opacity, 100);
     }
 
     #[test]

@@ -475,6 +475,18 @@ impl<Message, Theme> canvas::Program<Message, Theme, Renderer> for ChunkMap<'_, 
                 let colors = style.chunks.get(c.kind);
                 let f0 = wrap.rows_before(c.lines.start) as f32 / max_y;
                 let f1 = wrap.rows_before(c.lines.end) as f32 / max_y;
+                if c.lines.is_empty() {
+                    // Meld strokes a rectangle of height -1 here, which
+                    // leaves a two-pixel line in the outline colour; a
+                    // degenerate path would draw nothing.
+                    let y = (f0 * hs).round() - 1.0;
+                    frame.fill_rectangle(
+                        Point::new(x0 - 0.5, y),
+                        Size::new(x1 + 1.0, 2.0),
+                        colors.line,
+                    );
+                    continue;
+                }
                 let y0 = (f0 * hs).round() + 0.5;
                 let y1 = (f1 * hs).round() - 0.5;
                 let rect = Path::rectangle(Point::new(x0, y0), Size::new(x1, (y1 - y0).max(0.0)));
