@@ -138,6 +138,11 @@ impl Meld {
             min_size: Some(Size::new(500.0, 350.0)),
             exit_on_close_request: false,
             icon: window_icon(),
+            #[cfg(target_os = "linux")]
+            platform_specific: window::settings::PlatformSpecific {
+                application_id: APP_ID.into(),
+                ..Default::default()
+            },
             ..window::Settings::default()
         }
     }
@@ -657,6 +662,11 @@ impl Meld {
             .collect()
     }
 }
+
+/// Wayland app id; matches `crates/meld/data/org.gnome.Meld.Rust.desktop`,
+/// which is how compositors find the icon. Kept apart from the Python
+/// build's `org.gnome.Meld` so the two installs don't shadow each other.
+pub const APP_ID: &str = "org.gnome.Meld.Rust";
 
 /// The dark Meld icon, rasterised from the bundled SVG for the window.
 fn window_icon() -> Option<window::Icon> {

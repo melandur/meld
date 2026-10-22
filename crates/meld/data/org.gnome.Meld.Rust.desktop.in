@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=Meld
+GenericName=Diff Viewer
+Comment=Compare and merge your files
+Keywords=diff;merge;
+Exec="@exec@" %F
+Terminal=false
+Type=Application
+Icon=org.gnome.Meld.Rust
+MimeType=application/x-meld-comparison;
+StartupNotify=true
+StartupWMClass=org.gnome.Meld.Rust
+Categories=Development;
