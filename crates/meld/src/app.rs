@@ -703,7 +703,7 @@ fn shorten_middle(text: &str, max: usize) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+mod title_tests {
     use super::shorten_middle;
 
     #[test]
