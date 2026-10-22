@@ -20,10 +20,8 @@ pub mod icon {
     pub const REFRESH: &str = "⟳";
     pub const SAVE: &str = "💾";
     pub const UNDO: &str = "↶";
-    pub const REDO: &str = "↷";
     pub const FILTER: &str = "⚲";
     pub const FOLDER: &str = "📁";
-    pub const FILE: &str = "📄";
     pub const SWAP: &str = "⇄";
     pub const MODIFIED: &str = "●";
     pub const CONFLICT_PREV: &str = "⇡";

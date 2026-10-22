@@ -3,7 +3,7 @@
 //! iced has no native menus, so a menu is a popover drawn over the window
 //! at a fixed anchor; the app keeps track of which one is open.
 
-use iced::widget::{button, column, container, mouse_area, opaque, row, space, stack, text};
+use iced::widget::{button, column, container, mouse_area, opaque, row, scrollable, space, stack, text};
 use iced::{Element, Length, Padding};
 
 #[derive(Debug, Clone)]
@@ -50,8 +50,36 @@ impl<M> Item<M> {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Anchor {
-    TopLeft(f32),
     TopRight(f32),
+}
+
+/// Maps the messages of menu items.
+pub fn map_items<M, N>(items: Vec<Item<M>>, f: impl Fn(M) -> N) -> Vec<Item<N>> {
+    items
+        .into_iter()
+        .map(|item| match item {
+            Item::Action {
+                label,
+                shortcut,
+                message,
+            } => Item::Action {
+                label,
+                shortcut,
+                message: message.map(&f),
+            },
+            Item::Toggle {
+                label,
+                checked,
+                message,
+            } => Item::Toggle {
+                label,
+                checked,
+                message: f(message),
+            },
+            Item::Separator => Item::Separator,
+            Item::Heading(h) => Item::Heading(h),
+        })
+        .collect()
 }
 
 /// Draws `items` as a menu over `base`; clicking outside sends `on_dismiss`.
@@ -65,20 +93,17 @@ pub fn overlay<'a, M: Clone + 'a>(
     for item in items {
         list = list.push(item_view(item));
     }
-    let menu = container(list.width(280)).padding(6).style(super::popover);
+    // Long menus scroll instead of running past the bottom of the window.
+    let menu = container(scrollable(list.width(280)).height(Length::Shrink))
+        .padding(6)
+        .max_height(560)
+        .style(super::popover);
 
     let positioned: Element<'a, M> = match anchor {
         Anchor::TopRight(x) => row![space::horizontal(), opaque(menu)]
             .padding(Padding {
                 top: super::HEADER_HEIGHT,
                 right: x,
-                ..Padding::ZERO
-            })
-            .into(),
-        Anchor::TopLeft(x) => row![opaque(menu), space::horizontal()]
-            .padding(Padding {
-                top: super::HEADER_HEIGHT,
-                left: x,
                 ..Padding::ZERO
             })
             .into(),

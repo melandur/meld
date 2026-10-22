@@ -207,40 +207,13 @@ impl Tab {
     }
 
     pub fn menu_items(&self, shared: &Shared) -> Vec<menu::Item<Message>> {
-        fn map_items<M: Clone, N>(items: Vec<menu::Item<M>>, f: impl Fn(M) -> N) -> Vec<menu::Item<N>> {
-            items
-                .into_iter()
-                .map(|item| match item {
-                    menu::Item::Action {
-                        label,
-                        shortcut,
-                        message,
-                    } => menu::Item::Action {
-                        label,
-                        shortcut,
-                        message: message.map(&f),
-                    },
-                    menu::Item::Toggle {
-                        label,
-                        checked,
-                        message,
-                    } => menu::Item::Toggle {
-                        label,
-                        checked,
-                        message: f(message),
-                    },
-                    menu::Item::Separator => menu::Item::Separator,
-                    menu::Item::Heading(h) => menu::Item::Heading(h),
-                })
-                .collect()
-        }
         match self {
-            Tab::New(t) => map_items(t.menu_items(shared), Message::New),
-            Tab::File(t) => map_items(t.menu_items(shared), Message::File),
-            Tab::Folder(t) => map_items(t.menu_items(shared), Message::Folder),
-            Tab::Vc(t) => map_items(t.menu_items(shared), Message::Vc),
-            Tab::Git(t) => map_items(t.menu_items(shared), Message::Git),
-            Tab::Image(t) => map_items(t.menu_items(shared), Message::Image),
+            Tab::New(t) => menu::map_items(t.menu_items(shared), Message::New),
+            Tab::File(t) => menu::map_items(t.menu_items(shared), Message::File),
+            Tab::Folder(t) => menu::map_items(t.menu_items(shared), Message::Folder),
+            Tab::Vc(t) => menu::map_items(t.menu_items(shared), Message::Vc),
+            Tab::Git(t) => menu::map_items(t.menu_items(shared), Message::Git),
+            Tab::Image(t) => menu::map_items(t.menu_items(shared), Message::Image),
         }
     }
 

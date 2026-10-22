@@ -77,9 +77,11 @@ pub enum Message {
     QuitAnyway,
     WindowOpened(window::Id),
     WindowResized(Size),
-    CloseRequested(window::Id),
+    CloseRequested,
     Remote(instance::Request),
     DismissNotice,
+    /// A menu item was chosen: close the menu, then act.
+    MenuPick(Box<Message>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -271,7 +273,7 @@ impl Meld {
                 }
                 Task::none()
             }
-            Message::CloseRequested(_) => self.quit(),
+            Message::CloseRequested => self.quit(),
             Message::Remote(request) => {
                 let mut tasks = Vec::new();
                 let waiter = request.waiter;
@@ -290,6 +292,10 @@ impl Meld {
                     tasks.push(window::gain_focus(id));
                 }
                 Task::batch(tasks)
+            }
+            Message::MenuPick(message) => {
+                self.open_menu = None;
+                self.update(*message)
             }
             Message::DismissNotice => {
                 self.notice = None;
@@ -477,7 +483,7 @@ impl Meld {
                 }
                 _ => None,
             }),
-            window::close_requests().map(Message::CloseRequested),
+            window::close_requests().map(|_| Message::CloseRequested),
             window::resize_events().map(|(_, size)| Message::WindowResized(size)),
             instance::listen().map(Message::Remote),
         ];
@@ -512,10 +518,12 @@ impl Meld {
         let mut base: Element<'_, Message> = content.push(body).into();
 
         if let Some(open_menu) = self.open_menu {
-            base = match open_menu {
-                OpenMenu::Main => menu::overlay(base, self.main_menu(), menu::Anchor::TopRight(6.0), Message::CloseMenu),
-                OpenMenu::Recent => menu::overlay(base, self.recent_menu(), menu::Anchor::TopRight(48.0), Message::CloseMenu),
+            let (items, anchor) = match open_menu {
+                OpenMenu::Main => (self.main_menu(), menu::Anchor::TopRight(6.0)),
+                OpenMenu::Recent => (self.recent_menu(), menu::Anchor::TopRight(48.0)),
             };
+            let items = menu::map_items(items, |m| Message::MenuPick(Box::new(m)));
+            base = menu::overlay(base, items, anchor, Message::CloseMenu);
         }
 
         match &self.dialog {
