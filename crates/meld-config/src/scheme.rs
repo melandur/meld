@@ -24,23 +24,23 @@ use crate::{ConfigError, Rgba};
 const BUNDLED: &[(&str, &str)] = &[
     (
         "meld-base",
-        include_str!("../../../data/styles/meld-base.style-scheme.xml"),
+        include_str!("../../../data/styles/meld-base.style-scheme.xml.in"),
     ),
     (
         "meld-dark",
-        include_str!("../../../data/styles/meld-dark.style-scheme.xml"),
+        include_str!("../../../data/styles/meld-dark.style-scheme.xml.in"),
     ),
     (
         "meld-lens-light",
-        include_str!("../../../data/styles/meld-lens-light.style-scheme.xml"),
+        include_str!("../../../data/styles/meld-lens-light.style-scheme.xml.in"),
     ),
     (
         "meld-lens-dark",
-        include_str!("../../../data/styles/meld-lens-dark.style-scheme.xml"),
+        include_str!("../../../data/styles/meld-lens-dark.style-scheme.xml.in"),
     ),
     (
         "meld-monokai",
-        include_str!("../../../data/styles/meld-monokai.style-scheme.xml"),
+        include_str!("../../../data/styles/meld-monokai.style-scheme.xml.in"),
     ),
 ];
 
