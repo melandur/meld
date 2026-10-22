@@ -1,0 +1,18 @@
+[package]
+name = "meld-files"
+description = "File and folder comparison helpers: text loading and encodings, language guessing, filters, folder comparison"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+regex.workspace = true
+globset.workspace = true
+thiserror.workspace = true
+encoding_rs.workspace = true
+chardetng.workspace = true
+tempfile.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

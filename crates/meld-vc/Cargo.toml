@@ -1,0 +1,15 @@
+[package]
+name = "meld-vc"
+description = "Version control backends for Meld (Git, Mercurial, Subversion, Bazaar, CVS, Darcs)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+regex.workspace = true
+thiserror.workspace = true
+tempfile.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
