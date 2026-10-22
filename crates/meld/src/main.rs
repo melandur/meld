@@ -1,5 +1,8 @@
 //! Meld: a visual diff and merge tool.
 
+#[macro_use]
+mod i18n;
+
 mod app;
 mod cli;
 mod command;
@@ -24,7 +27,7 @@ fn main() {
         Err(err) => {
             use clap::CommandFactory;
             eprintln!("{}", cli::Args::command().render_usage());
-            eprintln!("Error: {err}");
+            eprint!("{}", tr!("Error: {}\n", err));
             std::process::exit(2);
         }
     };

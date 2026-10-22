@@ -8,7 +8,7 @@ use iced::widget::{button, column, container, row, scrollable, text, tooltip};
 use iced::{Color, Element, Length, Theme};
 use meld_ailens::{FileEntry, FileRow, GitFileChange};
 
-use super::ellipsis::{Mode, ellipsized};
+use crate::ui::ellipsis::{Mode, ellipsized};
 use crate::ui;
 
 /// How many pixels each tree level is indented.
@@ -131,21 +131,21 @@ pub fn status_code(change: &GitFileChange) -> char {
 
 pub fn status_name(code: char) -> &'static str {
     match code {
-        'A' => "Added",
-        'C' => "Copied",
-        'D' => "Deleted",
-        'M' => "Modified",
-        'R' => "Renamed",
-        'T' => "Type changed",
-        'U' => "Untracked",
-        _ => "Unknown",
+        'A' => tr!("Added"),
+        'C' => tr!("Copied"),
+        'D' => tr!("Deleted"),
+        'M' => tr!("Modified"),
+        'R' => tr!("Renamed"),
+        'T' => tr!("Type changed"),
+        'U' => tr!("Untracked"),
+        _ => tr!("Unknown"),
     }
 }
 
 /// e.g. `+12 −3`, `binary`, or nothing when git gave no counts.
 pub fn stats_text(entry: &FileEntry) -> String {
     if entry.binary() {
-        "binary".into()
+        tr!("binary").into()
     } else if let Some(additions) = entry.additions {
         format!("+{additions} −{}", entry.deletions.unwrap_or(0))
     } else {
@@ -158,7 +158,8 @@ pub fn row_tooltip(entry: &FileEntry) -> String {
     let code = status_code(change);
     let mut tip = format!("{} · {}", change.path, status_name(code));
     if let Some(original) = change.original_path.as_ref().filter(|o| **o != change.path) {
-        tip.push_str(&format!("\nfrom {original}"));
+        tip.push('\n');
+        tip.push_str(&tr!("from {original}", original = original));
     }
     tip
 }

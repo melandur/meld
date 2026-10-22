@@ -46,6 +46,26 @@ pub fn abspath(path: &Path) -> PathBuf {
     }
 }
 
+/// The folders version control systems keep their own data in.
+const ADMIN_DIRS: [&str; 5] = [".git", ".hg", ".bzr", ".svn", "_darcs"];
+
+/// `path` moved out of a version control system's own folder: a `.git`
+/// folder, or anything inside one, gives the work tree it belongs to (the
+/// folder holding `.git`). Other paths are returned unchanged. Lexical.
+pub fn outside_admin_dir(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in path.components() {
+        if let Component::Normal(name) = comp
+            && ADMIN_DIRS.iter().any(|d| name == *d)
+            && !out.as_os_str().is_empty()
+        {
+            return out;
+        }
+        out.push(comp);
+    }
+    path.to_path_buf()
+}
+
 /// `os.path.relpath(path, start)` for two absolute (or two relative)
 /// paths. Both are normalised lexically first.
 pub fn relpath(path: &Path, start: &Path) -> PathBuf {
@@ -150,6 +170,15 @@ pub fn lossy(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn admin_dirs_map_to_work_tree() {
+        assert_eq!(outside_admin_dir(Path::new("/r/.git")), PathBuf::from("/r"));
+        assert_eq!(outside_admin_dir(Path::new("/r/.git/refs/heads")), PathBuf::from("/r"));
+        assert_eq!(outside_admin_dir(Path::new("/r/sub/.hg")), PathBuf::from("/r/sub"));
+        assert_eq!(outside_admin_dir(Path::new("/r/src")), PathBuf::from("/r/src"));
+        assert_eq!(outside_admin_dir(Path::new("/r/.github")), PathBuf::from("/r/.github"));
+    }
 
     #[test]
     fn normalize_like_normpath() {

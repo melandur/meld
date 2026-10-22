@@ -43,7 +43,12 @@ pub fn is_writable(path: &Path) -> bool {
 
 pub fn load(path: PathBuf, target: Option<PathBuf>, options: LoadOptions) -> Result<Loaded, LoadFailure> {
     let text = meld_files::load_text_file(&path, &options).map_err(|err| match err {
-        LoadError::LineTooLong { .. } => LoadFailure::LineTooLong(err.to_string()),
+        LoadError::LineTooLong { line, length } => LoadFailure::LineTooLong(tr!(
+            "Line {line_number} exceeded maximum line length ({line_length} > {LINE_LENGTH_LIMIT}).\n\nLoading files with very long lines may make Meld slow or unresponsive.",
+            line_number = line + 1,
+            line_length = length,
+            LINE_LENGTH_LIMIT = meld_files::text::LINE_LENGTH_LIMIT,
+        )),
         LoadError::Io { source, .. } => LoadFailure::Other(source.to_string()),
     })?;
     let mtime = meld_files::file_mtime(&path);
@@ -71,7 +76,7 @@ pub fn save(path: PathBuf, text: String, options: SaveOptions) -> Result<Saved, 
         Ok(mtime) => Ok(Saved { mtime }),
         Err(SaveError::ExternallyModified { path }) => Err(SaveFailure::ExternallyModified(path)),
         Err(SaveError::Encode(err)) => Err(SaveFailure::Error {
-            message: format!(
+            message: tr!(
                 "File “{}” contains characters that can’t be encoded using its current encoding “{}”.",
                 path.display(),
                 err.encoding
@@ -174,7 +179,7 @@ pub fn prepare_vc_file(path: PathBuf, left_is_local: bool, merge_order_key: &str
     let candidate = meld_vc::get_vcs(&location)
         .into_iter()
         .find(|c| c.enabled())
-        .ok_or_else(|| format!("{} is not in a version controlled folder", path.display()))?;
+        .ok_or_else(|| tr!("{} is not in a version controlled folder", path.display()))?;
     let mut vc = meld_vc::open_vc(candidate.kind, &location).map_err(|e| e.to_string())?;
     let _ = vc.refresh_vc_state(Some(&path));
     let options = DiffOptions {
@@ -182,7 +187,7 @@ pub fn prepare_vc_file(path: PathBuf, left_is_local: bool, merge_order_key: &str
         merge_file_order: MergeFileOrder::from_key(merge_order_key),
     };
     match meld_vc::prepare_diff(vc.as_ref(), &path, &options).map_err(|e| e.to_string())? {
-        DiffRequest::Folder(_) => Err("Cannot compare a folder as a file".into()),
+        DiffRequest::Folder(_) => Err(tr!("Cannot compare a folder as a file").into()),
         DiffRequest::Files {
             paths,
             labels,
@@ -219,7 +224,7 @@ pub fn resolve(path: PathBuf) -> Result<(), String> {
     let candidate = meld_vc::get_vcs(&location)
         .into_iter()
         .find(|c| c.enabled())
-        .ok_or_else(|| "not in a version controlled folder".to_string())?;
+        .ok_or_else(|| tr!("Not in a version controlled folder").to_string())?;
     let vc = meld_vc::open_vc(candidate.kind, &location).map_err(|e| e.to_string())?;
     let commands = vc
         .action_commands(meld_vc::Action::Resolve, &[path], "")

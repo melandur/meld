@@ -50,15 +50,25 @@ const MONOSPACE_FAMILIES: &[&str] = &[
     "Ubuntu Mono",
 ];
 
+/// The labels of `TIMESTAMP_RESOLUTIONS`, marked for translation.
+#[allow(dead_code)]
+const TIMESTAMP_LABELS: [&str; 5] = [
+    n_!("1ns (ext4)"),
+    n_!("100ns (NTFS)"),
+    n_!("1s (ext2/ext3)"),
+    n_!("2s (VFAT)"),
+    n_!("Ignore timestamp"),
+];
+
 /// Font sizes the size control accepts, in points.
 const FONT_SIZE_RANGE: (f32, f32) = (4.0, 96.0);
 
 /// `ColumnList.available_columns`: folder comparison columns and labels.
 const AVAILABLE_COLUMNS: [(&str, &str); 4] = [
-    ("size", "Size"),
-    ("modification time", "Modification time"),
-    ("iso-time", "Modification time (ISO)"),
-    ("permissions", "Permissions"),
+    ("size", n_!("Size")),
+    ("modification time", n_!("Modification time")),
+    ("iso-time", n_!("Modification time (ISO)")),
+    ("permissions", n_!("Permissions")),
 ];
 
 const DIALOG_WIDTH: f32 = 860.0;
@@ -84,11 +94,11 @@ impl Page {
 
     fn title(self) -> &'static str {
         match self {
-            Page::Editor => "Editor",
-            Page::Folders => "Folder Comparison",
-            Page::VersionControl => "Version Control",
-            Page::GitCompare => "Git Compare",
-            Page::Filters => "Filters",
+            Page::Editor => tr!("Editor"),
+            Page::Folders => tr!("Folder Comparisons"),
+            Page::VersionControl => tr!("Version Control"),
+            Page::GitCompare => tr!("Git Compare"),
+            Page::Filters => tr!("Filters"),
         }
     }
 }
@@ -574,7 +584,7 @@ impl Preferences {
             },
             FilterAction::Add => {
                 // `FilterList.default_entry`
-                filters.push(FilterSetting::new("label", false, "pattern"));
+                filters.push(FilterSetting::new(tr!("label"), false, tr!("pattern")));
                 *selected = Some(filters.len() - 1);
                 let id = kind.name_input_id();
                 Outcome {
@@ -626,7 +636,7 @@ impl Preferences {
             );
         }
         let sidebar = container(column![
-            container(text("Preferences").size(16).font(ui::bold())).padding([14, 20]),
+            container(text(tr!("Preferences")).size(16).font(ui::bold())).padding([14, 20]),
             pages
         ])
         .width(200)
@@ -636,7 +646,7 @@ impl Preferences {
         let header = row![
             text(self.page.title()).size(18).font(ui::bold()),
             space::horizontal(),
-            ui::tool_button(icon::CLOSE, "Close", Some(Message::Close)),
+            ui::tool_button(icon::CLOSE, tr!("Close"), Some(Message::Close)),
         ]
         .align_y(iced::Center)
         .padding([8, 12]);
@@ -674,9 +684,9 @@ impl Preferences {
         let s = &shared.settings;
 
         let style_variant = choice_row(
-            "Interface Style",
+            tr!("Interface Style"),
             None,
-            StyleVariant::ALL.map(|v| (v, v.label())).to_vec(),
+            StyleVariant::ALL.map(|v| (v, crate::i18n::gettext(v.label()))).to_vec(),
             &s.style_variant,
             Choice::StyleVariant,
         );
@@ -698,7 +708,7 @@ impl Preferences {
             known_family,
             |family| Message::Choose(Choice::FontFamily(family)),
         )
-        .placeholder("Other")
+        .placeholder(tr!("Other"))
         .text_size(14)
         .padding([4, 8])
         .width(190);
@@ -707,14 +717,14 @@ impl Preferences {
             .clone()
             .unwrap_or_else(|| format_points(font.size_pt));
         let custom_font = expander(
-            "Use Custom Font",
-            Some("Choose a font different to the system default monospace font"),
+            tr!("Use Custom Font"),
+            Some(tr!("Choose a font different to the system default monospace font")),
             BoolKey::CustomFont.get(s),
             |v| Message::Bool(BoolKey::CustomFont, v),
             vec![
                 setting_row(
-                    "Font",
-                    Some("The font used within the editor"),
+                    tr!("Font"),
+                    Some(tr!("The font used within the editor")),
                     row![
                         family_pick,
                         spin_box(
@@ -730,9 +740,9 @@ impl Preferences {
                     true,
                 ),
                 setting_row(
-                    "Font Family",
-                    Some("Any installed font, by name"),
-                    text_input("Font family", &family_value)
+                    tr!("Font Family"),
+                    Some(tr!("Any installed font, by name")),
+                    text_input(tr!("Font family"), &family_value)
                         .on_input(Message::FontFamilyInput)
                         .size(14)
                         .padding([5, 8])
@@ -763,12 +773,12 @@ impl Preferences {
         .padding([4, 8])
         .width(240);
         let syntax = expander(
-            "Use Syntax Highlighting",
+            tr!("Use syntax highlighting"),
             None,
             s.highlight_syntax,
             |v| Message::Bool(BoolKey::HighlightSyntax, v),
             vec![setting_row(
-                "Color Scheme",
+                tr!("Color Scheme"),
                 current_scheme
                     .map(|c| c.description.as_str())
                     .filter(|d| !d.is_empty()),
@@ -780,25 +790,25 @@ impl Preferences {
         let diff_colors = diff_colors_section(shared);
 
         let wrap = choice_row(
-            "Wrap Text",
-            Some("How text should be wrapped when wider than the pane"),
-            WrapMode::PREFERENCES.map(|v| (v, v.label())).to_vec(),
+            tr!("Text wrapping"),
+            Some(tr!("How text should be wrapped when wider than the pane")),
+            WrapMode::PREFERENCES.map(|v| (v, crate::i18n::gettext(v.label()))).to_vec(),
             &s.wrap_mode,
             Choice::WrapMode,
         );
 
         let overview = expander(
-            "Show overview map",
+            tr!("Show overview map"),
             None,
             s.show_overview_map,
             |v| Message::Bool(BoolKey::ShowOverviewMap, v),
             vec![choice_row(
-                "Overview map style",
-                Some("How the overview map is displayed"),
+                tr!("Overview map style"),
+                Some(tr!("How the overview map is displayed")),
                 vec![
-                    (OverviewMapStyle::Chunkmap, "Changes only"),
-                    (OverviewMapStyle::CompactSourcemap, "Compact source map"),
-                    (OverviewMapStyle::FullSourcemap, "Full source map"),
+                    (OverviewMapStyle::Chunkmap, tr!("Simple change map")),
+                    (OverviewMapStyle::CompactSourcemap, tr!("Compact source map")),
+                    (OverviewMapStyle::FullSourcemap, tr!("Full source map")),
                 ],
                 &s.overview_map_style,
                 Choice::OverviewMapStyle,
@@ -806,14 +816,14 @@ impl Preferences {
         );
 
         let editor = expander(
-            "Use custom text editor",
-            Some("Choose an external text editor different to the system default"),
+            tr!("Use custom text editor"),
+            Some(tr!("Choose an external text editor different to the system default")),
             BoolKey::CustomEditor.get(s),
             |v| Message::Bool(BoolKey::CustomEditor, v),
             vec![entry_row(
-                "Custom Editor Command",
-                "The command used to launch a custom editor. Some limited templating is \
-                 supported here; at the moment '{file}' and '{line}' are recognised tokens.",
+                tr!("Custom Editor Command"),
+                tr!("The command used to launch a custom editor. Some limited templating is \
+                     supported here; at the moment '{{file}}' and '{{line}}' are recognised tokens."),
                 TextKey::CustomEditorCommand,
                 s,
                 None,
@@ -822,7 +832,7 @@ impl Preferences {
 
         column![
             group(
-                Some("Appearance"),
+                Some(tr!("Appearance")),
                 None,
                 vec![style_variant, custom_font, syntax, diff_colors]
             ),
@@ -832,15 +842,15 @@ impl Preferences {
                 None,
                 vec![
                     switch_row(
-                        "Highlight Current Line",
-                        Some("Make the current line stand out with highlights"),
+                        tr!("Highlight current line"),
+                        Some(tr!("Make the current line stand out with highlights")),
                         BoolKey::HighlightCurrentLine,
                         s,
                         true,
                     ),
                     switch_row(
-                        "Show Line Numbers",
-                        Some("Display line numbers next to each line of text"),
+                        tr!("Show line numbers"),
+                        Some(tr!("Display line numbers next to each line of text")),
                         BoolKey::ShowLineNumbers,
                         s,
                         true,
@@ -851,7 +861,7 @@ impl Preferences {
                 None,
                 None,
                 vec![switch_row(
-                    "Show whitespace",
+                    tr!("Show whitespace"),
                     None,
                     BoolKey::SpaceDrawer,
                     s,
@@ -859,41 +869,42 @@ impl Preferences {
                 )]
             ),
             group(
-                Some("Indentation"),
+                Some(tr!("Indentation")),
                 None,
                 vec![
                     choice_row(
-                        "Tab character",
-                        Some("The character to be inserted for Tab"),
-                        vec![(false, "Tab"), (true, "Spaces")],
+                        tr!("Tab character"),
+                        Some(tr!("The character to be inserted for Tab")),
+                        vec![(false, tr!("Tab")), (true, tr!("Spaces"))],
                         &s.insert_spaces_instead_of_tabs,
                         Choice::InsertSpaces,
                     ),
                     self.spin_row(
-                        "Indentation Size",
-                        Some("The number of characters to indent"),
+                        tr!("Indentation Size"),
+                        Some(tr!("The number of characters to indent")),
                         SpinKey::IndentWidth,
                         s,
                         true,
                     ),
                 ],
             ),
-            group(Some("Code Overview"), None, vec![overview]),
-            group(Some("External Editor"), None, vec![editor]),
+            group(Some(tr!("Code Overview")), None, vec![overview]),
+            group(Some(tr!("External Editor")), None, vec![editor]),
         ]
         .spacing(24)
         .into()
     }
 
     fn folders_page<'a>(&'a self, s: &'a Settings) -> Element<'a, Message> {
-        let resolutions: Vec<(i32, &str)> = TIMESTAMP_RESOLUTIONS.to_vec();
+        let resolutions: Vec<(i32, &str)> =
+            TIMESTAMP_RESOLUTIONS.iter().map(|(v, label)| (*v, crate::i18n::gettext(label))).collect();
         let shallow = expander(
-            "Compare files based only on size and timestamp",
+            tr!("Compare files based only on size and timestamp"),
             None,
             s.folder_shallow_comparison,
             |v| Message::Bool(BoolKey::ShallowComparison, v),
             vec![choice_row(
-                "Timestamp resolution",
+                tr!("Timestamp resolution"),
                 None,
                 resolutions,
                 &s.folder_time_resolution,
@@ -908,12 +919,12 @@ impl Preferences {
             let controls = row![
                 ui::tool_button(
                     icon::UP,
-                    "Move Up",
+                    tr!("Move Up"),
                     (index > 0).then_some(Message::ColumnMove(index, -1))
                 ),
                 ui::tool_button(
                     icon::DOWN,
-                    "Move Down",
+                    tr!("Move Down"),
                     (!last).then_some(Message::ColumnMove(index, 1))
                 ),
                 toggler(column.visible)
@@ -926,12 +937,12 @@ impl Preferences {
         }
 
         column![
-            group(Some("Comparison Options"), None, vec![shallow]),
+            group(Some(tr!("Comparison Options")), None, vec![shallow]),
             group(
                 None,
                 None,
                 vec![switch_row(
-                    "Ignore symbolic links",
+                    tr!("Ignore symbolic links"),
                     None,
                     BoolKey::IgnoreSymlinks,
                     s,
@@ -942,14 +953,14 @@ impl Preferences {
                 None,
                 None,
                 vec![switch_row(
-                    "Apply text filters during folder comparisons",
-                    Some("Enabling text filters will make comparing large files much slower"),
+                    tr!("Apply text filters during folder comparisons"),
+                    Some(tr!("Enabling text filters will make comparing large files much slower")),
                     BoolKey::FilterText,
                     s,
                     !s.folder_shallow_comparison,
                 )],
             ),
-            group(Some("Visible Columns"), None, columns),
+            group(Some(tr!("Visible Columns")), None, columns),
         ]
         .spacing(24)
         .into()
@@ -959,42 +970,42 @@ impl Preferences {
         let margin = s.vc_show_commit_margin;
         column![
             group(
-                Some("Version Comparisons"),
+                Some(tr!("Version Comparisons")),
                 None,
                 vec![
                     choice_row(
-                        "Order when Comparing File Revisions",
+                        tr!("Order when Comparing File Revisions"),
                         None,
                         vec![
-                            (false, "Left is remote, right is local"),
-                            (true, "Left is local, right is remote"),
+                            (false, tr!("Left is remote, right is local")),
+                            (true, tr!("Left is local, right is remote")),
                         ],
                         &s.vc_left_is_local,
                         Choice::LeftIsLocal,
                     ),
                     choice_row(
-                        "Order when Merging Files",
+                        tr!("Order when Merging Files"),
                         None,
-                        MergeFileOrder::ALL.map(|v| (v, v.label())).to_vec(),
+                        MergeFileOrder::ALL.map(|v| (v, crate::i18n::gettext(v.label()))).to_vec(),
                         &s.vc_merge_file_order,
                         Choice::MergeFileOrder,
                     ),
                 ],
             ),
             group(
-                Some("Commit Message"),
+                Some(tr!("Commit Messages")),
                 None,
                 vec![
                     switch_row(
-                        "Show right margin",
+                        tr!("Show right margin"),
                         None,
                         BoolKey::ShowCommitMargin,
                         s,
                         true
                     ),
-                    self.spin_row("Margin position", None, SpinKey::CommitMargin, s, margin),
+                    self.spin_row(tr!("Margin position"), None, SpinKey::CommitMargin, s, margin),
                     switch_row(
-                        "Automatically break lines at right margin on commit",
+                        tr!("Automatically break lines at right margin on commit"),
                         None,
                         BoolKey::BreakCommitMessage,
                         s,
@@ -1013,19 +1024,19 @@ impl Preferences {
             .flatten();
         column![
             group(
-                Some("File List"),
+                Some(tr!("File List")),
                 None,
                 vec![
                     self.spin_row(
-                        "Row Spacing",
-                        Some("Extra space above and below each file, in pixels"),
+                        tr!("Row Spacing"),
+                        Some(tr!("Extra space above and below each file, in pixels")),
                         SpinKey::FileRowSpacing,
                         s,
                         true,
                     ),
                     self.spin_row(
-                        "Width",
-                        Some("In pixels; dragging the divider changes it too"),
+                        tr!("Width"),
+                        Some(tr!("In pixels; dragging the divider changes it too")),
                         SpinKey::FileListWidth,
                         s,
                         true,
@@ -1033,36 +1044,36 @@ impl Preferences {
                 ],
             ),
             group(
-                Some("Claude Code"),
+                Some(tr!("Claude Code")),
                 Some(
-                    "Explain and Explain & Build run “claude -p” with no tools. Changes apply \
-                     to comparisons opened or reloaded afterwards."
+                    tr!("Explain and Explain & Build run “claude -p” with no tools. Changes apply \
+                         to comparisons opened or reloaded afterwards.")
                 ),
                 vec![
                     switch_row(
-                        "Explain with Claude",
-                        Some("Offer to explain changes whose reason isn’t recorded"),
+                        tr!("Explain with Claude"),
+                        Some(tr!("Offer to explain changes whose reason isn’t recorded")),
                         BoolKey::InferEnabled,
                         s,
                         true,
                     ),
                     entry_row(
-                        "Claude Code Path",
-                        "The claude executable that explains changes and writes build summaries.",
+                        tr!("Claude Code Path"),
+                        tr!("The claude executable that explains changes and writes build summaries."),
                         TextKey::ClaudePath,
                         s,
                         None,
                     ),
                     entry_row(
-                        "Model for Explanations",
-                        "The model passed to claude -p when inferring why a commit or change was made.",
+                        tr!("Model for Explanations"),
+                        tr!("The model passed to claude -p when inferring why a commit or change was made."),
                         TextKey::InferModel,
                         s,
                         None,
                     ),
                     entry_row(
-                        "Model for Build Summaries",
-                        "The model passed to claude -p for a build file's title, summary, decisions and risks.",
+                        tr!("Model for Build Summaries"),
+                        tr!("The model passed to claude -p for a build file's title, summary, decisions and risks."),
                         TextKey::BuildModel,
                         s,
                         None,
@@ -1070,27 +1081,27 @@ impl Preferences {
                 ],
             ),
             group(
-                Some("Repository"),
+                Some(tr!("Repository")),
                 None,
                 vec![
                     entry_row(
-                        "Build Folder",
-                        "Where build files are written, relative to the repository root.",
+                        tr!("Build Folder"),
+                        tr!("Where build files are written, relative to the repository root."),
                         TextKey::BuildFolder,
                         s,
                         None,
                     ),
                     entry_row(
-                        "Notes Ref",
-                        "The notes ref that explanations are read from and saved to.",
+                        tr!("Notes Ref"),
+                        tr!("The notes ref that explanations are read from and saved to."),
                         TextKey::NotesRef,
                         s,
                         None,
                     ),
                     entry_row(
-                        "Agent Author Pattern (regular expression)",
-                        "A regular expression matched against commit authors to recognise agent \
-                         commits, besides the Co-Authored-By: Claude trailer.",
+                        tr!("Agent Author Pattern (regular expression)"),
+                        tr!("A regular expression matched against commit authors to recognise agent \
+                             commits, besides the Co-Authored-By: Claude trailer."),
                         TextKey::AuthorPattern,
                         s,
                         author_error,
@@ -1105,22 +1116,22 @@ impl Preferences {
     fn filters_page<'a>(&'a self, s: &'a Settings) -> Element<'a, Message> {
         column![
             group(
-                Some("Filename filters"),
+                Some(tr!("Filename filters")),
                 Some(
-                    "When performing directory comparisons, you may filter out files and \
-                     directories by name. Each pattern is a list of shell style wildcards \
-                     separated by spaces."
+                    tr!("When performing directory comparisons, you may filter out files and \
+                         directories by name. Each pattern is a list of shell style wildcards \
+                         separated by spaces.")
                 ),
                 vec![self.filter_list(FilterKind::Filename, s)],
             ),
             group(
-                Some("Change trimming"),
+                Some(tr!("Change trimming")),
                 None,
                 vec![switch_row(
-                    "Trim blank line differences from the start and end of changes",
+                    tr!("Trim blank line differences from the start and end of changes"),
                     Some(
-                        "Removing blank lines can simplify comparisons, and can combine with \
-                         text filters to fully remove changes."
+                        tr!("Removing blank lines can simplify comparisons, and can combine with \
+                             text filters to fully remove changes.")
                     ),
                     BoolKey::IgnoreBlankLines,
                     s,
@@ -1128,13 +1139,13 @@ impl Preferences {
                 )],
             ),
             group(
-                Some("Text filters"),
+                Some(tr!("Text filters")),
                 Some(
-                    "When performing file comparisons, you may ignore certain types of changes. \
-                     Each pattern here is a python regular expression which replaces matching \
-                     text with the empty string before comparison is performed. If the \
-                     expression contains groups, only the groups are replaced. See the user \
-                     manual for more details."
+                    tr!("When performing file comparisons, you may ignore certain types of changes. \
+                         Each pattern here is a python regular expression which replaces matching \
+                         text with the empty string before comparison is performed. If the \
+                         expression contains groups, only the groups are replaced. See the user \
+                         manual for more details.")
                 ),
                 vec![self.filter_list(FilterKind::Text, s)],
             ),
@@ -1154,9 +1165,9 @@ impl Preferences {
         let heading = |label: &'static str| text(label).size(12).style(ui::dim_text);
         let mut list = column![
             row![
-                container(heading("Active")).width(56),
-                container(heading("Name")).width(190),
-                heading("Pattern").width(Length::Fill),
+                container(heading(tr!("Active"))).width(56),
+                container(heading(tr!("Name"))).width(190),
+                heading(tr!("Pattern")).width(Length::Fill),
             ]
             .spacing(8)
             .padding([6, 14]),
@@ -1172,14 +1183,14 @@ impl Preferences {
             .center_x(56);
             let (name, pattern): (Element<'a, Message>, Element<'a, Message>) = if is_selected {
                 (
-                    text_input("Name", &filter.name)
+                    text_input(tr!("Name"), &filter.name)
                         .id(kind.name_input_id())
                         .on_input(move |v| msg(FilterAction::SetName(index, v)))
                         .size(14)
                         .padding([4, 6])
                         .width(190)
                         .into(),
-                    text_input("Pattern", &filter.pattern)
+                    text_input(tr!("Pattern"), &filter.pattern)
                         .on_input(move |v| msg(FilterAction::SetPattern(index, v)))
                         .font(iced::Font::MONOSPACE)
                         .size(13)
@@ -1234,28 +1245,28 @@ impl Preferences {
         let toolbar = row![
             toolbar_button(
                 icon::ADD,
-                "Add",
-                "Add new filter",
+                tr!("Add"),
+                tr!("Add new filter"),
                 Some(msg(FilterAction::Add))
             ),
             toolbar_button(
                 "−",
-                "Remove",
-                "Remove selected filter",
+                tr!("Remove"),
+                tr!("Remove selected filter"),
                 selected.map(|_| msg(FilterAction::Remove))
             ),
             toolbar_button(
                 icon::UP,
-                "Move Up",
-                "Move item up",
+                tr!("Move Up"),
+                tr!("Move item up"),
                 selected
                     .filter(|i| *i > 0)
                     .map(|_| msg(FilterAction::MoveUp)),
             ),
             toolbar_button(
                 icon::DOWN,
-                "Move Down",
-                "Move item down",
+                tr!("Move Down"),
+                tr!("Move item down"),
                 selected
                     .filter(|i| i + 1 < filters.len())
                     .map(|_| msg(FilterAction::MoveDown)),
@@ -1357,7 +1368,7 @@ fn column_label(name: &str) -> Option<&'static str> {
     AVAILABLE_COLUMNS
         .iter()
         .find(|(n, _)| *n == name)
-        .map(|(_, label)| *label)
+        .map(|(_, label)| crate::i18n::gettext(label))
 }
 
 /// Moves `items[from]` to `to`, clamped to the list. Returns whether
@@ -1451,8 +1462,8 @@ fn switch_row<'a>(
 fn diff_colors_section(shared: &Shared) -> Element<'_, Message> {
     let s = &shared.settings;
     let header = setting_row(
-        "Difference Colors",
-        Some("How removed, added and changed lines are highlighted"),
+        tr!("Difference Colors"),
+        Some(tr!("How removed, added and changed lines are highlighted")),
         diff_preview_legend(),
         true,
     );
@@ -1490,7 +1501,7 @@ fn diff_colors_section(shared: &Shared) -> Element<'_, Message> {
                 }
             });
         let label = column![
-            text(mode.label()).size(14),
+            text(crate::i18n::gettext(mode.label())).size(14),
             text(mode.description()).size(12).style(ui::dim_text),
         ]
         .spacing(2)
@@ -1519,8 +1530,8 @@ fn diff_colors_section(shared: &Shared) -> Element<'_, Message> {
     let opacity = s.diff_color_opacity.clamp(lo, hi);
     col = col.push(ui::separator(false));
     col = col.push(setting_row(
-        "Difference Color Opacity",
-        Some("Fainter colors keep the text easier to read; outlines stay visible"),
+        tr!("Difference Color Opacity"),
+        Some(tr!("Fainter colors keep the text easier to read; outlines stay visible")),
         row![
             iced::widget::slider(lo..=hi, opacity, Message::DiffColorOpacity)
                 .step(5)
@@ -1543,7 +1554,7 @@ fn diff_preview_legend<'a>() -> Element<'a, Message> {
             .align_x(iced::Center)
             .style(ui::dim_text)
     };
-    row![caption("Left pane"), caption("Right pane")]
+    row![caption(tr!("Left pane")), caption(tr!("Right pane"))]
         .spacing(PREVIEW_GAP)
         .into()
 }
@@ -1601,7 +1612,7 @@ fn diff_preview(shared: &Shared, mode: DiffColorMode) -> Element<'_, Message> {
     };
     tooltip(
         row![pane(DiffSide::Old), pane(DiffSide::New)].spacing(PREVIEW_GAP),
-        container(text("Removed, changed and added lines").size(12))
+        container(text(tr!("Removed, changed and added lines")).size(12))
             .padding([4, 8])
             .style(ui::tooltip_box),
         tooltip::Position::Top,

@@ -8,9 +8,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use iced::Color;
-use meld_ailens::picker::{parse_iso_date, relative_date};
+use meld_ailens::picker::parse_iso_date;
 use meld_ailens::{CancelToken, GitOptions, GitRepository};
-use meld_forge::{Forge, PrState, ProcessRunner, PullRequest, Runner, default_remote};
+use meld_forge::{Forge, ForgeKind, PrState, ProcessRunner, PullRequest, Runner, StateFilter, default_remote};
 
 /// The remote picked per repository root, for this session.
 static CHOSEN: LazyLock<Mutex<HashMap<PathBuf, String>>> = LazyLock::new(Default::default);
@@ -101,6 +101,64 @@ pub fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) ->
     async move { receiver.await.ok() }
 }
 
+/// e.g. "3 days ago", "in 2 hours", "now" (`meld_ailens::picker::relative_date`,
+/// translated); dates are seconds since the epoch.
+pub fn relative_date(date: f64, now: f64) -> String {
+    const UNITS: [u64; 6] = [365 * 24 * 3600, 30 * 24 * 3600, 7 * 24 * 3600, 24 * 3600, 3600, 60];
+    let seconds = (date - now).round() as i64;
+    let abs = seconds.unsigned_abs();
+    let Some(unit) = UNITS.iter().position(|&size| abs >= size) else {
+        return tr!("now").into();
+    };
+    let n = abs / UNITS[unit];
+    match (unit, seconds < 0) {
+        (0, true) => trn!("{} year ago", "{} years ago", n, n),
+        (1, true) => trn!("{} month ago", "{} months ago", n, n),
+        (2, true) => trn!("{} week ago", "{} weeks ago", n, n),
+        (3, true) => trn!("{} day ago", "{} days ago", n, n),
+        (4, true) => trn!("{} hour ago", "{} hours ago", n, n),
+        (_, true) => trn!("{} minute ago", "{} minutes ago", n, n),
+        (0, false) => trn!("in {} year", "in {} years", n, n),
+        (1, false) => trn!("in {} month", "in {} months", n, n),
+        (2, false) => trn!("in {} week", "in {} weeks", n, n),
+        (3, false) => trn!("in {} day", "in {} days", n, n),
+        (4, false) => trn!("in {} hour", "in {} hours", n, n),
+        (_, false) => trn!("in {} minute", "in {} minutes", n, n),
+    }
+}
+
+/// "pull requests" or "merge requests", for the forge (GitHub when not
+/// known), translated; on its own, e.g. as a heading.
+pub fn nouns_heading(kind: Option<ForgeKind>) -> &'static str {
+    match kind {
+        Some(ForgeKind::GitLab) => tr!("Merge requests"),
+        _ => tr!("Pull requests"),
+    }
+}
+
+/// The empty list's text for pull requests (GitHub when not known) in
+/// state `filter`.
+pub fn no_prs(kind: Option<ForgeKind>, filter: StateFilter) -> &'static str {
+    match (kind, filter) {
+        (Some(ForgeKind::GitLab), StateFilter::Open) => tr!("No open merge requests"),
+        (Some(ForgeKind::GitLab), StateFilter::Closed) => tr!("No closed merge requests"),
+        (Some(ForgeKind::GitLab), StateFilter::Merged) => tr!("No merged merge requests"),
+        (Some(ForgeKind::GitLab), StateFilter::All) => tr!("No merge requests"),
+        (_, StateFilter::Open) => tr!("No open pull requests"),
+        (_, StateFilter::Closed) => tr!("No closed pull requests"),
+        (_, StateFilter::Merged) => tr!("No merged pull requests"),
+        (_, StateFilter::All) => tr!("No pull requests"),
+    }
+}
+
+/// "Loading pull requests…" or "Loading merge requests…".
+pub fn loading_prs(kind: Option<ForgeKind>) -> &'static str {
+    match kind {
+        Some(ForgeKind::GitLab) => tr!("Loading merge requests…"),
+        _ => tr!("Loading pull requests…"),
+    }
+}
+
 /// e.g. `alice · updated 3 days ago · feature → main`
 pub fn pr_description(pr: &PullRequest, now: f64) -> String {
     let mut parts = Vec::new();
@@ -108,7 +166,7 @@ pub fn pr_description(pr: &PullRequest, now: f64) -> String {
         parts.push(pr.author.clone());
     }
     if let Some(date) = parse_iso_date(&pr.updated_at).filter(|_| !pr.updated_at.is_empty()) {
-        parts.push(format!("updated {}", relative_date(date, now)));
+        parts.push(tr!("updated {when}", when = relative_date(date, now)));
     }
     if !pr.head_branch.is_empty() && !pr.base_branch.is_empty() {
         parts.push(format!("{} → {}", pr.head_branch, pr.base_branch));
@@ -138,7 +196,7 @@ pub fn state_color(pr: &PullRequest) -> Color {
 pub fn state_badge<'a, M: 'a>(pr: &PullRequest) -> iced::Element<'a, M> {
     use iced::widget::{container, text};
     let color = state_color(pr);
-    container(text(pr.state_label()).size(11).color(Color::WHITE).wrapping(text::Wrapping::None))
+    container(text(crate::i18n::pgettext("pull request state", pr.state_label())).size(11).color(Color::WHITE).wrapping(text::Wrapping::None))
         .padding([1, 7])
         .style(move |_theme: &iced::Theme| container::Style {
             background: Some(iced::Background::Color(color)),

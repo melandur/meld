@@ -70,18 +70,15 @@ impl Comparison {
     /// several folders are a folder comparison, anything else is files.
     pub fn from_paths(paths: Vec<Option<PathBuf>>, auto_compare: bool) -> Result<Self, String> {
         match paths.as_slice() {
-            [] => Err("no paths given".into()),
-            [Some(path)] if !path.exists() => Err("Cannot compare a non-existent file".into()),
+            [] => Err(tr!("no paths given").into()),
+            [Some(path)] if !path.exists() => Err(tr!("Cannot compare a non-existent file").into()),
             [Some(path)] if path.is_dir() || meld_files::is_archive(path) => Ok(Comparison::VersionControl {
                 location: path.clone(),
                 auto_compare,
             }),
             [Some(path)] => Ok(Comparison::VersionControlFile(path.clone())),
-            [None] => Err("a blank pane needs a second file to compare".into()),
-            _ if paths.len() > 3 => Err(format!(
-                "too many arguments (wanted 0-3, got {})",
-                paths.len()
-            )),
+            [None] => Err(tr!("a blank pane needs a second file to compare").into()),
+            _ if paths.len() > 3 => Err(tr!("too many arguments (wanted 0-3, got {})", paths.len())),
             _ => {
                 // Archives are compared as folders (`open_paths` mounts
                 // them first).
@@ -96,7 +93,7 @@ impl Comparison {
                         auto_compare,
                     })
                 } else if dirs > 0 {
-                    Err("Cannot compare a mixture of files and directories".into())
+                    Err(tr!("Cannot compare a mixture of files and directories").into())
                 } else if paths
                     .iter()
                     .all(|p| p.as_ref().is_some_and(|p| is_image_path(p)))

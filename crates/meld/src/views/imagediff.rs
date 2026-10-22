@@ -115,7 +115,7 @@ impl ImageDiff {
                 Message::Loaded(
                     generation,
                     pane,
-                    result.unwrap_or_else(|| Err("The image couldn’t be loaded".into())).map(Arc::new),
+                    result.unwrap_or_else(|| Err(tr!("The image couldn’t be loaded").into())).map(Arc::new),
                 )
             })
         }))
@@ -128,7 +128,7 @@ impl ImageDiff {
 
     pub fn tooltip(&self) -> String {
         let names: Vec<String> = self.paths.iter().map(|p| p.display().to_string()).collect();
-        format!("File comparison:\n{}", names.join("\n"))
+        format!("{}\n{}", tr!("File comparison:"), names.join("\n"))
     }
 
     pub fn unsaved(&self) -> Vec<String> {
@@ -158,7 +158,7 @@ impl ImageDiff {
                         Message::Compared(
                             generation,
                             Arc::new(result.unwrap_or(Comparison {
-                                summary: "The images couldn’t be compared".into(),
+                                summary: tr!("The images couldn’t be compared").into(),
                                 details: None,
                                 identical: false,
                                 overlays: Vec::new(),
@@ -264,18 +264,18 @@ impl ImageDiff {
 
     pub fn toolbar<'a>(&'a self, _shared: &'a Shared) -> Element<'a, Message> {
         let scale_label = match self.zoom {
-            Zoom::Fit => "Fit".to_string(),
+            Zoom::Fit => tr!("Fit").to_string(),
             Zoom::Scale(s) => format!("{:.0}%", s * 100.0),
         };
         row![
             space::horizontal(),
             text(scale_label).size(13).style(ui::dim_text),
-            ui::tool_button("−", "Zoom out", Some(Message::ZoomOut)),
-            ui::tool_button("+", "Zoom in", Some(Message::ZoomIn)),
-            ui::tool_button("1:1", "Actual size", Some(Message::Zoom(Zoom::Scale(1.0)))),
-            ui::tool_button("⤢", "Zoom to fit", Some(Message::Zoom(Zoom::Fit))),
-            ui::tool_button("◐", "Highlight differences", Some(Message::ToggleDifferences)),
-            ui::tool_button(ui::icon::REFRESH, "Reload (Ctrl+R)", Some(Message::Reload)),
+            ui::tool_button("−", tr!("Zoom out"), Some(Message::ZoomOut)),
+            ui::tool_button("+", tr!("Zoom in"), Some(Message::ZoomIn)),
+            ui::tool_button("1:1", tr!("Actual size"), Some(Message::Zoom(Zoom::Scale(1.0)))),
+            ui::tool_button("⤢", tr!("Zoom to fit"), Some(Message::Zoom(Zoom::Fit))),
+            ui::tool_button("◐", tr!("Highlight differences"), Some(Message::ToggleDifferences)),
+            tool_button(ui::icon::REFRESH, tr!("Reload"), "Ctrl+R", Some(Message::Reload)),
         ]
         .spacing(2)
         .align_y(iced::Center)
@@ -284,17 +284,17 @@ impl ImageDiff {
 
     pub fn menu_items(&self, _shared: &Shared) -> Vec<menu::Item<Message>> {
         vec![
-            menu::Item::toggle("Zoom to Fit", self.zoom == Zoom::Fit, Message::Zoom(Zoom::Fit)),
-            menu::Item::action("Actual Size", None, Message::Zoom(Zoom::Scale(1.0))),
-            menu::Item::action("Zoom Image In", None, Message::ZoomIn),
-            menu::Item::action("Zoom Image Out", None, Message::ZoomOut),
-            menu::Item::toggle("Highlight Differences", self.show_differences, Message::ToggleDifferences),
-            menu::Item::toggle("Lock Scrolling", self.lock_scrolling, Message::ToggleLock),
+            menu::Item::toggle(tr!("Zoom to Fit"), self.zoom == Zoom::Fit, Message::Zoom(Zoom::Fit)),
+            menu::Item::action(tr!("Actual Size"), None, Message::Zoom(Zoom::Scale(1.0))),
+            menu::Item::action(tr!("Zoom Image In"), None, Message::ZoomIn),
+            menu::Item::action(tr!("Zoom Image Out"), None, Message::ZoomOut),
+            menu::Item::toggle(tr!("Highlight Differences"), self.show_differences, Message::ToggleDifferences),
+            menu::Item::toggle(tr!("Lock Scrolling"), self.lock_scrolling, Message::ToggleLock),
             menu::Item::Separator,
-            menu::Item::action("Open Externally", Some("Ctrl+Shift+O"), Message::OpenExternal),
-            menu::Item::action("Open Containing Folder", None, Message::OpenFolder),
-            menu::Item::action("Copy Full Path", None, Message::CopyPath),
-            menu::Item::action("Reload", Some("Ctrl+R"), Message::Reload),
+            menu::Item::action(tr!("Open Externally"), Some("Ctrl+Shift+O"), Message::OpenExternal),
+            menu::Item::action(tr!("Open Containing Folder"), None, Message::OpenFolder),
+            menu::Item::action(tr!("Copy Full Path"), None, Message::CopyPath),
+            menu::Item::action(tr!("Reload"), Some("Ctrl+R"), Message::Reload),
         ]
     }
 
@@ -332,8 +332,8 @@ impl ImageDiff {
                 d.height,
                 byte_size(d.file_size)
             ),
-            Pane::Loading => "Loading…".to_string(),
-            Pane::Failed(_) => "Couldn’t load image".to_string(),
+            Pane::Loading => tr!("Loading…").to_string(),
+            Pane::Failed(_) => tr!("Couldn’t load image").to_string(),
         };
         let focused = pane == self.focus;
         let header = tooltip(
@@ -354,7 +354,7 @@ impl ImageDiff {
         );
 
         let body: Element<'_, Message> = match &self.panes[pane] {
-            Pane::Loading => container(text("Loading…").style(ui::dim_text)).center(Length::Fill).into(),
+            Pane::Loading => container(text(tr!("Loading…")).style(ui::dim_text)).center(Length::Fill).into(),
             Pane::Failed(err) => container(text(err.as_str()).style(ui::dim_text)).padding(20).center(Length::Fill).into(),
             Pane::Loaded(decoded) => {
                 let overlay = self
@@ -443,7 +443,7 @@ fn decode(path: &Path) -> Result<Decoded, String> {
     let format = reader
         .format()
         .map(|f| f.extensions_str().first().copied().unwrap_or("image").to_ascii_uppercase())
-        .unwrap_or_else(|| "Unknown".into());
+        .unwrap_or_else(|| tr!("Unknown").into());
     let rgba = reader.decode().map_err(|e| e.to_string())?.to_rgba8();
     let (width, height) = rgba.dimensions();
     let rgba = rgba.into_raw();
@@ -468,7 +468,7 @@ fn compare(images: &[Arc<Decoded>]) -> Comparison {
     let n = images.len();
     if n < 2 {
         return Comparison {
-            summary: "Nothing to compare".into(),
+            summary: tr!("Nothing to compare").into(),
             details: None,
             identical: true,
             overlays: vec![None; n],
@@ -483,7 +483,7 @@ fn compare(images: &[Arc<Decoded>]) -> Comparison {
         if (a.width, a.height) != (b.width, b.height) {
             size_mismatch = true;
             identical = false;
-            parts.push(format!(
+            parts.push(tr!(
                 "Panes {} and {} have different sizes ({} × {} and {} × {})",
                 i + 1,
                 i + 2,
@@ -499,11 +499,24 @@ fn compare(images: &[Arc<Decoded>]) -> Comparison {
         if differing > 0 {
             identical = false;
             let total = mask.len().max(1);
-            let label = if n == 2 { String::new() } else { format!("Panes {} and {}: ", i + 1, i + 2) };
-            parts.push(format!(
-                "{label}{differing} of {total} pixels differ ({:.2}%)",
-                differing as f64 * 100.0 / total as f64
-            ));
+            let percent = format!("{:.2}", differing as f64 * 100.0 / total as f64);
+            parts.push(if n == 2 {
+                tr!(
+                    "{differing} of {total} pixels differ ({percent}%)",
+                    differing = differing,
+                    total = total,
+                    percent = percent
+                )
+            } else {
+                tr!(
+                    "Panes {first} and {second}: {differing} of {total} pixels differ ({percent}%)",
+                    first = i + 1,
+                    second = i + 2,
+                    differing = differing,
+                    total = total,
+                    percent = percent
+                )
+            });
             for pane in [i, i + 1] {
                 let merged = match masks[pane].take() {
                     Some(existing) => existing.iter().zip(&mask).map(|(x, y)| *x || *y).collect(),
@@ -528,11 +541,11 @@ fn compare(images: &[Arc<Decoded>]) -> Comparison {
         })
         .collect();
     let summary = if identical {
-        "Images are identical".to_string()
+        tr!("Images are identical").to_string()
     } else if size_mismatch {
-        "Image sizes differ".to_string()
+        tr!("Image sizes differ").to_string()
     } else {
-        "Images differ".to_string()
+        tr!("Images differ").to_string()
     };
     Comparison {
         summary,
@@ -540,6 +553,12 @@ fn compare(images: &[Arc<Decoded>]) -> Comparison {
         identical,
         overlays,
     }
+}
+
+/// A toolbar button like [`ui::tool_button`], whose tooltip is the
+/// translated `tip` followed by its shortcut.
+fn tool_button<'a>(glyph: &'a str, tip: &str, shortcut: &str, on_press: Option<Message>) -> Element<'a, Message> {
+    ui::tool_button(glyph, ui::with_shortcut(tip, shortcut), on_press)
 }
 
 fn byte_size(size: u64) -> String {

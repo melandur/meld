@@ -2,6 +2,7 @@
 //! modal dialogs and the palette used by every view.
 
 pub mod chooser;
+pub mod ellipsis;
 pub mod menu;
 pub mod modal;
 pub mod pathlabel;
@@ -37,7 +38,7 @@ pub const HEADER_HEIGHT: f32 = 40.0;
 /// A flat icon button for header bars and toolbars, with a tooltip.
 pub fn tool_button<'a, M: Clone + 'a>(
     glyph: &'a str,
-    tip: &'a str,
+    tip: impl text::IntoFragment<'a>,
     on_press: Option<M>,
 ) -> Element<'a, M> {
     let b = button(text(glyph).size(16).center())
@@ -46,6 +47,11 @@ pub fn tool_button<'a, M: Clone + 'a>(
         .on_press_maybe(on_press);
     tooltip(b, container(text(tip).size(13)).padding([4, 8]).style(tooltip_box), tooltip::Position::Bottom)
         .into()
+}
+
+/// A tooltip followed by its shortcut: `Refresh (Ctrl+R)`.
+pub fn with_shortcut(tip: &str, shortcut: &str) -> String {
+    format!("{tip} ({shortcut})")
 }
 
 /// A flat text button.

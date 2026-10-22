@@ -488,7 +488,7 @@ impl Dialog {
 
     fn accept(&mut self) -> (bool, Task<Message>) {
         if self.input.trim().is_empty() {
-            self.error = Some("Type a path".into());
+            self.error = Some(tr!("Type a path").into());
             return (false, Task::none());
         }
         let path = resolve(&self.input, &self.base());
@@ -499,13 +499,13 @@ impl Dialog {
                     return self.navigate(&path);
                 }
                 if !path.is_file() {
-                    self.error = Some(format!("No file named “{}”", path.display()));
+                    self.error = Some(tr!("No file named “{}”", path.display()));
                     return (false, Task::none());
                 }
             }
             Mode::OpenFolder => {
                 if !path.is_dir() {
-                    self.error = Some(format!("No folder named “{}”", path.display()));
+                    self.error = Some(tr!("No folder named “{}”", path.display()));
                     return (false, Task::none());
                 }
             }
@@ -514,17 +514,17 @@ impl Dialog {
                     if path.is_dir() {
                         return self.navigate(&path);
                     }
-                    self.error = Some(format!("No folder named “{}”", path.display()));
+                    self.error = Some(tr!("No folder named “{}”", path.display()));
                     return (false, Task::none());
                 }
                 match path.parent() {
                     Some(parent) if parent.is_dir() => {}
                     Some(parent) => {
-                        self.error = Some(format!("No folder named “{}”", parent.display()));
+                        self.error = Some(tr!("No folder named “{}”", parent.display()));
                         return (false, Task::none());
                     }
                     None => {
-                        self.error = Some("Type a file name".into());
+                        self.error = Some(tr!("Type a file name").into());
                         return (false, Task::none());
                     }
                 }
@@ -571,12 +571,12 @@ impl Dialog {
             );
         }
         if self.entries.is_empty() {
-            list = list.push(container(text("No matches").size(13).style(super::dim_text)).padding([3, 8]));
+            list = list.push(container(text(tr!("No matches")).size(13).style(super::dim_text)).padding([3, 8]));
         }
 
         let status: Element<'_, Message> = if let Some(path) = &self.confirm {
             let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
-            text(format!("A file named “{name}” already exists. Replace it?"))
+            text(tr!("A file named “{name}” already exists. Replace it?", name = name))
                 .size(13)
                 .font(super::bold())
                 .into()
@@ -588,11 +588,11 @@ impl Dialog {
                 })
                 .into()
         } else {
-            text("Tab completes the name; Enter opens folders").size(12).style(super::dim_text).into()
+            text(tr!("Tab completes the name; Enter opens folders")).size(12).style(super::dim_text).into()
         };
 
         let body = column![
-            text_input("Path", &self.input)
+            text_input(tr!("Path"), &self.input)
                 .id(self.input_id.clone())
                 .size(14)
                 .padding([4, 8])
@@ -604,10 +604,10 @@ impl Dialog {
         .spacing(8);
 
         let accept_label = match (self.mode(), self.confirm.is_some()) {
-            (Mode::Save, true) => "Replace",
-            (Mode::Save, false) => "Save",
-            (Mode::OpenFolder, _) => "Select",
-            (Mode::OpenFile, _) => "Open",
+            (Mode::Save, true) => tr!("Replace"),
+            (Mode::Save, false) => tr!("Save"),
+            (Mode::OpenFolder, _) => tr!("Select"),
+            (Mode::OpenFile, _) => tr!("Open"),
         };
         let accept_style = if self.confirm.is_some() {
             button::danger
@@ -618,7 +618,7 @@ impl Dialog {
             self.request.options.title.as_str(),
             body,
             vec![
-                button(text("Cancel")).style(button::secondary).on_press(Message::Cancel).into(),
+                button(text(tr!("Cancel"))).style(button::secondary).on_press(Message::Cancel).into(),
                 button(text(accept_label)).style(accept_style).on_press(Message::Accept).into(),
             ],
         )

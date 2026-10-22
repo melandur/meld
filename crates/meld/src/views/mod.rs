@@ -151,7 +151,7 @@ impl Tab {
             Comparison::SavedFile(path) => {
                 let comparison = crate::shared::read_comparison_file(&path)?;
                 if matches!(comparison, Comparison::SavedFile(_)) {
-                    return Err("invalid saved comparison".into());
+                    return Err(tr!("Error reading saved comparison file").into());
                 }
                 return Tab::open(comparison, shared);
             }

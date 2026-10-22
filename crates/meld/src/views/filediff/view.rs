@@ -86,7 +86,7 @@ pub(super) fn language_label(p: &super::Pane) -> &'static str {
     p.language
         .and_then(|id| meld_files::LANGUAGES.iter().find(|l| l.id == id))
         .map(|l| l.name)
-        .unwrap_or("Plain Text")
+        .unwrap_or(tr!("Plain Text"))
 }
 
 pub(super) fn newline_picker<'a>(pane: usize, newline: NewlineType) -> Element<'a, Message> {
@@ -216,9 +216,9 @@ impl FileDiff {
 
         let body: Element<'a, Message> = if self.cmp.is_none() && self.is_loading() {
             let label = if self.panes.iter().any(|p| p.file.state == LoadState::Loading) {
-                "Loading files…"
+                tr!("Loading files…")
             } else {
-                "Computing differences… (Escape to stop)"
+                tr!("Computing differences… (Escape to stop)")
             };
             stack![
                 body,
@@ -259,7 +259,7 @@ impl FileDiff {
             return (label.clone(), full);
         }
         let Some(path) = file.target() else {
-            return ("Unnamed file".into(), String::new());
+            return (tr!("Unnamed file").into(), String::new());
         };
         let targets: Vec<Option<&std::path::PathBuf>> = self.panes.iter().map(|p| p.file.target()).collect();
         let parent = meld_files::find_shared_parent_path(&targets);
@@ -276,13 +276,13 @@ impl FileDiff {
         let mut r = row![].spacing(2).align_y(Alignment::Center).padding([0, 4]);
         if !p.file.writable && p.file.path.is_some() {
             let (glyph, tip) = if p.editable {
-                ("🔓", "Changes will not be saved to this file; click to prevent editing")
+                ("🔓", tr!("Changes will not be saved to this file; click to prevent editing"))
             } else {
-                ("🔒", "This file is read-only; click to allow editing")
+                ("🔒", tr!("This file can not be written to. You may click here to unlock this file and make changes anyway, but these changes must be saved to a new file."))
             };
             r = r.push(icon_button(glyph, tip, Some(act(Act::ToggleReadOnly(i)))));
         }
-        let save_tip = if p.file.writable { "Save" } else { "Save As…" };
+        let save_tip = if p.file.writable { tr!("Save") } else { tr!("Save As…") };
         r = r.push(icon_button(
             icon::SAVE,
             save_tip,
@@ -290,7 +290,7 @@ impl FileDiff {
         ));
         r = r.push(icon_button(
             icon::FOLDER,
-            "Open a file in this pane",
+            tr!("Open file in this pane"),
             Some(act(Act::OpenFile(i))),
         ));
         let label_text = text(label).size(13).wrapping(text::Wrapping::None);
@@ -387,7 +387,7 @@ impl FileDiff {
     fn find_bar(&self) -> Element<'_, Message> {
         let f = &self.find;
         let error = (f.no_match || f.invalid) && !f.text.is_empty();
-        let entry = text_input("Find", &f.text)
+        let entry = text_input(tr!("Find"), &f.text)
             .id(self.find_id.clone())
             .size(14)
             .padding([4, 8])
@@ -405,51 +405,51 @@ impl FileDiff {
             });
         let mut first = row![
             entry,
-            icon_button(icon::UP, "Previous Result", Some(Message::Find(FindMessage::Previous))),
-            icon_button(icon::DOWN, "Next Result", Some(Message::Find(FindMessage::Next))),
+            icon_button(icon::UP, tr!("Previous Result"), Some(Message::Find(FindMessage::Previous))),
+            icon_button(icon::DOWN, tr!("Next Result"), Some(Message::Find(FindMessage::Next))),
             checkbox(f.match_case)
-                .label("Match case")
+                .label(tr!("Match case"))
                 .text_size(13)
                 .on_toggle(|b| Message::Find(FindMessage::MatchCase(b))),
             checkbox(f.whole_word)
-                .label("Whole word")
+                .label(tr!("Whole word"))
                 .text_size(13)
                 .on_toggle(|b| Message::Find(FindMessage::WholeWord(b))),
             checkbox(f.regex)
-                .label("Regular expression")
+                .label(tr!("Regular expression"))
                 .text_size(13)
                 .on_toggle(|b| Message::Find(FindMessage::Regex(b))),
         ]
         .spacing(10)
         .align_y(Alignment::Center);
         if f.wrapped {
-            first = first.push(text("↻ Wrapped").size(13).style(ui::dim_text));
+            first = first.push(text(format!("↻ {}", tr!("Wrapped"))).size(13).style(ui::dim_text));
         }
         first = first.push(space::horizontal());
         first = first.push(icon_button(
             "⇄",
-            "Switch between Find and Find-and-Replace",
+            tr!("Switch between Find and Find-and-Replace"),
             Some(Message::Find(FindMessage::ToggleReplace)),
         ));
         first = first.push(icon_button(
             icon::CLOSE,
-            "Close",
+            tr!("Close"),
             Some(Message::Find(FindMessage::Close)),
         ));
         let mut col = column![first].spacing(6);
         if f.replace_mode {
             col = col.push(
                 row![
-                    text_input("Replace", &f.replacement)
+                    text_input(tr!("Replace"), &f.replacement)
                         .size(14)
                         .padding([4, 8])
                         .width(260)
                         .on_input(|t| Message::Find(FindMessage::Replacement(t)))
                         .on_submit(Message::Find(FindMessage::Replace)),
-                    button(text("Replace").size(13))
+                    button(text(tr!("Replace")).size(13))
                         .padding([4, 10])
                         .on_press(Message::Find(FindMessage::Replace)),
-                    button(text("Replace All").size(13))
+                    button(text(tr!("Replace All")).size(13))
                         .padding([4, 10])
                         .on_press(Message::Find(FindMessage::ReplaceAll)),
                 ]
@@ -492,7 +492,7 @@ impl FileDiff {
             .align_y(Alignment::Center)
             .padding([0, 6]);
         r = r.push(small_button(
-            if shown.display_label { "Display ▾" } else { "☰" },
+            if shown.display_label { format!("{} ▾", tr!("Display")) } else { "☰".to_string() },
             Some(act(Act::Display(i))),
         ));
         if shown.encoding {
@@ -508,7 +508,7 @@ impl FileDiff {
             && *pane == i
         {
             r = r.push(
-                text_input("Line", line)
+                text_input(tr!("Line"), line)
                     .id(self.go_to_id.clone())
                     .size(12)
                     .padding([2, 6])
@@ -518,7 +518,7 @@ impl FileDiff {
             );
         } else {
             let label = if shown.long_position {
-                format!("Ln {}, Col {}", cursor.line + 1, column + 1)
+                tr!("Ln {line}, Col {column}", line = cursor.line + 1, column = column + 1)
             } else {
                 format!("{}:{}", cursor.line + 1, column + 1)
             };
@@ -526,7 +526,7 @@ impl FileDiff {
         }
         if shown.overwrite {
             r = r.push(
-                text(if self.overwrite { "OVR" } else { "INS" })
+                text(if self.overwrite { tr!("OVR") } else { tr!("INS") })
                     .size(12)
                     .wrapping(text::Wrapping::None)
                     .style(ui::dim_text),
@@ -543,23 +543,23 @@ impl FileDiff {
         }
         r = r.push(ui::tool_button(
             icon::UP,
-            "Previous change (Alt+Up)",
+            ui::with_shortcut(tr!("Go to the previous change"), "Alt+Up"),
             self.cursor.prev.map(|_| act(Act::PrevChange)),
         ));
         r = r.push(ui::tool_button(
             icon::DOWN,
-            "Next change (Alt+Down)",
+            ui::with_shortcut(tr!("Go to the next change"), "Alt+Down"),
             self.cursor.next.map(|_| act(Act::NextChange)),
         ));
         if self.panes.len() == 3 {
             r = r.push(ui::tool_button(
                 icon::CONFLICT_PREV,
-                "Previous conflict (Ctrl+J)",
+                ui::with_shortcut(tr!("Go to the previous conflict"), "Ctrl+J"),
                 self.cursor.prev_conflict.map(|_| act(Act::PrevConflict)),
             ));
             r = r.push(ui::tool_button(
                 icon::CONFLICT_NEXT,
-                "Next conflict (Ctrl+K)",
+                ui::with_shortcut(tr!("Go to the next conflict"), "Ctrl+K"),
                 self.cursor.next_conflict.map(|_| act(Act::NextConflict)),
             ));
         }
@@ -567,28 +567,28 @@ impl FileDiff {
             r = r.push(Space::new().width(8));
             r = r.push(ui::tool_button(
                 icon::LEFT,
-                "Push current change to the left (Alt+Left)",
+                ui::with_shortcut(tr!("Push current change to the left"), "Alt+Left"),
                 s.push_left.then_some(act(Act::PushLeft)),
             ));
             r = r.push(ui::tool_button(
                 icon::RIGHT,
-                "Push current change to the right (Alt+Right)",
+                ui::with_shortcut(tr!("Push current change to the right"), "Alt+Right"),
                 s.push_right.then_some(act(Act::PushRight)),
             ));
             r = r.push(ui::tool_button(
                 "⎘",
-                "Copy chunks",
+                tr!("Copy chunks"),
                 (s.copy_left || s.copy_right).then_some(act(Act::Popup(Some(PopupKind::CopyMenu)))),
             ));
             r = r.push(ui::tool_button(
                 "⌦",
-                "Delete change (Alt+Delete)",
+                ui::with_shortcut(tr!("Delete change"), "Alt+Delete"),
                 s.delete.then_some(act(Act::DeleteChange)),
             ));
         }
         r = r.push(Space::new().width(8));
         r = r.push(
-            button(text("Text Filters ▾").size(13))
+            button(text(format!("{} ▾", tr!("Text Filters"))).size(13))
                 .padding([4, 8])
                 .style(ui::flat_button)
                 .on_press(act(Act::Popup(Some(PopupKind::Filters)))),
@@ -610,33 +610,33 @@ impl FileDiff {
         let (merge_left, merge_right, merge_all) = self.merge_sensitivity();
         let _ = modified_focus;
         let mut items = vec![
-            action("Save As…", Some("Ctrl+Shift+S"), focus.is_some(), Act::SaveAs),
-            action("Save All", Some("Ctrl+Shift+L"), any_modified, Act::SaveAll),
-            action("Revert Files…", None, true, Act::Revert),
+            action(tr!("Save As…"), Some("Ctrl+Shift+S"), focus.is_some(), Act::SaveAs),
+            action(tr!("Save All"), Some("Ctrl+Shift+L"), any_modified, Act::SaveAll),
+            action(tr!("Revert Files…"), None, true, Act::Revert),
             action(
-                "Open Externally",
+                tr!("Open Externally"),
                 Some("Ctrl+Shift+O"),
                 focus.is_some_and(|p| self.panes[p].file.path.is_some()),
                 Act::OpenExternal,
             ),
             Item::Separator,
-            action("Refresh Comparison", Some("Ctrl+R"), self.cmp.is_some(), Act::Refresh),
-            action("Find…", Some("Ctrl+F"), true, Act::Find),
+            action(tr!("Refresh Comparison"), Some("Ctrl+R"), self.cmp.is_some(), Act::Refresh),
+            action(tr!("Find…"), Some("Ctrl+F"), true, Act::Find),
             Item::Separator,
-            Item::toggle("Overview Map", self.show_overview_map, act(Act::ToggleOverview)),
-            Item::toggle("Lock Scrolling", self.lock_scrolling, act(Act::ToggleLockScrolling)),
+            Item::toggle(tr!("Overview Map"), self.show_overview_map, act(Act::ToggleOverview)),
+            Item::toggle(tr!("Lock Scrolling"), self.lock_scrolling, act(Act::ToggleLockScrolling)),
         ];
         if n == 2 {
-            items.push(action("Swap Panes", Some("Alt+\\"), true, Act::Swap));
+            items.push(action(tr!("Swap Left and Right Panes"), Some("Alt+\\"), true, Act::Swap));
         }
         if n > 1 {
             items.push(Item::Separator);
-            items.push(action("Merge All from Left", None, merge_left, Act::MergeAllLeft));
-            items.push(action("Merge All from Right", None, merge_right, Act::MergeAllRight));
+            items.push(action(tr!("Merge All from Left"), None, merge_left, Act::MergeAllLeft));
+            items.push(action(tr!("Merge All from Right"), None, merge_right, Act::MergeAllRight));
             if n == 3 {
-                items.push(action("Merge All", None, merge_all, Act::MergeAll));
+                items.push(action(tr!("Merge All"), None, merge_all, Act::MergeAll));
             }
-            items.push(action("Format as Patch…", None, true, Act::FormatPatch));
+            items.push(action(tr!("Format as Patch…"), None, true, Act::FormatPatch));
         }
         items
     }

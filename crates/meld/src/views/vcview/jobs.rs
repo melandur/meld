@@ -54,7 +54,7 @@ impl<T> std::fmt::Debug for Slot<T> {
 pub async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
     tokio::task::spawn_blocking(f)
         .await
-        .map_err(|e| format!("background task failed: {e}"))
+        .map_err(|e| tr!("Background task failed: {}", e))
 }
 
 /// Runs `f` on a blocking thread, streaming the events it emits.
@@ -107,7 +107,7 @@ pub async fn load(location: PathBuf, current: Option<VcKind>) -> Result<Loaded, 
         let choices = meld_vc::choose_vcs(Some(&location), current);
         let vc = match choices.choices.get(choices.active) {
             Some(choice) => open_pair(choice.kind, &choices.location).map(Slot::new),
-            None => Err("No version control system available".to_string()),
+            None => Err(tr!("No version control system available").to_string()),
         };
         Loaded { choices, vc }
     })
@@ -189,13 +189,13 @@ pub fn scan(
             let (start, subtree) = match &scope {
                 ScanScope::Full { refresh } => {
                     if *refresh {
-                        emit(ScanEvent::Progress("Scanning repository".into()));
+                        emit(ScanEvent::Progress(tr!("Scanning repository").into()));
                         vc.refresh_vc_state(None).map_err(|e| e.to_string())?;
                     }
                     (vc.location().to_path_buf(), None)
                 }
                 ScanScope::Folder(folder) => {
-                    emit(ScanEvent::Progress("Scanning repository".into()));
+                    emit(ScanEvent::Progress(tr!("Scanning repository").into()));
                     forget_below(&mut **vc, folder);
                     vc.refresh_vc_state(Some(folder)).map_err(|e| e.to_string())?;
                     (folder.clone(), Some(folder.clone()))
@@ -303,7 +303,7 @@ pub fn run_action(vc: SharedVc, action: Action, files: Vec<PathBuf>, message: St
                 }
                 Err(e) => {
                     failed = true;
-                    error = Some(format!("While running '{}'\nError: {e}", line.trim_end()));
+                    error = Some(tr!("While running '{}'\nError: {}", line.trim_end(), e));
                 }
             }
             if command.refresh && !refresh.contains(&command.working_dir) {
@@ -401,11 +401,12 @@ pub async fn trash(paths: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<Stri
                 // Like Meld, folders that can't be trashed are not
                 // deleted recursively.
                 Err(meld_files::TrashError::NeedsConfirmation { is_dir: true, .. }) => errors.push(format!(
-                    "Error deleting {}: Deleting remote folders is not supported",
-                    path.display()
+                    "{}: {}",
+                    tr!("Error deleting {}", path.display()),
+                    tr!("Deleting remote folders is not supported")
                 )),
                 Err(meld_files::TrashError::NeedsConfirmation { .. }) => confirm.push(path),
-                Err(e) => errors.push(format!("Error deleting {}: {e}", path.display())),
+                Err(e) => errors.push(format!("{}: {e}", tr!("Error deleting {}", path.display()))),
             }
         }
         (trashed, confirm, errors)
@@ -423,7 +424,7 @@ pub async fn delete_permanently(paths: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<Strin
         for path in paths {
             match meld_files::delete_permanently(&path) {
                 Ok(()) => deleted.push(path),
-                Err(e) => errors.push(format!("Error deleting {}: {e}", path.display())),
+                Err(e) => errors.push(format!("{}: {e}", tr!("Error deleting {}", path.display()))),
             }
         }
         (deleted, errors)

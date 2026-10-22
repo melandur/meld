@@ -171,7 +171,7 @@ impl PaneFile {
         }
         match self.target() {
             Some(p) => p.display().to_string(),
-            None => "<unnamed>".into(),
+            None => tr!("<unnamed>").into(),
         }
     }
 
@@ -892,8 +892,8 @@ impl FileDiff {
 
     pub fn tooltip(&self) -> String {
         match &self.extras.tab_label {
-            Some(label) => format!("File comparison:\n{label}"),
-            None => format!("File comparison:\n{}", self.labels().join("\n")),
+            Some(label) => format!("{}\n{label}", tr!("File comparison:")),
+            None => format!("{}\n{}", tr!("File comparison:"), self.labels().join("\n")),
         }
     }
 
@@ -967,7 +967,7 @@ impl FileDiff {
             Message::Done(result) => {
                 if let Err(err) = result {
                     self.dialog = Some(Dialog::Error {
-                        primary: "Error".into(),
+                        primary: tr!("Error").into(),
                         secondary: err,
                     });
                 }
@@ -987,16 +987,16 @@ impl FileDiff {
                     self.panes[0].banner = Some(Banner {
                         id: MsgId::Error,
                         kind: BannerKind::Error,
-                        primary: "Could not open the version control comparison".into(),
+                        primary: tr!("Could not open the version control comparison").into(),
                         secondary: Some(err),
-                        actions: vec![("Hide".into(), BannerAction::Hide)],
+                        actions: vec![(tr!("Hide").into(), BannerAction::Hide)],
                     });
                     Task::none()
                 }
             },
             Message::Resolved(result) => {
                 if let Err(err) = result {
-                    events.push(Event::Notify(format!("Could not mark the conflict resolved: {err}")));
+                    events.push(Event::Notify(tr!("Could not mark the conflict resolved: {}", err)));
                 }
                 self.finish_close(events)
             }

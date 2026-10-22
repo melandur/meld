@@ -2,12 +2,13 @@
 
 use std::path::PathBuf;
 
-use iced::widget::{button, checkbox, column, container, row, space, text};
+use iced::widget::{button, checkbox, column, container, row, space, text, tooltip};
 use iced::{Element, Length, Subscription, Task};
 
 use crate::command::Command;
 use crate::comparison::Comparison;
 use crate::shared::Shared;
+use crate::ui::ellipsis::{Mode, ellipsized};
 use crate::ui::{self, menu};
 use crate::views::Event;
 use crate::views::prlist::{self, PrList};
@@ -25,19 +26,19 @@ impl Kind {
 
     fn label(self) -> &'static str {
         match self {
-            Kind::File => "File comparison",
-            Kind::Folder => "Folder comparison",
-            Kind::VersionControl => "Version control view",
-            Kind::Git => "Git Compare",
+            Kind::File => tr!("File comparison"),
+            Kind::Folder => tr!("Folder comparison"),
+            Kind::VersionControl => tr!("Version control view"),
+            Kind::Git => tr!("Git Compare"),
         }
     }
 
     fn description(self) -> &'static str {
         match self {
-            Kind::File => "Compare two or three files, and merge changes between them",
-            Kind::Folder => "Compare two or three folders, and copy files between them",
-            Kind::VersionControl => "Browse a version controlled folder's changes and commit them",
-            Kind::Git => "Compare two revisions of a Git repository, with why each change was made",
+            Kind::File => tr!("Compare two or three files, and merge changes between them"),
+            Kind::Folder => tr!("Compare two or three folders, and copy files between them"),
+            Kind::VersionControl => tr!("Browse a version controlled folder's changes and commit them"),
+            Kind::Git => tr!("Compare two revisions of a Git repository, with why each change was made"),
         }
     }
 
@@ -51,10 +52,20 @@ impl Kind {
 
     fn chooser_labels(self) -> [&'static str; 3] {
         match self {
-            Kind::File => ["First file", "Second file", "Third file"],
-            Kind::Folder => ["First folder", "Second folder", "Third folder"],
-            Kind::VersionControl => ["Version control folder", "", ""],
-            Kind::Git => ["Git repository", "", ""],
+            Kind::File => [tr!("First file"), tr!("Second file"), tr!("Third file")],
+            Kind::Folder => [tr!("First folder"), tr!("Second folder"), tr!("Third folder")],
+            Kind::VersionControl => [tr!("Version control folder"), "", ""],
+            Kind::Git => [tr!("Git repository"), "", ""],
+        }
+    }
+
+    /// The title of the file chooser for a pane (`new-diff-tab.ui`).
+    fn chooser_titles(self) -> [&'static str; 3] {
+        match self {
+            Kind::File => [tr!("Select First File"), tr!("Select Second File"), tr!("Select Third File")],
+            Kind::Folder => [tr!("Select First Folder"), tr!("Select Second Folder"), tr!("Select Third Folder")],
+            Kind::VersionControl => [tr!("Select A Version-Controlled Folder"), "", ""],
+            Kind::Git => [tr!("Select Folder"), "", ""],
         }
     }
 }
@@ -101,7 +112,7 @@ impl NewTab {
     }
 
     pub fn title(&self) -> String {
-        "New comparison".into()
+        tr!("New comparison").into()
     }
 
     pub fn tooltip(&self) -> String {
@@ -146,7 +157,7 @@ impl NewTab {
                 let Some(kind) = self.kind else {
                     return Task::none();
                 };
-                let title = kind.chooser_labels()[pane];
+                let title = kind.chooser_titles()[pane];
                 let start = self
                     .chosen(pane)
                     .and_then(|p| p.parent().map(PathBuf::from))
@@ -277,38 +288,46 @@ impl NewTab {
         }
 
         let choosers: Element<'_, Message> = match self.kind {
-            None => container(text("Choose a comparison type").style(ui::dim_text))
+            None => container(text(tr!("Choose a comparison type")).style(ui::dim_text))
                 .center(Length::Fill)
                 .into(),
             Some(kind) => {
                 let labels = kind.chooser_labels();
                 let mut col = column![].spacing(10).width(Length::Fill);
                 for (pane, label) in labels.iter().enumerate().take(self.pane_count()) {
-                    let current = self
-                        .chosen(pane)
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_else(|| "(None)".into());
+                    let chosen = self.chosen(pane).map(|p| p.display().to_string());
+                    // Long paths keep their end, the full path is in the
+                    // tooltip
+                    let current = chosen.clone().unwrap_or_else(|| format!("({})", tr!("None")));
+                    let choose: Element<'_, Message> = button(ellipsized(current, Mode::Start).size(14).width(Length::Fill))
+                        .width(Length::Fill)
+                        .style(button::secondary)
+                        .on_press(Message::Choose(pane))
+                        .into();
+                    let choose = match chosen {
+                        Some(full) => tooltip(
+                            choose,
+                            container(text(full).size(13)).padding([4, 8]).style(ui::tooltip_box),
+                            tooltip::Position::Bottom,
+                        )
+                        .into(),
+                        None => choose,
+                    };
                     col = col.push(
-                        row![
-                            text(*label).size(14).width(170),
-                            button(text(current).size(14).wrapping(text::Wrapping::None))
-                                .width(Length::Fill)
-                                .style(button::secondary)
-                                .on_press(Message::Choose(pane)),
-                        ]
+                        row![text(*label).size(14).width(170), choose]
                         .spacing(10)
                         .align_y(iced::Center),
                     );
                 }
                 if matches!(kind, Kind::File | Kind::Folder) {
-                    col = col.push(checkbox(self.three_way).label("3-way comparison").on_toggle(Message::ThreeWay));
+                    col = col.push(checkbox(self.three_way).label(tr!("3-way comparison")).on_toggle(Message::ThreeWay));
                 }
                 if kind == Kind::Git {
                     if self.git.is_some() {
                         col = col.push(container(self.prs.view().map(Message::Prs)).height(Length::Fill));
                     } else {
                         col = col.push(
-                            text("Choose a repository to compare two of its revisions, or to review one of its pull requests")
+                            text(tr!("Choose a repository to compare two of its revisions, or to review one of its pull requests"))
                                 .size(13)
                                 .style(ui::dim_text),
                         );
@@ -320,12 +339,12 @@ impl NewTab {
                 let mut buttons = row![space::horizontal()].spacing(10);
                 if kind.supports_blank() {
                     buttons = buttons.push(
-                        button(text("Blank comparison"))
+                        button(text(tr!("Blank comparison")))
                             .style(button::secondary)
                             .on_press(Message::Blank),
                     );
                 }
-                buttons = buttons.push(button(text("Compare")).on_press_maybe(self.ready().then_some(Message::Compare)));
+                buttons = buttons.push(button(text(tr!("Compare"))).on_press_maybe(self.ready().then_some(Message::Compare)));
                 col.push(buttons).into()
             }
         };

@@ -144,7 +144,7 @@ pub fn overlay<'a, M: Clone + 'a>(
         return base.into();
     };
     let entry = container(
-        text_input("Search", &search.text)
+        text_input(tr!("Search"), &search.text)
             .id(INPUT_ID)
             .on_input(on_input)
             .size(13)

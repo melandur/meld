@@ -124,7 +124,7 @@ fn heading<'a>(label: &'a str) -> Element<'a, Message> {
 }
 
 fn cancel_button<'a>() -> Element<'a, Message> {
-    button(text("Cancel")).style(button::secondary).on_press(Message::CloseDialog).into()
+    button(text(tr!("Cancel"))).style(button::secondary).on_press(Message::CloseDialog).into()
 }
 
 fn file_list<'a>(lines: Vec<String>) -> Element<'a, Message> {
@@ -155,37 +155,37 @@ pub fn view<'a>(dialog: &'a Dialog, shared: &'a Shared, location: &Path) -> Elem
         Dialog::Commit(commit) => commit_view(commit, shared),
         Dialog::Push(summary) => {
             let mut body = column![
-                text("The commits to be pushed are determined by your version control system.").size(14)
+                text(tr!("The commits to be pushed are determined by your version control system.")).size(14)
             ]
             .spacing(8)
             .width(ALERT_WIDTH);
             body = body.push(match summary {
-                None => text("Checking for commits to push…").size(13).style(ui::dim_text),
-                Some(Ok(s)) if s.is_empty() => text("No unpushed commits were found.").size(13).style(ui::dim_text),
-                Some(Ok(s)) => text(s.clone()).size(14).font(ui::bold()),
+                None => text(tr!("Checking for commits to push…")).size(13).style(ui::dim_text),
+                Some(Ok(s)) if s.is_empty() => text(tr!("No unpushed commits were found.")).size(13).style(ui::dim_text),
+                Some(Ok(s)) => text(super::labels::push_summary(s)).size(14).font(ui::bold()),
                 Some(Err(e)) => text(e.clone()).size(13).style(text::danger),
             });
             frame(
-                "Push local commits to remote?",
+                tr!("Push local commits to remote?"),
                 body,
                 vec![
                     cancel_button(),
-                    button(text("Push commits")).on_press(Message::ConfirmDialog).into(),
+                    button(text(tr!("Push commits"))).on_press(Message::ConfirmDialog).into(),
                 ],
                 ALERT_WIDTH,
             )
         }
         Dialog::ConfirmRemove(_) => frame(
-            "Remove folder and all its files?",
-            text(
+            tr!("Remove folder and all its files?"),
+            text(tr!(
                 "This will remove all selected files and folders, and all files within any selected \
-                 folders, from version control.",
-            )
+                 folders, from version control."
+            ))
             .size(14)
             .width(ALERT_WIDTH),
             vec![
                 cancel_button(),
-                button(text("Remove"))
+                button(text(tr!("Remove")))
                     .style(button::danger)
                     .on_press(Message::ConfirmDialog)
                     .into(),
@@ -193,16 +193,16 @@ pub fn view<'a>(dialog: &'a Dialog, shared: &'a Shared, location: &Path) -> Elem
             ALERT_WIDTH,
         ),
         Dialog::ConfirmRevert(paths) => frame(
-            "Revert changes to the selected files?",
+            tr!("Revert changes to the selected files?"),
             column![
-                text("Changes made to the following files will be permanently lost:").size(14),
+                text(tr!("Changes made to the following files will be permanently lost:")).size(14),
                 file_list(relative_names(paths, location)),
             ]
             .spacing(10)
             .width(ALERT_WIDTH),
             vec![
                 cancel_button(),
-                button(text("Revert"))
+                button(text(tr!("Revert")))
                     .style(button::danger)
                     .on_press(Message::ConfirmDialog)
                     .into(),
@@ -210,13 +210,13 @@ pub fn view<'a>(dialog: &'a Dialog, shared: &'a Shared, location: &Path) -> Elem
             ALERT_WIDTH,
         ),
         Dialog::ConfirmDelete(paths) => frame(
-            "Delete Permanently?",
+            tr!("Delete Permanently?"),
             column![
-                text(if paths.len() == 1 {
-                    "This file can’t be put in the trash. Do you want to delete it permanently?"
-                } else {
-                    "These files can’t be put in the trash. Do you want to delete them permanently?"
-                })
+                text(trn!(
+                    "This file can’t be put in the trash. Do you want to delete it permanently?",
+                    "These files can’t be put in the trash. Do you want to delete them permanently?",
+                    paths.len()
+                ))
                 .size(14),
                 file_list(relative_names(paths, location)),
             ]
@@ -224,7 +224,7 @@ pub fn view<'a>(dialog: &'a Dialog, shared: &'a Shared, location: &Path) -> Elem
             .width(ALERT_WIDTH),
             vec![
                 cancel_button(),
-                button(text("Delete Permanently"))
+                button(text(tr!("Delete Permanently")))
                     .style(button::danger)
                     .on_press(Message::ConfirmDialog)
                     .into(),
@@ -236,7 +236,7 @@ pub fn view<'a>(dialog: &'a Dialog, shared: &'a Shared, location: &Path) -> Elem
 
 fn commit_view<'a>(commit: &'a CommitDialog, shared: &'a Shared) -> Element<'a, Message> {
     let files: Element<'a, Message> = match &commit.files {
-        None => text("Looking for files to commit…").size(13).style(ui::dim_text).into(),
+        None => text(tr!("Looking for files to commit…")).size(13).style(ui::dim_text).into(),
         Some(Ok(lines)) => file_list(lines.clone()),
         Some(Err(e)) => text(e.clone()).size(13).style(text::danger).into(),
     };
@@ -254,7 +254,7 @@ fn commit_view<'a>(commit: &'a CommitDialog, shared: &'a Shared) -> Element<'a, 
         .padding(padding)
         .height(200)
         .wrapping(text::Wrapping::Word)
-        .placeholder("Log message")
+        .placeholder(tr!("Log message"))
         .on_action(Message::CommitEdit);
 
     let settings = &shared.settings;
@@ -276,7 +276,7 @@ fn commit_view<'a>(commit: &'a CommitDialog, shared: &'a Shared) -> Element<'a, 
 
     let history = commit.history_items();
     let previous = row![
-        text("Previous logs:").size(14),
+        text(tr!("Previous logs:")).size(14),
         pick_list(history, commit.history_choice.clone(), Message::CommitHistory)
             .placeholder("")
             .text_size(13)
@@ -286,9 +286,9 @@ fn commit_view<'a>(commit: &'a CommitDialog, shared: &'a Shared) -> Element<'a, 
     .align_y(iced::Center);
 
     let body = column![
-        heading("Changed Files"),
+        heading(tr!("Changed Files")),
         files,
-        heading("Log Message"),
+        heading(tr!("Log Message")),
         container(editor).style(card).width(Length::Fill),
         previous,
     ]
@@ -297,11 +297,11 @@ fn commit_view<'a>(commit: &'a CommitDialog, shared: &'a Shared) -> Element<'a, 
 
     let can_commit = commit.files.is_some() && !commit.message().trim().is_empty();
     frame(
-        "Commit Files",
+        tr!("Commit Files"),
         body,
         vec![
             cancel_button(),
-            button(text("Commit"))
+            button(text(tr!("Commit")))
                 .on_press_maybe(can_commit.then_some(Message::ConfirmDialog))
                 .into(),
         ],

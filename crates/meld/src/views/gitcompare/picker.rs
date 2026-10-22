@@ -20,7 +20,7 @@ use meld_ailens::picker::{EntryKind, filter_entries};
 use meld_ailens::{PickerEntry, PickerSide, Revision, RevisionKind};
 use meld_forge::StateFilter;
 
-use super::ellipsis::{Mode, ellipsized};
+use crate::ui::ellipsis::{Mode, ellipsized};
 use super::popover::popover;
 use crate::ui;
 
@@ -96,7 +96,7 @@ impl Picker {
     pub fn new(side: PickerSide) -> Self {
         Picker {
             side,
-            label: "Choose…".into(),
+            label: tr!("Choose…").into(),
             tooltip: String::new(),
             entries: Vec::new(),
             search_results: Vec::new(),
@@ -114,8 +114,8 @@ impl Picker {
 
     pub fn title(&self) -> &'static str {
         match self.side {
-            PickerSide::Base => "Base",
-            PickerSide::Target => "Target",
+            PickerSide::Base => tr!("Base"),
+            PickerSide::Target => tr!("Target"),
         }
     }
 
@@ -228,7 +228,7 @@ impl Picker {
     /// The status line under the list.
     pub fn status_text(&self) -> String {
         if self.total > MAX_ROWS {
-            format!("Showing {MAX_ROWS} of {}; type to narrow down", self.total)
+            tr!("Showing {shown} of {total}; type to narrow down", shown = MAX_ROWS, total = self.total)
         } else {
             self.status.clone()
         }
@@ -333,9 +333,9 @@ impl Picker {
 
     fn popup<'a, M: Clone + 'a>(&'a self, map: impl Fn(Message) -> M + Copy + 'a) -> Element<'a, M> {
         let placeholder = if self.prs.is_some() {
-            "Branch, tag, commit message, author, SHA or pull request"
+            tr!("Branch, tag, commit message, author, SHA or pull request")
         } else {
-            "Branch, tag, commit message, author or SHA"
+            tr!("Branch, tag, commit message, author or SHA")
         };
         let input = text_input(placeholder, &self.query)
             .id(self.input_id.clone())
@@ -349,7 +349,7 @@ impl Picker {
         for (index, entry) in self.rows.iter().enumerate() {
             if section != Some(entry.section.as_str()) {
                 list = list.push(
-                    container(text(entry.section.as_str()).size(13).font(ui::bold()))
+                    container(text(section_label(entry.section.as_str())).size(13).font(ui::bold()))
                         .padding(iced::Padding {
                             top: if section.is_some() { 8.0 } else { 2.0 },
                             bottom: 2.0,
@@ -363,7 +363,7 @@ impl Picker {
         }
         if self.rows.is_empty() {
             list = list.push(
-                container(text("No matching revisions").size(13).style(ui::dim_text))
+                container(text(tr!("No matching revisions")).size(13).style(ui::dim_text))
                     .padding(20)
                     .center_x(Length::Fill),
             );
@@ -374,11 +374,11 @@ impl Picker {
             let filters = crate::forge::chips(
                 StateFilter::ALL
                     .iter()
-                    .map(|f| (f.label().to_string(), map(Message::PrFilter(*f))))
+                    .map(|f| (crate::i18n::pgettext("pull request state", f.label()).to_string(), map(Message::PrFilter(*f))))
                     .collect(),
                 StateFilter::ALL.iter().position(|f| *f == prs.filter),
             );
-            let mut line = row![text("Pull requests").size(12).style(ui::dim_text), filters]
+            let mut line = row![text(tr!("Pull requests")).size(12).style(ui::dim_text), filters]
                 .spacing(8)
                 .align_y(iced::Center);
             if prs.remotes.len() > 1 {
@@ -504,17 +504,36 @@ fn picker_button(open: bool) -> impl Fn(&Theme, button::Status) -> button::Style
 
 /// The picker's label before the comparison resolved it (`_describe_revision`).
 pub fn describe_revision(revision: &Revision) -> String {
-    let suffix = revision
-        .worktree
-        .as_ref()
-        .and_then(|w| w.file_name())
-        .map(|name| format!(" ({})", name.to_string_lossy()))
-        .unwrap_or_default();
-    match revision.kind {
-        RevisionKind::Index => format!("Staged{suffix}"),
-        RevisionKind::WorkingTree => format!("Working Tree{suffix}"),
-        RevisionKind::Commit => revision.ref_name.clone().unwrap_or_else(|| "HEAD".into()),
+    let worktree = revision.worktree.as_ref().and_then(|w| w.file_name()).map(|name| name.to_string_lossy());
+    match (revision.kind, worktree) {
+        (RevisionKind::Index, Some(name)) => tr!("Staged ({worktree})", worktree = name),
+        (RevisionKind::Index, None) => tr!("Staged").into(),
+        (RevisionKind::WorkingTree, Some(name)) => tr!("Working Tree ({worktree})", worktree = name),
+        (RevisionKind::WorkingTree, None) => tr!("Working Tree").into(),
+        (RevisionKind::Commit, _) => revision.ref_name.clone().unwrap_or_else(|| "HEAD".into()),
     }
+}
+
+/// A section heading of the list: the ones `meld_ailens::picker` and the
+/// pull request sections name, translated.
+pub fn section_label(section: &str) -> std::borrow::Cow<'_, str> {
+    let known = match section {
+        "Uncommitted" => tr!("Uncommitted"),
+        "Branches" => tr!("Branches"),
+        "Remote branches" => tr!("Remote branches"),
+        "Tags" => tr!("Tags"),
+        "Commits" => tr!("Commits"),
+        "Typed" => tr!("Typed"),
+        "Pull requests" => tr!("Pull requests"),
+        "Merge requests" => tr!("Merge requests"),
+        _ => {
+            return match section.strip_prefix("Worktree ") {
+                Some(name) => tr!("Worktree {name}", name = name).into(),
+                None => section.into(),
+            };
+        }
+    };
+    known.into()
 }
 
 #[cfg(test)]

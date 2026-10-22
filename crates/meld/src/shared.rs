@@ -283,6 +283,6 @@ fn comparison_from_recent(entry: &RecentComparison) -> Option<Comparison> {
 }
 
 pub fn read_comparison_file(path: &Path) -> Result<Comparison, String> {
-    let entry = meld_config::read_meldcmp(path).map_err(|e| format!("Error reading saved comparison file: {e}"))?;
-    comparison_from_recent(&entry).ok_or_else(|| "Error reading saved comparison file".into())
+    let entry = meld_config::read_meldcmp(path).map_err(|e| format!("{}: {e}", tr!("Error reading saved comparison file")))?;
+    comparison_from_recent(&entry).ok_or_else(|| tr!("Error reading saved comparison file").into())
 }

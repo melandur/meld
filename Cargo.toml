@@ -9,6 +9,7 @@ members = [
     "crates/meld-forge",
     "crates/meld-widgets",
     "crates/meld",
+    "xtask",
 ]
 
 [workspace.package]

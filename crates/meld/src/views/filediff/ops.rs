@@ -324,13 +324,13 @@ impl FileDiff {
                 pane.banner = Some(Banner {
                     id: MsgId::SlowHighlight,
                     kind: BannerKind::Info,
-                    primary: "Change highlighting incomplete".into(),
+                    primary: tr!("Change highlighting incomplete").into(),
                     secondary: (i == 0).then(|| {
-                        "Some changes were not highlighted because they were too large. You can force Meld to take longer to highlight larger changes, though this may be slow.".into()
+                        tr!("Some changes were not highlighted because they were too large. You can force Meld to take longer to highlight larger changes, though this may be slow.").into()
                     }),
                     actions: vec![
-                        ("Hide".into(), BannerAction::Hide),
-                        ("Keep highlighting".into(), BannerAction::KeepHighlighting),
+                        (tr!("Hide").into(), BannerAction::Hide),
+                        (tr!("Keep highlighting").into(), BannerAction::KeepHighlighting),
                     ],
                 });
             }
@@ -353,9 +353,9 @@ impl FileDiff {
                     pane.banner = Some(Banner {
                         id: MsgId::SelfCompare,
                         kind: BannerKind::Warning,
-                        primary: format!("File {dup} is being compared to itself"),
+                        primary: tr!("File {} is being compared to itself", dup),
                         secondary: None,
-                        actions: vec![("Hide".into(), BannerAction::Hide)],
+                        actions: vec![(tr!("Hide").into(), BannerAction::Hide)],
                     });
                 }
             }
@@ -374,23 +374,27 @@ impl FileDiff {
             let different_newlines = !meld_files::all_same(&newlines);
             let labels: Vec<String> = self.panes.iter().map(|p| p.file.label()).collect();
             for pane in self.panes.iter_mut() {
-                let mut primary = "Files are identical".to_string();
+                let mut primary = tr!("Files are identical").to_string();
                 let mut secondary = None;
-                let mut actions = vec![("Hide".to_string(), BannerAction::Hide)];
+                let mut actions = vec![(tr!("Hide").to_string(), BannerAction::Hide)];
                 if active_filters {
                     secondary = Some(
-                        "Text filters are being used, and may be masking differences between files. Would you like to compare the unfiltered files?"
+                        tr!("Text filters are being used, and may be masking differences between files. Would you like to compare the unfiltered files?")
                             .to_string(),
                     );
-                    actions.push(("Show without filters".into(), BannerAction::ShowUnfiltered));
+                    actions.push((tr!("Show without filters").into(), BannerAction::ShowUnfiltered));
                 } else if different_newlines {
-                    primary = "Files differ in line endings only".into();
-                    secondary = Some(format!(
+                    primary = tr!("Files differ in line endings only").into();
+                    secondary = Some(tr!(
                         "Files are identical except for differing line endings:\n{}",
                         labels
                             .iter()
                             .zip(&newlines)
-                            .map(|(label, nl)| format!("\t{label}: {}", nl.label()))
+                            .map(|(label, nl)| {
+                                let types = if nl.types.is_empty() { vec![nl.primary()] } else { nl.types.clone() };
+                                let names: Vec<&str> = types.iter().map(|t| crate::i18n::gettext(t.label())).collect();
+                                format!("\t{label}: {}", names.join(", "))
+                            })
                             .collect::<Vec<_>>()
                             .join("\n")
                     ));
@@ -1161,9 +1165,9 @@ impl FileDiff {
                 pane.banner = Some(Banner {
                     id: MsgId::Syncpoints,
                     kind: BannerKind::Info,
-                    primary: "Live comparison updating disabled".into(),
+                    primary: tr!("Live comparison updating disabled").into(),
                     secondary: Some(
-                        "Live updating of comparisons is disabled when synchronization points are active. You can still manually refresh the comparison, and live updates will resume when synchronization points are cleared."
+                        tr!("Live updating of comparisons is disabled when synchronization points are active. You can still manually refresh the comparison, and live updates will resume when synchronization points are cleared.")
                             .into(),
                     ),
                     actions: vec![],
@@ -1392,9 +1396,9 @@ impl FileDiff {
             }
             Act::OpenFile(pane) => {
                 let title = match pane {
-                    0 => "Open Left File",
-                    1 if self.panes.len() == 3 => "Open Middle File",
-                    _ => "Open Right File",
+                    0 => tr!("Open Left File"),
+                    1 if self.panes.len() == 3 => tr!("Open Middle File"),
+                    _ => tr!("Open Right File"),
                 };
                 let dir = self.panes[pane].file.path.as_ref().and_then(|p| p.parent()).map(std::path::PathBuf::from);
                 return crate::ui::chooser::pick_file(title, dir).map(move |path| Message::OpenChosen(pane, path));
@@ -1423,15 +1427,15 @@ impl FileDiff {
         let modified = (0..2).any(|i| self.is_modified(i));
         if unnamed || modified {
             self.dialog = Some(Dialog::Error {
-                primary: "Can't swap unsaved files".into(),
-                secondary: "Files must be saved to disk before swapping panes.".into(),
+                primary: tr!("Can't swap unsaved files").into(),
+                secondary: tr!("Files must be saved to disk before swapping panes.").into(),
             });
             return Task::none();
         }
         if self.extras.tab_label.is_some() {
             self.dialog = Some(Dialog::Error {
-                primary: "Can't swap version control comparisons".into(),
-                secondary: "Swapping panes is not supported in version control mode.".into(),
+                primary: tr!("Can't swap version control comparisons").into(),
+                secondary: tr!("Swapping panes is not supported in version control mode.").into(),
             });
             return Task::none();
         }
@@ -1455,7 +1459,7 @@ impl FileDiff {
         let texts: Vec<String> = self.panes.iter().map(|p| p.buffer.lines().join("\n")).collect();
         let mut labels: Vec<String> = self.panes.iter().map(|p| p.file.label()).collect();
         while labels.len() < 3 {
-            labels.push("<unnamed>".into());
+            labels.push(tr!("<unnamed>").into());
         }
         let text_refs: Vec<&str> = texts.iter().map(String::as_str).collect();
         let label_refs: Vec<&str> = labels.iter().map(String::as_str).collect();
@@ -1548,7 +1552,7 @@ impl FileDiff {
                 // Next to the compared files rather than in the chooser's
                 // working folder.
                 let dir = self.panes.iter().find_map(|p| p.file.target()?.parent().map(std::path::PathBuf::from));
-                return crate::ui::chooser::save_file("Save Patch", dir, None).map(Message::PatchSaveChosen);
+                return crate::ui::chooser::save_file(tr!("Save Patch"), dir, None).map(Message::PatchSaveChosen);
             }
             DialogMessage::Filter(text) => {
                 if let Some(Dialog::Encoding { filter, .. } | Dialog::Language { filter, .. }) = &mut self.dialog {

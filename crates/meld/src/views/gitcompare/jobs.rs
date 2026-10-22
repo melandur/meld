@@ -155,13 +155,14 @@ where
                     .or_else(|| panic.downcast_ref::<String>().cloned())
                     .unwrap_or_else(|| "unknown error".into());
                 log::error!("Git Compare job panicked: {text}");
-                Err(Error::msg(format!("Internal error: {text}")))
+                Err(Error::msg(tr!("Internal error: {text}", text = text)))
             });
             let _ = sender.unbounded_send(Event::Done(result));
         });
     if let Err(err) = spawned {
-        return Task::done(Event::Done(Err(Error::msg(format!(
-            "Couldn’t start a thread: {err}"
+        return Task::done(Event::Done(Err(Error::msg(tr!(
+            "Couldn’t start a thread: {err}",
+            err = err
         )))));
     }
     Task::stream(receiver)

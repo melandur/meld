@@ -70,7 +70,7 @@ pub fn popover<'a, M: Clone + 'a>(path: &Path, picked: Option<usize>, actions: A
             .anchor_right()
             .width(Length::Fill),
         row![
-            text("Path").size(13).style(super::dim_text),
+            text(tr!("Path")).size(13).style(super::dim_text),
             container(text(shown_text).size(13).wrapping(text::Wrapping::WordOrGlyph))
                 .padding([4, 8])
                 .width(Length::Fill)
@@ -80,11 +80,11 @@ pub fn popover<'a, M: Clone + 'a>(path: &Path, picked: Option<usize>, actions: A
         .align_y(iced::Center),
         row![
             space::horizontal(),
-            button(text("Copy Path").size(13))
+            button(text(tr!("Copy Path")).size(13))
                 .padding([4, 10])
                 .style(button::secondary)
                 .on_press(actions.copy.clone()),
-            button(text("Open Containing Folder").size(13))
+            button(text(tr!("Open Containing Folder")).size(13))
                 .padding([4, 10])
                 .style(button::secondary)
                 .on_press(actions.open_folder.clone()),

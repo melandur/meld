@@ -85,10 +85,10 @@ impl Column {
 
     fn title(self) -> &'static str {
         match self {
-            Column::Size => "Size",
-            Column::Time => "Modification time",
-            Column::IsoTime => "Modification time (ISO)",
-            Column::Permissions => "Permissions",
+            Column::Size => tr!("Size"),
+            Column::Time => tr!("Modification time"),
+            Column::IsoTime => tr!("Modification time (ISO)"),
+            Column::Permissions => tr!("Permissions"),
         }
     }
 
@@ -425,7 +425,7 @@ impl DirDiff {
             Message::ArchiveOpened(
                 pane,
                 generation,
-                result.unwrap_or_else(|| Err("the archive could not be opened".into())),
+                result.unwrap_or_else(|| Err(tr!("the archive could not be opened").into())),
             )
         })
     }
@@ -455,8 +455,8 @@ impl DirDiff {
                 *slot = None;
                 self.roots[pane] = PathBuf::new();
                 self.dialog = Some(Dialog::Error {
-                    title: "Failed to mount archive".into(),
-                    message: format!("Error mounting archive {uri}: {error}"),
+                    title: tr!("Failed to mount archive").into(),
+                    message: tr!("Error mounting archive {uri}: {error}", uri = uri, error = error),
                 });
             }
         }
@@ -496,7 +496,7 @@ impl DirDiff {
             .map(|p| self.shown_path(p))
             .map(|r| {
                 if r.as_os_str().is_empty() {
-                    "No folder".to_string()
+                    tr!("No folder").to_string()
                 } else {
                     r.display().to_string()
                 }
@@ -522,7 +522,7 @@ impl DirDiff {
             .zip(&self.labels)
             .map(|(name, label)| if label.is_empty() { name } else { label.clone() })
             .collect();
-        format!("Folder comparison:\n{}", names.join("\n"))
+        format!("{}\n{}", tr!("Folder comparison:"), names.join("\n"))
     }
 
     pub fn unsaved(&self) -> Vec<String> {
@@ -721,15 +721,15 @@ impl DirDiff {
     fn identical_note(&self) -> String {
         let shallow = self.comparison.options.compare.shallow_comparison;
         let mut secondary = vec![if shallow {
-            "Scanned files in folders appear identical, but contents have not been scanned."
+            tr!("Scanned files in folders appear identical, but contents have not been scanned.")
         } else {
-            "Contents of scanned files in folders are identical."
+            tr!("Contents of scanned files in folders are identical.")
         }];
         if self.name_filters.iter().any(|f| f.active) {
-            secondary.push("File filters are in use, so not all files have been scanned.");
+            secondary.push(tr!("File filters are in use, so not all files have been scanned."));
         }
         if !shallow && self.text_filters.iter().any(|f| f.active) {
-            secondary.push("Text filters are in use and may be masking content differences.");
+            secondary.push(tr!("Text filters are in use and may be masking content differences."));
         }
         secondary.join(" ")
     }
@@ -746,10 +746,10 @@ impl DirDiff {
         let mut shadowed = vec![Vec::new(); n];
         for entry in &self.issues.shadowed {
             if let Some(list) = shadowed.get_mut(entry.pane) {
-                list.push(format!(
-                    "“{}” hidden by “{}”",
-                    entry.root.join(&entry.hidden).display(),
-                    entry.root.join(&entry.by).display()
+                list.push(tr!(
+                    "“{first_file}” hidden by “{second_file}”",
+                    first_file = entry.root.join(&entry.hidden).display(),
+                    second_file = entry.root.join(&entry.by).display()
                 ));
             }
         }
@@ -764,18 +764,18 @@ impl DirDiff {
                 let kinds = [
                     (
                         &invalid[pane],
-                        "Files with invalid encodings found",
-                        "Some files were in an incorrect encoding. The names are something like:",
+                        tr!("Files with invalid encodings found"),
+                        tr!("Some files were in an incorrect encoding. The names are something like:"),
                     ),
                     (
                         &shadowed[pane],
-                        "Files hidden by case insensitive comparison",
-                        "You are running a case insensitive comparison on a case sensitive filesystem. The following files in this folder are hidden:",
+                        tr!("Files hidden by case insensitive comparison"),
+                        tr!("You are running a case insensitive comparison on a case sensitive filesystem. The following files in this folder are hidden:"),
                     ),
                     (
                         &whitespace[pane],
-                        "Files had mismatched leading or trailing whitespace",
-                        "This comparison found some files that differed only in leading or trailing whitespace. Their names appear as:",
+                        tr!("Files had mismatched leading or trailing whitespace"),
+                        tr!("This comparison found some files that differed only in leading or trailing whitespace. Their names appear as:"),
                     ),
                 ];
                 let present: Vec<_> = kinds.iter().filter(|(list, _, _)| !list.is_empty()).collect();
@@ -785,7 +785,7 @@ impl DirDiff {
                 let header = if present.len() == 1 {
                     present[0].1.to_string()
                 } else {
-                    "Multiple errors occurred while scanning this folder".to_string()
+                    tr!("Multiple errors occurred while scanning this folder").to_string()
                 };
                 let mut messages = Vec::new();
                 for (list, _, secondary) in &present {
@@ -1095,8 +1095,8 @@ impl DirDiff {
             Message::OpFinished(
                 generation,
                 result.unwrap_or(OpResult::Failed {
-                    title: "Error".into(),
-                    message: "The operation was interrupted".into(),
+                    title: tr!("Error").into(),
+                    message: tr!("The operation was interrupted").into(),
                     stop: true,
                 }),
             )
@@ -1270,7 +1270,7 @@ impl DirDiff {
                     .and_then(|r| r.parent().map(Path::to_path_buf))
                     .or_else(|| self.last_folder.clone())
                     .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
-                return ui::chooser::pick_folder("Select Folder", start).map(move |path| Message::Browsed(pane, path));
+                return ui::chooser::pick_folder(tr!("Select Folder"), start).map(move |path| Message::Browsed(pane, path));
             }
             Message::Browsed(pane, path) => {
                 let Some(path) = path else {
@@ -1668,27 +1668,30 @@ impl DirDiff {
         let pane = self.sel.pane;
         let n = self.panes();
         let mut r = row![space::horizontal()].spacing(2).align_y(iced::Center);
-        r = r.push(ui::tool_button(
+        r = r.push(tool_button(
             "⇔",
-            "Compare selected (Return)",
+            tr!("Compare selected"),
+            "Return",
             (!self.sel.is_empty()).then_some(Message::Compare),
         ));
-        r = r.push(ui::tool_button(
+        r = r.push(tool_button(
             icon::LEFT,
-            "Copy to left (Alt+Left)",
+            tr!("Copy to left"),
+            "Alt+Left",
             (valid && pane > 0).then_some(Message::Copy(-1)),
         ));
-        r = r.push(ui::tool_button(
+        r = r.push(tool_button(
             icon::RIGHT,
-            "Copy to right (Alt+Right)",
+            tr!("Copy to right"),
+            "Alt+Right",
             (valid && pane + 1 < n).then_some(Message::Copy(1)),
         ));
-        r = r.push(ui::tool_button("✖", "Delete selected (Delete)", valid.then_some(Message::Delete)));
-        r = r.push(ui::tool_button(icon::FILTER, "Filters (F8)", Some(Message::ToggleFilterMenu)));
+        r = r.push(tool_button("✖", tr!("Delete selected"), "Delete", valid.then_some(Message::Delete)));
+        r = r.push(tool_button(icon::FILTER, tr!("Filters"), "F8", Some(Message::ToggleFilterMenu)));
         if self.busy() {
-            r = r.push(ui::tool_button(icon::STOP, "Stop scanning (Escape)", Some(Message::Stop)));
+            r = r.push(tool_button(icon::STOP, tr!("Stop scanning"), "Escape", Some(Message::Stop)));
         } else {
-            r = r.push(ui::tool_button(icon::REFRESH, "Refresh (Ctrl+R)", Some(Message::Refresh)));
+            r = r.push(tool_button(icon::REFRESH, tr!("Refresh"), "Ctrl+R", Some(Message::Refresh)));
         }
         r.into()
     }
@@ -1712,32 +1715,32 @@ impl DirDiff {
         let single_folder = self.sel.len() == 1
             && self.selected().first().is_some_and(|&id| self.tree.has_children(id));
         let mut items = vec![
-            item("Compare Selected Files", Some("Return"), has_selection.then_some(Message::Compare)),
-            item("Mark Selected File", None, has_selection.then_some(Message::Mark)),
+            item(tr!("Compare Selected Files"), Some("Return"), has_selection.then_some(Message::Compare)),
+            item(tr!("Mark Selected File"), None, has_selection.then_some(Message::Mark)),
             item(
-                "Compare with Marked File",
+                tr!("Compare with Marked File"),
                 None,
                 (has_selection && self.marked.is_some_and(|(_, p)| p != pane)).then_some(Message::CompareMarked),
             ),
             menu::Item::Separator,
-            item("Copy to Left", Some("Alt+Left"), (valid && pane > 0).then_some(Message::Copy(-1))),
-            item("Copy to Right", Some("Alt+Right"), (valid && pane + 1 < n).then_some(Message::Copy(1))),
-            item("Delete Selected", Some("Delete"), valid.then_some(Message::Delete)),
+            item(tr!("Copy to Left"), Some("Alt+Left"), (valid && pane > 0).then_some(Message::Copy(-1))),
+            item(tr!("Copy to Right"), Some("Alt+Right"), (valid && pane + 1 < n).then_some(Message::Copy(1))),
+            item(tr!("Delete Selected"), Some("Delete"), valid.then_some(Message::Delete)),
             menu::Item::Separator,
-            item("Collapse Recursively", None, single_folder.then_some(Message::CollapseRecursive)),
-            item("Expand Recursively", None, single_folder.then_some(Message::ExpandRecursive)),
+            item(tr!("Collapse Recursively"), None, single_folder.then_some(Message::CollapseRecursive)),
+            item(tr!("Expand Recursively"), None, single_folder.then_some(Message::ExpandRecursive)),
             menu::Item::Separator,
-            item("Open Externally", Some("Ctrl+Shift+O"), valid.then_some(Message::OpenExternal)),
-            item("Copy File Paths", None, has_selection.then_some(Message::CopyPaths)),
+            item(tr!("Open Externally"), Some("Ctrl+Shift+O"), valid.then_some(Message::OpenExternal)),
+            item(tr!("Copy File Paths"), None, has_selection.then_some(Message::CopyPaths)),
         ];
         if full {
             items.extend([
                 menu::Item::Separator,
-                item("Previous Change", Some("Alt+Up"), Some(Message::Change(false))),
-                item("Next Change", Some("Alt+Down"), Some(Message::Change(true))),
-                item("Swap Panes", Some("Alt+\\"), (n == 2).then_some(Message::Swap)),
-                item("Refresh", Some("Ctrl+R"), Some(Message::Refresh)),
-                item("Filters", Some("F8"), Some(Message::ToggleFilterMenu)),
+                item(tr!("Previous Change"), Some("Alt+Up"), Some(Message::Change(false))),
+                item(tr!("Next Change"), Some("Alt+Down"), Some(Message::Change(true))),
+                item(tr!("Swap Panes"), Some("Alt+\\"), (n == 2).then_some(Message::Swap)),
+                item(tr!("Refresh"), Some("Ctrl+R"), Some(Message::Refresh)),
+                item(tr!("Filters"), Some("F8"), Some(Message::ToggleFilterMenu)),
             ]);
         }
         items
@@ -1745,27 +1748,27 @@ impl DirDiff {
 
     fn filter_items(&self, settings_filters: StatusFilters) -> Vec<menu::Item<Message>> {
         let mut items = vec![
-            menu::Item::Heading("File Status".into()),
-            menu::Item::toggle("Same", settings_filters.normal, Message::ToggleStatus(StatusKind::Same)),
-            menu::Item::toggle("New", settings_filters.new, Message::ToggleStatus(StatusKind::New)),
-            menu::Item::toggle("Modified", settings_filters.modified, Message::ToggleStatus(StatusKind::Modified)),
+            menu::Item::Heading(tr!("File Status").into()),
+            menu::Item::toggle(tr!("Same"), settings_filters.normal, Message::ToggleStatus(StatusKind::Same)),
+            menu::Item::toggle(tr!("New"), settings_filters.new, Message::ToggleStatus(StatusKind::New)),
+            menu::Item::toggle(tr!("Modified"), settings_filters.modified, Message::ToggleStatus(StatusKind::Modified)),
             menu::Item::Separator,
         ];
         if !self.name_filters.is_empty() {
-            items.push(menu::Item::Heading("Filename Filters".into()));
+            items.push(menu::Item::Heading(tr!("Filename Filters").into()));
             for (i, filter) in self.name_filters.iter().enumerate() {
                 if filter.is_valid() {
                     items.push(menu::Item::toggle(filter.label.clone(), filter.active, Message::ToggleNameFilter(i)));
                 } else {
-                    items.push(menu::Item::disabled(format!("{} (invalid)", filter.label)));
+                    items.push(menu::Item::disabled(tr!("{} (invalid)", filter.label)));
                 }
             }
             items.push(menu::Item::Separator);
         }
-        items.push(menu::Item::toggle("Ignore Filename Case", self.ignore_case, Message::ToggleIgnoreCase));
-        items.push(menu::Item::toggle("Normalize Unicode Paths", self.normalize_encoding, Message::ToggleNormalize));
+        items.push(menu::Item::toggle(tr!("Ignore Filename Case"), self.ignore_case, Message::ToggleIgnoreCase));
+        items.push(menu::Item::toggle(tr!("Normalize Unicode Paths"), self.normalize_encoding, Message::ToggleNormalize));
         items.push(menu::Item::toggle(
-            "Apply Text Filters",
+            tr!("Apply Text Filters"),
             self.apply_text_filters,
             Message::ToggleTextFilters,
         ));
@@ -1779,27 +1782,27 @@ impl DirDiff {
         if let Some(note) = &self.banners.identical {
             content = content.push(ui::banner(
                 BannerKind::Info,
-                "Folders have no differences",
+                tr!("Folders have no differences"),
                 Some(note.clone()),
-                vec![("Hide".to_string(), Message::HideBanners)],
+                vec![(tr!("Hide").to_string(), Message::HideBanners)],
             ));
         }
         if let Some(dup) = &self.banners.duplicate {
             content = content.push(ui::banner(
                 BannerKind::Warning,
-                format!("Folder {} is being compared to itself", dup.display()),
+                tr!("Folder {} is being compared to itself", dup.display()),
                 None,
-                vec![("Hide".to_string(), Message::HideBanners)],
+                vec![(tr!("Hide").to_string(), Message::HideBanners)],
             ));
         }
         if self.banners.cancelled {
             content = content.push(ui::banner(
                 BannerKind::Warning,
-                "Folder scan stopped",
-                Some("Not all folders have been compared.".to_string()),
+                tr!("Folder scan stopped"),
+                Some(tr!("Not all folders have been compared.").to_string()),
                 vec![
-                    ("Refresh".to_string(), Message::Refresh),
-                    ("Hide".to_string(), Message::HideBanners),
+                    (tr!("Refresh").to_string(), Message::Refresh),
+                    (tr!("Hide").to_string(), Message::HideBanners),
                 ],
             ));
         }
@@ -1815,7 +1818,7 @@ impl DirDiff {
                         BannerKind::Error,
                         heading.as_str(),
                         Some(details.clone()),
-                        vec![("Hide".to_string(), Message::HideBanners)],
+                        vec![(tr!("Hide").to_string(), Message::HideBanners)],
                     ),
                     None => Space::new().width(Length::Fill).into(),
                 };
@@ -1826,9 +1829,9 @@ impl DirDiff {
 
         if !self.ready() {
             let note = if self.opening_archives() {
-                "Opening archive…"
+                tr!("Opening archive…")
             } else {
-                "Select a folder for each pane to compare"
+                tr!("Select a folder for each pane to compare")
             };
             lower = lower.push(ui::separator(false));
             lower = lower.push(container(text(note).style(ui::dim_text)).center(Length::Fill));
@@ -1848,15 +1851,15 @@ impl DirDiff {
 
         if self.busy() {
             let label = if self.progress.is_empty() {
-                "Scanning…".to_string()
+                tr!("Scanning…").to_string()
             } else {
-                format!("Scanning {}", self.progress)
+                tr!("Scanning {}", self.progress)
             };
             lower = lower.push(
                 container(
                     row![
                         text(label).size(13).width(Length::Fill).wrapping(text::Wrapping::None),
-                        ui::text_button("Stop", Some(Message::Stop)),
+                        ui::text_button(tr!("Stop"), Some(Message::Stop)),
                     ]
                     .spacing(8)
                     .align_y(iced::Center),
@@ -1896,24 +1899,25 @@ impl DirDiff {
     }
 
     fn dialog_view<'a>(&'a self, dialog: &'a Dialog) -> Element<'a, Message> {
-        let cancel = || button(text("Cancel")).style(button::secondary).on_press(Message::DialogAnswer(false));
+        let cancel = || button(text(tr!("Cancel"))).style(button::secondary).on_press(Message::DialogAnswer(false));
         match dialog {
             Dialog::ReplaceFolder { name, parent, .. } => ui::modal::dialog(
-                format!("Replace folder “{name}”?"),
-                text(format!(
-                    "Another folder with the same name already exists in “{parent}”.\nIf you replace the existing folder, all files in it will be lost."
+                tr!("Replace folder “{}”?", name),
+                text(tr!(
+                    "Another folder with the same name already exists in “{}”.\nIf you replace the existing folder, all files in it will be lost.",
+                    parent
                 )),
                 vec![
                     cancel().into(),
-                    button(text("Replace")).style(button::danger).on_press(Message::DialogAnswer(true)).into(),
+                    button(text(tr!("Replace"))).style(button::danger).on_press(Message::DialogAnswer(true)).into(),
                 ],
             ),
             Dialog::DeletePermanently { path, .. } => ui::modal::dialog(
-                "Delete Permanently?",
-                text(format!("“{path}” can’t be put in the trash. Do you want to delete it permanently?")),
+                tr!("Delete Permanently?"),
+                text(tr!("“{}” can’t be put in the trash. Do you want to delete it immediately?", path)),
                 vec![
                     cancel().into(),
-                    button(text("Delete Permanently"))
+                    button(text(tr!("Delete Permanently")))
                         .style(button::danger)
                         .on_press(Message::DialogAnswer(true))
                         .into(),
@@ -1922,7 +1926,7 @@ impl DirDiff {
             Dialog::Error { title, message } => ui::modal::dialog(
                 title.as_str(),
                 text(message.as_str()),
-                vec![button(text("OK")).on_press(Message::DialogAnswer(false)).into()],
+                vec![button(text(tr!("OK"))).on_press(Message::DialogAnswer(false)).into()],
             ),
         }
     }
@@ -1978,7 +1982,12 @@ impl DirDiff {
             let label = if !self.labels[pane].is_empty() {
                 self.labels[pane].clone()
             } else if root.as_os_str().is_empty() {
-                format!("Folder {}", pane + 1)
+                match pane {
+                    0 => tr!("Folder 1"),
+                    1 => tr!("Folder 2"),
+                    _ => tr!("Folder 3"),
+                }
+                .to_string()
             } else {
                 parent
                     .as_ref()
@@ -1986,7 +1995,7 @@ impl DirDiff {
                     .unwrap_or_else(|| meld_files::format_home_relative_path(root))
             };
             let full = if root.as_os_str().is_empty() {
-                "No folder selected".to_string()
+                tr!("No folder selected").to_string()
             } else {
                 root.display().to_string()
             };
@@ -2024,7 +2033,7 @@ impl DirDiff {
             headers = headers.push(
                 container(
                     row![
-                        ui::tool_button(icon::FOLDER, "Select folder to open in this pane", Some(Message::Browse(pane))),
+                        ui::tool_button(icon::FOLDER, tr!("Select folder to open in this pane"), Some(Message::Browse(pane))),
                         label,
                     ]
                     .spacing(4)
@@ -2062,12 +2071,13 @@ impl DirDiff {
 
     fn column_headers(&self, columns: &[Column]) -> Element<'_, Message> {
         let header_text = |label: &'static str| text(label).size(12).font(ui::bold()).wrapping(text::Wrapping::None);
+        let name = tr!("Name");
         let mut panes = row![].width(Length::Fill);
         for pane in 0..self.panes() {
             if pane > 0 {
                 panes = panes.push(Space::new().width(linkmap::WIDTH));
             }
-            let mut r = row![container(header_text("Name")).width(Length::Fill).clip(true)]
+            let mut r = row![container(header_text(name)).width(Length::Fill).clip(true)]
                 .spacing(6)
                 .padding([3, 8]);
             for column in columns {
@@ -2210,7 +2220,7 @@ impl DirDiff {
                     name = format!("{name} ⟶ {}", target.display());
                 }
                 if node.scanning {
-                    name = format!("{name} (scanning…)");
+                    name = tr!("{} (scanning…)", name);
                 }
                 let glyph = if self.marked == Some((id, pane)) {
                     Some(MARK_GLYPH)
@@ -2223,7 +2233,7 @@ impl DirDiff {
                 };
                 (name, glyph)
             }
-            Kind::Empty => ("empty folder".to_string(), None),
+            Kind::Empty => (tr!("empty folder").to_string(), None),
             Kind::Error { pane: p, message } if *p == pane => (message.clone(), Some(ERROR_GLYPH)),
             Kind::Error { .. } => (String::new(), None),
         };
@@ -2378,6 +2388,12 @@ fn absolute(path: &Path) -> PathBuf {
     }
 }
 
+/// A toolbar button like [`ui::tool_button`], whose tooltip is the
+/// translated `tip` followed by its shortcut.
+fn tool_button<'a>(glyph: &'a str, tip: &str, shortcut: &str, on_press: Option<Message>) -> Element<'a, Message> {
+    ui::tool_button(glyph, ui::with_shortcut(tip, shortcut), on_press)
+}
+
 /// Runs a file operation (on a background thread).
 fn execute(op: Op, other_paths: &[PathBuf]) -> OpResult {
     match op {
@@ -2390,7 +2406,7 @@ fn execute(op: Op, other_paths: &[PathBuf]) -> OpResult {
             Ok(outcome) => OpResult::Copied { node, outcome },
             Err(FileOpError::FolderExists { .. }) => OpResult::FolderExists(op),
             Err(err) => OpResult::Failed {
-                title: "Error copying file".into(),
+                title: tr!("Error copying file").into(),
                 message: err.to_string(),
                 stop: false,
             },
@@ -2415,7 +2431,7 @@ fn execute(op: Op, other_paths: &[PathBuf]) -> OpResult {
                     still_present: other_paths.iter().any(|p| p.exists()),
                 },
                 Err(message) => OpResult::Failed {
-                    title: format!("Error deleting {}", path.display()),
+                    title: tr!("Error deleting {}", path.display()),
                     message,
                     stop: true,
                 },

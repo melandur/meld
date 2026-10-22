@@ -23,7 +23,6 @@
 
 mod diffhost;
 mod divider;
-mod ellipsis;
 mod filelist;
 mod jobs;
 mod picker;
@@ -48,7 +47,7 @@ use meld_forge::{Discussion, FetchedPullRequest, Forge, PullRequest, PullRequest
 
 use self::diffhost::{DiffHost, EmbeddedFile};
 use self::divider::divider;
-use self::ellipsis::{Mode, ellipsized};
+use crate::ui::ellipsis::{Mode, ellipsized};
 use self::filelist::ListRow;
 use self::jobs::{Jobs, Opaque, Ticket};
 use self::picker::Picker;
@@ -313,10 +312,10 @@ impl GitCompare {
             session: None,
             base: Revision::commit("HEAD"),
             target: Revision::working_tree(None),
-            title: "Git Compare".into(),
+            title: tr!("Git Compare").into(),
             tooltip: location.display().to_string(),
-            repo_label: "No repository".into(),
-            repo_tooltip: "Choose a repository or worktree".into(),
+            repo_label: tr!("No repository").into(),
+            repo_tooltip: tr!("Choose a repository or worktree").into(),
             files_title: String::new(),
             relation: String::new(),
             base_picker: Picker::new(PickerSide::Base),
@@ -388,10 +387,13 @@ impl GitCompare {
     pub fn unsaved(&self) -> Vec<String> {
         let mut unsaved = self.diff.unsaved();
         if let Some(pr) = self.pr.as_ref().filter(|pr| !pr.drafts.is_empty()) {
-            unsaved.push(format!(
-                "{} pending review comments on {}",
-                pr.drafts.len(),
-                pr.reference()
+            let count = pr.drafts.len();
+            unsaved.push(trn!(
+                "{} pending review comment on {reference}",
+                "{} pending review comments on {reference}",
+                count,
+                count,
+                reference = pr.reference()
             ));
         }
         unsaved
@@ -425,7 +427,7 @@ impl GitCompare {
     fn set_location(&mut self, path: PathBuf) -> Task<Message> {
         self.location = path.clone();
         self.repo_label = path.display().to_string();
-        self.show_message("⌛", "Opening repository…", None);
+        self.show_message("⌛", tr!("Opening repository…"), None);
         self.run(
             "open",
             true,
@@ -468,7 +470,7 @@ impl GitCompare {
         // Until the comparison resolves them, the pickers show what was
         // picked, not the previous comparison's revisions
         self.update_picker_labels(false);
-        self.busy = Some("Comparing…".into());
+        self.busy = Some(tr!("Comparing…").into());
         self.run(
             "compare",
             true,
@@ -508,7 +510,7 @@ impl GitCompare {
         let labels = self.active_pr().map(|pr| {
             let details = &pr.details.pr;
             let short = meld_ailens::picker::short_sha(&pr.fetched.base).to_string();
-            let base_branch = if details.base_branch.is_empty() { "base" } else { details.base_branch.as_str() };
+            let base_branch = if details.base_branch.is_empty() { tr!("base") } else { details.base_branch.as_str() };
             let reference = pr.reference();
             let target_label = if details.head_branch.is_empty() {
                 reference.clone()
@@ -518,9 +520,17 @@ impl GitCompare {
             let title = format!("{reference} {}", details.title);
             (
                 format!("{base_branch} · {short}"),
-                format!("Where {reference} branched off {base_branch}\n{}", pr.fetched.base),
+                format!(
+                    "{}\n{}",
+                    tr!("Where {reference} branched off {branch}", reference = reference, branch = base_branch),
+                    pr.fetched.base
+                ),
                 target_label,
-                format!("The head of {reference}: {}\n{}", details.title, pr.fetched.head),
+                format!(
+                    "{}\n{}",
+                    tr!("The head of {reference}: {title}", reference = reference, title = details.title),
+                    pr.fetched.head
+                ),
                 format!("{}\n{title}", pr.url()),
                 format!("{base_branch} → {reference}"),
                 title,
@@ -555,10 +565,10 @@ impl GitCompare {
             self.current = None;
             self.view = None;
             if let Some(session) = &self.session {
-                let title = format!(
-                    "No changes between {} and {}",
-                    session.base_label(),
-                    session.target_label()
+                let title = tr!(
+                    "No changes between {base} and {target}",
+                    base = session.base_label(),
+                    target = session.target_label()
                 );
                 self.show_message("✓", &title, None);
             }
@@ -622,7 +632,7 @@ impl GitCompare {
             return Task::none();
         };
         self.current = Some(entry.clone());
-        self.busy = Some(format!("Loading {}…", entry.change.path));
+        self.busy = Some(tr!("Loading {path}…", path = entry.change.path));
         let change = entry.change.clone();
         self.run(
             "file",
@@ -667,7 +677,7 @@ impl GitCompare {
             Ok(files) => files,
             Err(err) => {
                 self.view = Some(view);
-                self.show_message("⚠", &format!("Couldn’t write temporary files: {err}"), None);
+                self.show_message("⚠", &tr!("Couldn’t write temporary files: {err}", err = err), None);
                 return Task::none();
             }
         };
@@ -751,7 +761,7 @@ impl GitCompare {
             Outcome::Opened(Ok((info, watch))) => {
                 let info = info.0;
                 self.repo_label = info.display_name();
-                self.repo_tooltip = format!("{}\nClick to choose another repository", info.root.display());
+                self.repo_tooltip = format!("{}\n{}", info.root.display(), tr!("Click to choose another repository"));
                 self.tooltip = info.root.display().to_string();
                 self.title = info.display_name();
                 self.info = Some(info);
@@ -865,9 +875,9 @@ impl GitCompare {
                 match result {
                     Ok(count) => {
                         let text = if count > 0 {
-                            format!("Explained {count} commits and changes")
+                            trn!("Explained {} commit or change", "Explained {} commits and changes", count, count)
                         } else {
-                            "Everything is explained already".into()
+                            tr!("Everything is explained already").into()
                         };
                         self.show_banner(BannerKind::Info, text, None);
                     }
@@ -884,8 +894,8 @@ impl GitCompare {
                         let shown = path.strip_prefix(&root).unwrap_or(&path).display().to_string();
                         self.show_banner(
                             BannerKind::Info,
-                            format!("Wrote {shown}"),
-                            Some(("Open".into(), BannerAction::Open(path))),
+                            tr!("Wrote {path}", path = shown),
+                            Some((tr!("Open").into(), BannerAction::Open(path))),
                         );
                         return self.refresh_cards();
                     }
@@ -897,9 +907,11 @@ impl GitCompare {
             Outcome::AgentsSetUp(result) => {
                 match result {
                     Ok(changed) if changed.is_empty() => {
-                        self.show_banner(BannerKind::Info, "Agent instructions are already set up".into(), None)
+                        self.show_banner(BannerKind::Info, tr!("Agent instructions are already set up").into(), None)
                     }
-                    Ok(changed) => self.show_banner(BannerKind::Info, format!("Updated {}", changed.join(", ")), None),
+                    Ok(changed) => {
+                        self.show_banner(BannerKind::Info, tr!("Updated {files}", files = changed.join(", ")), None)
+                    }
                     Err(err) if !err.is_cancelled() => self.show_error(&err),
                     Err(_) => {}
                 }
@@ -925,7 +937,7 @@ impl GitCompare {
                 match result {
                     Ok(remotes) if !remotes.forges.is_empty() => {
                         self.forges = Some(remotes);
-                        self.update_pr_sections(Vec::new(), "Loading…".into());
+                        self.update_pr_sections(Vec::new(), tr!("Loading…").into());
                         return self.list_prs();
                     }
                     Ok(_) => {}
@@ -938,15 +950,8 @@ impl GitCompare {
                 match result {
                     Ok(prs) => {
                         let status = if prs.is_empty() {
-                            let nouns = self
-                                .forges
-                                .as_ref()
-                                .and_then(|f| f.current())
-                                .map_or("pull requests", |f| f.kind().nouns());
-                            match self.pr_filter {
-                                StateFilter::All => format!("No {nouns}"),
-                                filter => format!("No {} {nouns}", filter.label().to_lowercase()),
-                            }
+                            let kind = self.forges.as_ref().and_then(|f| f.current()).map(|f| f.kind());
+                            crate::forge::no_prs(kind, self.pr_filter).to_string()
                         } else {
                             String::new()
                         };
@@ -996,14 +1001,14 @@ impl GitCompare {
                         let what = self.pr_spec.as_ref().map(|s| format!("#{}", s.number)).unwrap_or_default();
                         self.show_message(
                             "⏹",
-                            &format!("Stopped opening {what}"),
-                            Some("Reload to try again.".into()),
+                            &tr!("Stopped opening {what}", what = what),
+                            Some(tr!("Reload to try again.").into()),
                         );
                         Task::none()
                     }
                     Err(err) => {
                         self.session = None;
-                        self.show_message("⚠", &condense(&err.to_string()).0, Some("Reload to try again.".into()));
+                        self.show_message("⚠", &condense(&err.to_string()).0, Some(tr!("Reload to try again.").into()));
                         self.show_banner(BannerKind::Error, err.to_string(), None);
                         Task::none()
                     }
@@ -1025,19 +1030,19 @@ impl GitCompare {
                 };
                 let what = match &post {
                     review::Post::Review(review) => review.summary(),
-                    review::Post::Reply { .. } => "Reply".to_string(),
+                    review::Post::Reply { .. } => tr!("Reply").to_string(),
                 };
                 match result {
                     Ok(()) => {
                         pr.posted(&post, Ok(()));
-                        let text = format!("Posted to {}: {what}", pr.reference());
+                        let text = tr!("Posted to {reference}: {what}", reference = pr.reference(), what = what);
                         self.show_banner(BannerKind::Info, text, None);
                         self.load_discussion()
                     }
                     Err(err) => {
                         pr.posted(&post, Err(err.to_string()));
                         if !err.is_cancelled() {
-                            self.show_banner(BannerKind::Error, format!("Couldn’t post: {err}"), None);
+                            self.show_banner(BannerKind::Error, tr!("Couldn’t post: {err}", err = err), None);
                         }
                         Task::none()
                     }
@@ -1104,7 +1109,7 @@ impl GitCompare {
             return Task::none();
         };
         self.pr_spec = Some(spec.clone());
-        self.busy = Some(format!("Opening #{}…", spec.number));
+        self.busy = Some(tr!("Opening #{number}…", number = spec.number));
         if self.pr.as_ref().is_none_or(|pr| pr.number() != spec.number) {
             self.session = None;
             self.entries.clear();
@@ -1112,7 +1117,11 @@ impl GitCompare {
             self.rows.clear();
             self.current = None;
             self.view = None;
-            self.show_message("⌛", &format!("Fetching #{}…", spec.number), Some("Press Escape to stop.".into()));
+            self.show_message(
+                "⌛",
+                &tr!("Fetching #{number}…", number = spec.number),
+                Some(tr!("Press Escape to stop.").into()),
+            );
         }
         self.run(
             "pr-open",
@@ -1122,16 +1131,17 @@ impl GitCompare {
                 if let Some(name) = &spec.remote
                     && remotes.find(name).is_none()
                 {
-                    return Err(Error::msg(format!(
-                        "The remote “{name}” isn’t on GitHub or GitLab (or doesn’t exist)."
+                    return Err(Error::msg(tr!(
+                        "The remote “{name}” isn’t on GitHub or GitLab (or doesn’t exist).",
+                        name = name
                     )));
                 }
                 let forge = remotes
                     .current()
                     .cloned()
-                    .ok_or_else(|| Error::msg("No remote of this repository is on GitHub or GitLab."))?;
+                    .ok_or_else(|| Error::msg(tr!("No remote of this repository is on GitHub or GitLab.")))?;
                 let reference = forge.kind().reference(spec.number);
-                progress(&format!("Loading {reference} from {}…", forge.remote.host));
+                progress(&tr!("Loading {reference} from {host}…", reference = reference, host = forge.remote.host));
                 let details = forge.details(spec.number, cancel)?;
                 let fetched =
                     meld_forge::fetch::fetch_pull_request(&info.repo, &forge.remote, &details, cancel, progress)?;
@@ -1145,7 +1155,7 @@ impl GitCompare {
         let Some(pr) = self.pr.as_mut() else {
             return Task::none();
         };
-        pr.discussion_status = Some("Loading comments…".into());
+        pr.discussion_status = Some(tr!("Loading comments…").into());
         let (forge, details) = (pr.forge.clone(), pr.details.clone());
         let number = pr.number();
         self.run(
@@ -1167,9 +1177,16 @@ impl GitCompare {
         if let Some(pr) = self.pr.take()
             && !pr.drafts.is_empty()
         {
+            let count = pr.drafts.len();
             self.show_banner(
                 BannerKind::Warning,
-                format!("{} pending review comments on {} were discarded", pr.drafts.len(), pr.reference()),
+                trn!(
+                    "{} pending review comment on {reference} was discarded",
+                    "{} pending review comments on {reference} were discarded",
+                    count,
+                    count,
+                    reference = pr.reference()
+                ),
                 None,
             );
         }
@@ -1241,7 +1258,7 @@ impl GitCompare {
             review::Action::RefreshComments => self.load_discussion(),
             review::Action::OpenUrl(url) => {
                 if let Err(err) = open::that_detached(&url) {
-                    self.show_banner(BannerKind::Error, format!("Couldn’t open {url}: {err}"), None);
+                    self.show_banner(BannerKind::Error, tr!("Couldn’t open {url}: {err}", url = url, err = err), None);
                 }
                 Task::none()
             }
@@ -1261,11 +1278,11 @@ impl GitCompare {
     /// Opens the composer for a comment on the line with the cursor.
     fn comment_at_cursor(&mut self) {
         let (Some(entry), true) = (self.current.clone(), self.content == Content::Diff) else {
-            self.show_banner(BannerKind::Info, "Open a changed file first".into(), None);
+            self.show_banner(BannerKind::Info, tr!("Open a changed file first").into(), None);
             return;
         };
         let Some((pane, line)) = self.diff.cursor_line() else {
-            self.show_banner(BannerKind::Info, "Click the line to comment on first".into(), None);
+            self.show_banner(BannerKind::Info, tr!("Click the line to comment on first").into(), None);
             return;
         };
         if self.active_pr().is_none() {
@@ -1302,11 +1319,11 @@ impl GitCompare {
         if self.base.kind == RevisionKind::WorkingTree
             || (self.target.uncommitted() && self.base.kind == RevisionKind::Commit)
         {
-            self.show_banner(BannerKind::Warning, "Only the target can be the working tree or the index".into(), None);
+            self.show_banner(BannerKind::Warning, tr!("Only the target can be the working tree or the index").into(), None);
             return Task::none();
         }
         if self.base.kind == RevisionKind::Index {
-            self.show_banner(BannerKind::Warning, "Staged → Working Tree can’t be swapped".into(), None);
+            self.show_banner(BannerKind::Warning, tr!("Staged → Working Tree can’t be swapped").into(), None);
             return Task::none();
         }
         self.leave_pr();
@@ -1318,7 +1335,7 @@ impl GitCompare {
         let Some(session) = self.session.clone() else {
             return Task::none();
         };
-        self.busy = Some("Explaining changes with Claude Code…".into());
+        self.busy = Some(tr!("Explaining changes with Claude Code…").into());
         self.run(
             "explain-all",
             true,
@@ -1335,7 +1352,7 @@ impl GitCompare {
             self.show_banner(BannerKind::Warning, session.build_unavailable_reason(), None);
             return Task::none();
         }
-        self.busy = Some("Writing the build…".into());
+        self.busy = Some(tr!("Writing the build…").into());
         self.run(
             "build",
             true,
@@ -1363,7 +1380,7 @@ impl GitCompare {
         };
         match info.build_folder(&self.config) {
             Ok(folder) if folder.is_dir() => open_path(&folder),
-            Ok(_) => self.show_banner(BannerKind::Info, "There are no builds yet".into(), None),
+            Ok(_) => self.show_banner(BannerKind::Info, tr!("There are no builds yet").into(), None),
             Err(err) => self.show_error(&err),
         }
     }
@@ -1404,7 +1421,7 @@ impl GitCompare {
                     paths.push(Some(path));
                 }
                 Err(err) => {
-                    self.show_banner(BannerKind::Error, format!("Couldn’t write a temporary file: {err}"), None);
+                    self.show_banner(BannerKind::Error, tr!("Couldn’t write a temporary file: {err}", err = err), None);
                     return;
                 }
             }
@@ -1445,16 +1462,16 @@ impl GitCompare {
     }
 
     fn show_no_repository(&mut self, error: Option<String>) {
-        self.repo_label = "No repository".into();
-        self.repo_tooltip = "Choose a repository or worktree".into();
+        self.repo_label = tr!("No repository").into();
+        self.repo_tooltip = tr!("Choose a repository or worktree").into();
         self.info = None;
         self.session = None;
         self.busy = None;
         self.content = Content::Message {
             icon: "📁",
-            title: "Choose a Git repository or worktree".into(),
+            title: tr!("Choose a Git repository or worktree").into(),
             description: Some(
-                "Then pick any branch, tag or commit, the staged or unstaged changes, or another worktree to compare."
+                tr!("Then pick any branch, tag or commit, the staged or unstaged changes, or another worktree to compare.")
                     .into(),
             ),
             choose: true,
@@ -1551,7 +1568,7 @@ impl GitCompare {
                 // repository or worktree is one click away.
                 let current = self.info.as_ref().map_or(&self.location, |info| &info.root);
                 let start = current.parent().map(std::path::Path::to_path_buf);
-                ui::chooser::pick_folder("Choose a Git Repository or Worktree", start).map(Message::RepositoryChosen)
+                ui::chooser::pick_folder(tr!("Choose a Git Repository or Worktree"), start).map(Message::RepositoryChosen)
             }
             Message::RepositoryChosen(Some(path)) => {
                 self.jobs.cancel_all();
@@ -1608,14 +1625,14 @@ impl GitCompare {
                     ),
                     picker::Outcome::PrFilter(filter) => {
                         self.pr_filter = filter;
-                        self.update_pr_sections(Vec::new(), "Loading…".into());
+                        self.update_pr_sections(Vec::new(), tr!("Loading…").into());
                         self.list_prs()
                     }
                     picker::Outcome::PrRemote(index) => {
                         if let Some(forges) = &mut self.forges {
                             forges.select(index);
                         }
-                        self.update_pr_sections(Vec::new(), "Loading…".into());
+                        self.update_pr_sections(Vec::new(), tr!("Loading…").into());
                         self.list_prs()
                     }
                     picker::Outcome::Picked(entry) if entry.kind == meld_ailens::picker::EntryKind::PullRequest => {
@@ -1866,7 +1883,7 @@ impl GitCompare {
                         self.busy = None;
                         self.show_banner(
                             BannerKind::Warning,
-                            "Stopped posting; some of it may have been posted already".into(),
+                            tr!("Stopped posting; some of it may have been posted already").into(),
                             None,
                         );
                     } else if pr.confirm.is_some() {
@@ -1881,9 +1898,9 @@ impl GitCompare {
                     if self.jobs.is_running("pr-open")
                         && let Some(spec) = &self.pr_spec
                     {
-                        let title = format!("Stopped opening #{}", spec.number);
+                        let title = tr!("Stopped opening {what}", what = format!("#{}", spec.number));
                         if self.session.is_none() {
-                            self.show_message("⏹", &title, Some("Reload to try again.".into()));
+                            self.show_message("⏹", &title, Some(tr!("Reload to try again.").into()));
                         }
                     }
                     self.jobs.cancel_all();
@@ -1939,16 +1956,16 @@ impl GitCompare {
     }
 
     pub fn menu_items(&self, shared: &Shared) -> Vec<menu::Item<Message>> {
-        let mut items = vec![menu::Item::Heading("Git Compare".into())];
+        let mut items = vec![menu::Item::Heading(tr!("Git Compare").into())];
         let file = |label: &str, shortcut, step: isize| match filelist::relative_entry(&self.tree, self.current.as_ref(), step) {
             Some(entry) if Some(&entry) != self.current.as_ref() => {
                 menu::Item::action(label, Some(shortcut), Message::SelectFile(entry))
             }
             _ => menu::Item::disabled(label),
         };
-        items.push(file("Next Changed File", "Alt+F7", 1));
-        items.push(file("Previous Changed File", "Alt+Shift+F7", -1));
-        items.push(menu::Item::action("Reload", Some("Ctrl+R"), Message::Reload));
+        items.push(file(tr!("Next Changed File"), "Alt+F7", 1));
+        items.push(file(tr!("Previous Changed File"), "Alt+Shift+F7", -1));
+        items.push(menu::Item::action(tr!("Reload"), Some("Ctrl+R"), Message::Reload));
         items.push(menu::Item::Separator);
         let if_info = |label: &str, message: Message| {
             if self.info.is_some() {
@@ -1957,29 +1974,29 @@ impl GitCompare {
                 menu::Item::disabled(label)
             }
         };
-        items.push(if_info("Set Up Agent Instructions", Message::SetUpAgents));
-        items.push(if_info("Open Builds Folder", Message::OpenBuilds));
+        items.push(if_info(tr!("Set Up Agent Instructions"), Message::SetUpAgents));
+        items.push(if_info(tr!("Open Builds Folder"), Message::OpenBuilds));
         items.push(if self.view.is_some() {
-            menu::Item::action("Open File in New Tab", None, Message::OpenFile)
+            menu::Item::action(tr!("Open File in New Tab"), None, Message::OpenFile)
         } else {
-            menu::Item::disabled("Open File in New Tab")
+            menu::Item::disabled(tr!("Open File in New Tab"))
         });
         if let Some(pr) = self.active_pr() {
             items.push(menu::Item::Separator);
-            items.push(menu::Item::Heading(format!("Review {}", pr.reference())));
+            items.push(menu::Item::Heading(tr!("Review {reference}", reference = pr.reference())));
             items.push(menu::Item::action(
-                "Comment on Line",
+                tr!("Comment on Line"),
                 None,
                 Message::Review(review::Message::AddComment),
             ));
-            items.push(menu::Item::action("Review…", None, Message::Review(review::Message::StartReview)));
+            items.push(menu::Item::action(tr!("Review…"), None, Message::Review(review::Message::StartReview)));
             items.push(menu::Item::action(
-                "Reload Comments",
+                tr!("Reload Comments"),
                 None,
                 Message::Review(review::Message::RefreshComments),
             ));
             items.push(menu::Item::action(
-                "Open in Browser",
+                tr!("Open in Browser"),
                 None,
                 Message::Review(review::Message::OpenInBrowser),
             ));
@@ -2006,7 +2023,7 @@ impl GitCompare {
             if let Some((label, _)) = &banner.action {
                 actions.push((label.clone(), Message::BannerAction));
             }
-            actions.push(("Dismiss".to_string(), Message::DismissBanner));
+            actions.push((tr!("Dismiss").to_string(), Message::DismissBanner));
             let (primary, secondary) = condense(&banner.text);
             page = page.push(ui::banner(banner.kind, primary, secondary, actions));
         }
@@ -2025,14 +2042,17 @@ impl GitCompare {
         if self.confirm_close {
             let count = self.pr.as_ref().map_or(0, |pr| pr.drafts.len());
             let dialog = ui::modal::dialog(
-                "Discard pending review comments?",
-                text(format!(
-                    "{count} review comments haven't been posted. Closing discards them."
+                tr!("Discard pending review comments?"),
+                text(trn!(
+                    "{} review comment hasn’t been posted. Closing discards it.",
+                    "{} review comments haven’t been posted. Closing discards them.",
+                    count,
+                    count
                 ))
                 .size(14),
                 vec![
-                    button(text("Cancel")).style(button::secondary).on_press(Message::CancelClose).into(),
-                    button(text("Discard and Close"))
+                    button(text(tr!("Cancel"))).style(button::secondary).on_press(Message::CancelClose).into(),
+                    button(text(tr!("Discard and Close")))
                         .style(button::danger)
                         .on_press(Message::DiscardAndClose)
                         .into(),
@@ -2102,20 +2122,20 @@ impl GitCompare {
         let mut bar = row![
             repo,
             base,
-            ui::tool_button(icon::SWAP, "Swap base and target", self.info.is_some().then_some(Message::Swap)),
+            ui::tool_button(icon::SWAP, tr!("Swap base and target"), self.info.is_some().then_some(Message::Swap)),
             target,
             container(status).width(Length::Fill).clip(true).padding([0, 6]),
-            ui::tool_button(icon::REFRESH, "Reload the comparison", self.info.is_some().then_some(Message::Reload)),
+            ui::tool_button(icon::REFRESH, tr!("Reload the comparison"), self.info.is_some().then_some(Message::Reload)),
         ]
         .spacing(6)
         .align_y(iced::Center);
         if self.config.infer_enabled {
             bar = bar.push(tooltip(
-                button(text("Explain").size(14))
+                button(text(tr!("Explain")).size(14))
                     .padding([5, 12])
                     .style(button::secondary)
                     .on_press_maybe((has_session && idle).then_some(Message::ExplainAll)),
-                container(text("Explain every change that isn’t explained yet, with Claude Code").size(12))
+                container(text(tr!("Explain every change that isn’t explained yet, with Claude Code")).size(12))
                     .padding([4, 8])
                     .style(ui::tooltip_box),
                 tooltip::Position::Bottom,
@@ -2125,16 +2145,16 @@ impl GitCompare {
             Some(session) => {
                 let reason = session.build_unavailable_reason();
                 if reason.is_empty() {
-                    ("Write a build file for this comparison".to_string(), true)
+                    (tr!("Write a build file for this comparison").to_string(), true)
                 } else {
                     (reason, false)
                 }
             }
-            None => ("Pick a base and a target first".to_string(), false),
+            None => (tr!("Pick a base and a target first").to_string(), false),
         };
         bar = bar.push(tooltip(
             button(
-                text(if self.config.infer_enabled { "Explain & Build" } else { "Generate Build" }).size(14),
+                text(if self.config.infer_enabled { tr!("Explain & Build") } else { tr!("Generate Build") }).size(14),
             )
             .padding([5, 12])
             .style(button::primary)
@@ -2151,7 +2171,7 @@ impl GitCompare {
                 .on_press(Message::TogglePopup(PopupKind::More))
                 .into()
         } else {
-            ui::tool_button("⋯", "More AI Lens actions", Some(Message::TogglePopup(PopupKind::More)))
+            ui::tool_button("⋯", tr!("More AI Lens actions"), Some(Message::TogglePopup(PopupKind::More)))
         };
         bar = bar.push(
             popover(more_button, more_open.then(|| self.more_menu()), Message::ClosePopup).align_right(true),
@@ -2170,9 +2190,9 @@ impl GitCompare {
         let has_info = self.info.is_some();
         container(
             column![
-                item("Set Up Agent Instructions", has_info.then_some(Message::SetUpAgents)),
-                item("Open Builds Folder", has_info.then_some(Message::OpenBuilds)),
-                item("Open File in New Tab", self.view.is_some().then_some(Message::OpenFile)),
+                item(tr!("Set Up Agent Instructions"), has_info.then_some(Message::SetUpAgents)),
+                item(tr!("Open Builds Folder"), has_info.then_some(Message::OpenBuilds)),
+                item(tr!("Open File in New Tab"), self.view.is_some().then_some(Message::OpenFile)),
             ]
             .width(260),
         )
@@ -2224,7 +2244,7 @@ impl GitCompare {
                 }
                 if *choose {
                     page = page.push(
-                        button(text("Choose Folder…").size(14))
+                        button(text(tr!("Choose Folder…")).size(14))
                             .padding([8, 20])
                             .style(button::primary)
                             .on_press(Message::ChooseRepository),
@@ -2243,7 +2263,7 @@ impl GitCompare {
     }
 
     fn why_panel(&self) -> Element<'_, Message> {
-        let title = container(text("Why").size(13).font(ui::bold()))
+        let title = container(text(tr!("Why")).size(13).font(ui::bold()))
             .height(self.diff.header_height())
             .padding([0, 8])
             .align_y(iced::Center);
@@ -2307,14 +2327,14 @@ fn commit_dialog(commit: &CommitPopup) -> Element<'_, Message> {
         .max_height(420)
         .wrapping(text::Wrapping::WordOrGlyph);
     let dialog = ui::modal::dialog(
-        format!("Commit {short}"),
+        tr!("Commit {sha}", sha = short),
         container(message).width(600),
         vec![
-            button(text("Compare with Parent"))
+            button(text(tr!("Compare with Parent")))
                 .style(button::secondary)
                 .on_press(Message::CompareWithParent(commit.sha.clone()))
                 .into(),
-            button(text("Close")).on_press(Message::CloseCommit).into(),
+            button(text(tr!("Close"))).on_press(Message::CloseCommit).into(),
         ],
     );
     // As wide as the message and the dialog's padding, not the window

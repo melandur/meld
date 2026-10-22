@@ -159,25 +159,25 @@ impl FileDiff {
                     p.banner = Some(Banner {
                         id: MsgId::Binary,
                         kind: BannerKind::Warning,
-                        primary: format!("File {display} appears to be a binary file."),
-                        secondary: Some("Do you want to open the file using the default application?".into()),
+                        primary: tr!("File {} appears to be a binary file.", display),
+                        secondary: Some(tr!("Do you want to open the file using the default application?").into()),
                         actions: vec![
-                            ("Open".into(), BannerAction::OpenExternally),
-                            ("Hide".into(), BannerAction::Hide),
+                            (tr!("Open").into(), BannerAction::OpenExternally),
+                            (tr!("Hide").into(), BannerAction::Hide),
                         ],
                     });
                 } else if text.lossy {
                     p.banner = Some(Banner {
                         id: MsgId::Decode,
                         kind: BannerKind::Warning,
-                        primary: format!("There was a problem opening the file “{display}”."),
-                        secondary: Some(format!(
+                        primary: tr!("There was a problem opening the file “{}”.", display),
+                        secondary: Some(tr!(
                             "The file could not be decoded with the encoding “{}”; invalid characters were replaced. Saving would change the file.",
                             text.encoding.name()
                         )),
                         actions: vec![
-                            ("Choose Encoding…".into(), BannerAction::ChooseEncoding),
-                            ("Hide".into(), BannerAction::Hide),
+                            (tr!("Choose Encoding…").into(), BannerAction::ChooseEncoding),
+                            (tr!("Hide").into(), BannerAction::Hide),
                         ],
                     });
                 }
@@ -188,11 +188,11 @@ impl FileDiff {
                 p.banner = Some(Banner {
                     id: MsgId::LineTooLong,
                     kind: BannerKind::Warning,
-                    primary: format!("There was a problem opening the file “{display}”."),
+                    primary: tr!("There was a problem opening the file “{}”.", display),
                     secondary: Some(message),
                     actions: vec![
-                        ("Hide".into(), BannerAction::Hide),
-                        ("Load anyway".into(), BannerAction::LoadAnyway),
+                        (tr!("Hide").into(), BannerAction::Hide),
+                        (tr!("Load anyway").into(), BannerAction::LoadAnyway),
                     ],
                 });
             }
@@ -202,9 +202,9 @@ impl FileDiff {
                 p.banner = Some(Banner {
                     id: MsgId::Error,
                     kind: BannerKind::Error,
-                    primary: format!("There was a problem opening the file “{display}”."),
+                    primary: tr!("There was a problem opening the file “{}”.", display),
                     secondary: Some(message),
-                    actions: vec![("Hide".into(), BannerAction::Hide)],
+                    actions: vec![(tr!("Hide").into(), BannerAction::Hide)],
                 });
             }
         }
@@ -280,9 +280,9 @@ impl FileDiff {
         self.panes[pane].banner = Some(Banner {
             id: MsgId::Stopped,
             kind: BannerKind::Info,
-            primary: "The comparison was stopped".into(),
-            secondary: Some("Editing is disabled until the files are compared.".into()),
-            actions: vec![("Compare".into(), BannerAction::CompareAgain)],
+            primary: tr!("The comparison was stopped").into(),
+            secondary: Some(tr!("Editing is disabled until the files are compared.").into()),
+            actions: vec![(tr!("Compare").into(), BannerAction::CompareAgain)],
         });
     }
 
@@ -304,7 +304,7 @@ impl FileDiff {
             Err(err) => {
                 self.refresh_read_only();
                 self.dialog = Some(Dialog::Error {
-                    primary: "Comparison results will be inaccurate".into(),
+                    primary: tr!("Comparison results will be inaccurate").into(),
                     secondary: err.to_string(),
                 });
                 return Task::none();
@@ -377,9 +377,9 @@ impl FileDiff {
         };
         if save_as || p.file.target().is_none() || !p.file.writable {
             let title = match pane {
-                0 => "Save Left Pane As",
-                1 if self.panes.len() == 3 => "Save Middle Pane As",
-                _ => "Save Right Pane As",
+                0 => tr!("Save Left Pane As"),
+                1 if self.panes.len() == 3 => tr!("Save Middle Pane As"),
+                _ => tr!("Save Right Pane As"),
             };
             let dir = p.file.target().and_then(|t| t.parent()).map(PathBuf::from);
             let name = p.file.target().and_then(|t| t.file_name()).map(|n| n.to_string_lossy().into_owned());
@@ -431,11 +431,11 @@ impl FileDiff {
         self.panes[pane].banner = Some(Banner {
             id: MsgId::SaveConflict,
             kind: BannerKind::Warning,
-            primary: format!("File {} has changed on disk since it was opened", target.display()),
-            secondary: Some("If you save it, any external changes will be lost.".into()),
+            primary: tr!("File {} has changed on disk since it was opened", target.display()),
+            secondary: Some(tr!("If you save it, any external changes will be lost.").into()),
             actions: vec![
-                ("Save Anyway".into(), BannerAction::SaveAnyway),
-                ("Don’t Save".into(), BannerAction::Hide),
+                (tr!("Save Anyway").into(), BannerAction::SaveAnyway),
+                (tr!("Don’t Save").into(), BannerAction::Hide),
             ],
         });
         self.close_state = CloseState::Normal;
@@ -483,7 +483,7 @@ impl FileDiff {
             Err(SaveFailure::Error { path, message }) => {
                 self.close_state = CloseState::Normal;
                 self.dialog = Some(Dialog::Error {
-                    primary: format!("Could not save file {}.", path.display()),
+                    primary: tr!("Could not save file {}.", path.display()),
                     secondary: message,
                 });
                 Task::none()
@@ -613,11 +613,11 @@ impl FileDiff {
                 pane.banner = Some(Banner {
                     id: MsgId::Changed,
                     kind: BannerKind::Warning,
-                    primary: format!("File {name} has changed on disk"),
-                    secondary: Some("Do you want to reload the file?".into()),
+                    primary: tr!("File {} has changed on disk", name),
+                    secondary: Some(tr!("Do you want to reload the file?").into()),
                     actions: vec![
-                        ("Reload".into(), BannerAction::Reload),
-                        ("Hide".into(), BannerAction::Hide),
+                        (tr!("Reload").into(), BannerAction::Reload),
+                        (tr!("Hide").into(), BannerAction::Hide),
                     ],
                 });
             }
@@ -721,8 +721,9 @@ impl FileDiff {
             io::blocking(move || {
                 std::fs::write(&path, text).map_err(|e| {
                     format!(
-                        "Could not save file {}.\nCouldn’t save file due to:\n{e}",
-                        path.display()
+                        "{}\n{}",
+                        tr!("Could not save file {}.", path.display()),
+                        tr!("Couldn’t save file due to:\n{}", e)
                     )
                 })
             }),

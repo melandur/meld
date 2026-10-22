@@ -97,11 +97,11 @@ impl PrList {
         self.location = Some(location.clone());
         self.remotes = None;
         self.prs.clear();
-        self.status = Status::Loading("Looking for pull requests…".into());
+        self.status = Status::Loading(tr!("Looking for pull requests…").into());
         let (generation, cancel) = self.restart();
         Task::perform(
             forge::blocking(move || forge::load_remotes(&location, None, &cancel).map_err(|e| e.to_string())),
-            move |result| Message::Remotes(generation, result.unwrap_or_else(|| Err("Internal error".into()))),
+            move |result| Message::Remotes(generation, result.unwrap_or_else(|| Err(tr!("Internal error").into()))),
         )
     }
 
@@ -110,11 +110,11 @@ impl PrList {
             return Task::none();
         };
         let (generation, cancel) = self.restart();
-        self.status = Status::Loading(format!("Loading {}…", forge.kind().nouns()));
+        self.status = Status::Loading(forge::loading_prs(Some(forge.kind())).into());
         let (filter, search, limit) = (self.filter, self.search.trim().to_string(), self.limit);
         Task::perform(
             forge::blocking(move || forge.list(filter, &search, limit, &cancel).map_err(|e| e.to_string())),
-            move |result| Message::Listed(generation, result.unwrap_or_else(|| Err("Internal error".into()))),
+            move |result| Message::Listed(generation, result.unwrap_or_else(|| Err(tr!("Internal error").into()))),
         )
     }
 
@@ -127,7 +127,7 @@ impl PrList {
                 }
                 match result {
                     Ok(remotes) if remotes.forges.is_empty() => {
-                        self.status = Status::Error("No remote of this repository is on GitHub or GitLab".into());
+                        self.status = Status::Error(tr!("No remote of this repository is on GitHub or GitLab").into());
                         self.remotes = Some(remotes);
                         Task::none()
                     }
@@ -211,8 +211,8 @@ impl PrList {
 
     pub fn view(&self) -> Element<'_, Message> {
         let forge = self.remotes.as_ref().and_then(|r| r.current());
-        let nouns = forge.map(|f| f.kind().nouns()).unwrap_or("pull requests");
-        let mut title = row![text(capitalized(nouns)).size(14).font(ui::bold()), space::horizontal()]
+        let kind = forge.map(|f| f.kind());
+        let mut title = row![text(forge::nouns_heading(kind)).size(14).font(ui::bold()), space::horizontal()]
             .spacing(8)
             .align_y(iced::Center);
         if let Some(remotes) = self.remotes.as_ref().filter(|r| r.forges.len() > 1) {
@@ -228,10 +228,13 @@ impl PrList {
         }
 
         let filters = forge::chips(
-            StateFilter::ALL.iter().map(|f| (f.label().to_string(), Message::Filter(*f))).collect(),
+            StateFilter::ALL
+                .iter()
+                .map(|f| (crate::i18n::pgettext("pull request state", f.label()).to_string(), Message::Filter(*f)))
+                .collect(),
             StateFilter::ALL.iter().position(|f| *f == self.filter),
         );
-        let search = text_input("Search title, author, label or #number", &self.search)
+        let search = text_input(tr!("Search title, author, label or #number"), &self.search)
             .on_input(Message::Search)
             .on_submit(Message::SearchDue(self.search_generation))
             .padding([4, 8])
@@ -246,7 +249,7 @@ impl PrList {
         let mut footer = row![].spacing(8).align_y(iced::Center);
         match &self.status {
             Status::Idle if self.prs.is_empty() => {
-                footer = footer.push(text(format!("No {nouns}")).size(12).style(ui::dim_text));
+                footer = footer.push(text(forge::no_prs(kind, self.filter)).size(12).style(ui::dim_text));
             }
             Status::Idle => {}
             Status::Loading(what) => footer = footer.push(text(format!("⏳ {what}")).size(12).style(ui::dim_text)),
@@ -262,12 +265,12 @@ impl PrList {
                             .wrapping(text::Wrapping::WordOrGlyph)
                             .width(Length::Fill),
                     )
-                    .push(ui::text_button("Retry", Some(Message::Retry)));
+                    .push(ui::text_button(tr!("Retry"), Some(Message::Retry)));
             }
         }
         footer = footer.push(space::horizontal());
         if self.status == Status::Idle && self.prs.len() >= self.limit {
-            footer = footer.push(ui::text_button("Load more", Some(Message::More)));
+            footer = footer.push(ui::text_button(tr!("Load more"), Some(Message::More)));
         }
         column![
             title,
@@ -287,14 +290,6 @@ impl PrList {
         .spacing(8)
         .height(Length::Fill)
         .into()
-    }
-}
-
-fn capitalized(text: &str) -> String {
-    let mut chars = text.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().chain(chars).collect(),
-        None => String::new(),
     }
 }
 
@@ -335,6 +330,5 @@ mod tests {
         assert!(list.prs.is_empty(), "an answer of an older request");
         let (_, picked) = list.update(Message::Open(4));
         assert_eq!(picked, Some(PrSpec { number: 4, remote: None }));
-        assert_eq!(capitalized("merge requests"), "Merge requests");
     }
 }

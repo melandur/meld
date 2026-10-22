@@ -12,6 +12,7 @@
 mod dialogs;
 mod jobs;
 mod keys;
+mod labels;
 mod tree;
 
 use std::path::{Path, PathBuf};
@@ -78,11 +79,11 @@ impl Filter {
 
     fn label(self) -> &'static str {
         match self {
-            Filter::Modified => "Modified",
-            Filter::Normal => "Normal",
-            Filter::Unknown => "Unversioned",
-            Filter::Ignored => "Ignored",
-            Filter::Flatten => "Flatten Folders",
+            Filter::Modified => tr!("Modified"),
+            Filter::Normal => tr!("Normal"),
+            Filter::Unknown => tr!("Unversioned"),
+            Filter::Ignored => tr!("Ignored"),
+            Filter::Flatten => tr!("Flatten Folders"),
         }
     }
 
@@ -259,7 +260,7 @@ impl OpenedArchive {
             .lock()
             .ok()
             .and_then(|mut r| r.take())
-            .unwrap_or_else(|| Err("the archive was already opened".into()))
+            .unwrap_or_else(|| Err(tr!("The archive was already opened").into()))
     }
 }
 
@@ -327,7 +328,8 @@ pub enum Message {
 
 impl VcView {
     pub fn new(location: PathBuf, auto_compare: bool, shared: &mut Shared) -> (Self, Task<Message>) {
-        let location = meld_vc::paths::abspath(&location);
+        // A repository's own folder (`.git`) opens as its work tree
+        let location = meld_vc::paths::outside_admin_dir(&meld_vc::paths::abspath(&location));
         let title = location
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
@@ -382,7 +384,7 @@ impl VcView {
         self.load_gen += 1;
         let generation = self.load_gen;
         self.phase = Phase::Loading;
-        self.progress = "Opening archive…".into();
+        self.progress = tr!("Opening archive").into();
         self.update_sensitivity();
         let path = self.location.clone();
         Task::perform(jobs::blocking(move || meld_files::open_archive(&path)), move |result| {
@@ -411,7 +413,7 @@ impl VcView {
         self.load_gen += 1;
         let generation = self.load_gen;
         self.phase = Phase::Loading;
-        self.progress = "Looking for version control systems".into();
+        self.progress = tr!("Looking for version control systems").into();
         self.update_sensitivity();
         Task::perform(jobs::load(self.location.clone(), self.kind), move |result| {
             Message::Loaded(generation, result)
@@ -422,9 +424,13 @@ impl VcView {
         let jobs::OpenedVc { worker, ui } = opened;
         self.kind = Some(ui.kind());
         let location = ui.location().to_path_buf();
-        let (title, tooltip) = tab_labels(&*ui, &location);
+        let (title, _) = tab_labels(&*ui, &location);
         self.title = title;
-        self.tooltip = tooltip;
+        self.tooltip = format!(
+            "{}\n{}",
+            tr!("{vc} comparison:", vc = labels::vc_name(ui.kind())),
+            location.display()
+        );
         if self.tree.root().and_then(|r| r.entry()).map(|e| e.path.as_path()) != Some(location.as_path()) {
             self.tree = TreeModel::root_only(&location);
         }
@@ -497,7 +503,7 @@ impl VcView {
         self.scan_gen += 1;
         let generation = self.scan_gen;
         self.phase = Phase::Scanning;
-        self.progress = "Scanning repository".into();
+        self.progress = tr!("Scanning repository").into();
         let cancel = Arc::new(AtomicBool::new(false));
         let (task, handle) = Task::run(jobs::scan(vc, self.filters, scope, cancel.clone()), move |event| {
             Message::Scan(generation, event)
@@ -620,11 +626,11 @@ impl VcView {
                         };
                         meld_files::external::spawn_detached(&argv)
                             .err()
-                            .map(|e| format!("Failed to launch {}: {e}", argv.join(" ")))
+                            .map(|e| tr!("Failed to launch {}: {}", argv.join(" "), e))
                     })
                     .collect();
                 if !errors.is_empty() {
-                    self.report("Could not open the file externally", Some(errors.join("\n")));
+                    self.report(tr!("Could not open the file externally"), Some(errors.join("\n")));
                 }
                 Task::none()
             }
@@ -687,11 +693,11 @@ impl VcView {
                     };
                     events.push(Event::Open(Comparison::Files {
                         paths: paths.into_iter().map(Some).collect(),
-                        labels: labels.into_iter().map(Option::unwrap_or_default).collect(),
+                        labels: labels.iter().map(|l| l.as_deref().map(labels::diff_label).unwrap_or_default()).collect(),
                         merge_output,
                         auto_merge,
                         extras: FileExtras {
-                            tab_label: Some(tab_label),
+                            tab_label: Some(labels::diff_label(&tab_label)),
                             prompt_resolve,
                             diff_sides: diff_sides.map(|[a, b]| [side(a), side(b)]),
                             temp_files,
@@ -702,7 +708,7 @@ impl VcView {
             }
         }
         if !errors.is_empty() {
-            self.report("Could not open the comparison", Some(errors.join("\n")));
+            self.report(tr!("Could not open the comparison"), Some(errors.join("\n")));
         }
     }
 
@@ -794,7 +800,7 @@ impl VcView {
                 let loaded = match result {
                     Ok(loaded) => loaded,
                     Err(e) => {
-                        self.report("Could not look for version control systems", Some(e));
+                        self.report(tr!("Could not look for version control systems"), Some(e));
                         return Task::none();
                     }
                 };
@@ -806,7 +812,7 @@ impl VcView {
                         return self.scan(true);
                     }
                     Ok(None) => {}
-                    Err(e) => self.report("Could not open the version control system", Some(e)),
+                    Err(e) => self.report(tr!("Could not open the version control system"), Some(e)),
                 }
                 self.update_sensitivity();
             }
@@ -842,19 +848,19 @@ impl VcView {
                         return self.scan(true);
                     }
                     Ok(None) => {}
-                    Err(e) => self.report("Could not open the version control system", Some(e)),
+                    Err(e) => self.report(tr!("Could not open the version control system"), Some(e)),
                 }
                 self.update_sensitivity();
             }
             Message::ChooseLocation => {
                 // Starts next to the current folder, like `set_file()` did.
                 let start = self.location.parent().map(std::path::Path::to_path_buf);
-                return ui::chooser::pick_folder("Select Folder", start).map(Message::LocationChosen);
+                return ui::chooser::pick_folder(tr!("Select Folder"), start).map(Message::LocationChosen);
             }
             Message::LocationChosen(path) => {
                 if let Some(path) = path {
                     self.archive = None;
-                    self.location = path;
+                    self.location = meld_vc::paths::outside_admin_dir(&path);
                     self.tree = TreeModel::root_only(&self.location);
                     self.error = None;
                     return if meld_files::is_archive(&self.location) {
@@ -878,7 +884,7 @@ impl VcView {
                     Err(err) => {
                         self.phase = Phase::Idle;
                         self.progress.clear();
-                        self.error = Some(("Could not open the archive".into(), Some(err)));
+                        self.error = Some((tr!("Could not open the archive").into(), Some(err)));
                         self.update_sensitivity();
                     }
                 }
@@ -954,7 +960,7 @@ impl VcView {
                         events.push(Event::SettingsChanged);
                     }
                     if let Some(error) = error {
-                        self.report("Error running command", Some(error));
+                        self.report(tr!("Error running command"), Some(error));
                     }
                     self.update_sensitivity();
                     if let Some(refresh) = tree::plan_command_refresh(&self.tree, self.filters.flatten, &refresh) {
@@ -981,7 +987,7 @@ impl VcView {
             Message::Trashed((trashed, confirm, errors)) => {
                 self.running = self.running.saturating_sub(1);
                 if !errors.is_empty() {
-                    self.report("Error deleting files", Some(errors.join("\n")));
+                    self.report(tr!("Error deleting files"), Some(errors.join("\n")));
                 }
                 if !confirm.is_empty() {
                     self.dialog = Some(Dialog::ConfirmDelete(confirm));
@@ -991,7 +997,7 @@ impl VcView {
             Message::Deleted((deleted, errors)) => {
                 self.running = self.running.saturating_sub(1);
                 if !errors.is_empty() {
-                    self.report("Error deleting files", Some(errors.join("\n")));
+                    self.report(tr!("Error deleting files"), Some(errors.join("\n")));
                 }
                 return self.refresh_deleted(&deleted);
             }
@@ -1122,7 +1128,7 @@ impl VcView {
             }
             Message::OpenedFolder(error) => {
                 if let Some(error) = error {
-                    self.report("Could not open the folder", Some(error));
+                    self.report(tr!("Could not open the folder"), Some(error));
                 }
             }
         }
@@ -1174,7 +1180,7 @@ impl VcView {
         let output = match result {
             Ok(output) => output,
             Err(e) => {
-                self.report("Error scanning the repository", Some(e.clone()));
+                self.report(tr!("Error scanning the repository"), Some(e.clone()));
                 self.update_sensitivity();
                 return Task::none();
             }
@@ -1190,7 +1196,7 @@ impl VcView {
             None if self.tree.nodes().len() <= 1 => self.tree = TreeModel::new(&output.tree),
             None => self.tree.replace(&output.tree),
         }
-        self.push_summary = output.push_summary.clone();
+        self.push_summary = output.push_summary.as_deref().map(labels::push_summary);
         self.update_sensitivity();
         tasks.push(self.reveal_cursor());
         if let Some(refresh) = self.pending_refresh.take() {
@@ -1292,25 +1298,25 @@ impl VcView {
     pub fn toolbar<'a>(&'a self, shared: &'a Shared) -> Element<'a, Message> {
         let scanning = self.phase != Phase::Idle;
         let refresh = if scanning {
-            ui::tool_button(icon::STOP, "Stop the scan (Escape)", Some(Message::Stop))
+            ui::tool_button(icon::STOP, ui::with_shortcut(tr!("Stop the scan"), "Escape"), Some(Message::Stop))
         } else {
-            ui::tool_button(icon::REFRESH, "Refresh (Ctrl+R)", Some(Message::Refresh))
+            ui::tool_button(icon::REFRESH, ui::with_shortcut(tr!("Refresh Comparison"), "Ctrl+R"), Some(Message::Refresh))
         };
         let console_tip = if shared.settings.vc_console_visible {
-            "Hide the console output (F9)"
+            ui::with_shortcut(tr!("Hide the console output"), "F9")
         } else {
-            "Show the console output (F9)"
+            ui::with_shortcut(tr!("Show the console output"), "F9")
         };
         row![
             space::horizontal(),
             ui::tool_button(
                 icon::UP,
-                "Go to the previous change (Alt+Up)",
+                ui::with_shortcut(tr!("Go to the previous change"), "Alt+Up"),
                 self.tree.find_change(false).map(|_| Message::PreviousChange)
             ),
             ui::tool_button(
                 icon::DOWN,
-                "Go to the next change (Alt+Down)",
+                ui::with_shortcut(tr!("Go to the next change"), "Alt+Down"),
                 self.tree.find_change(true).map(|_| Message::NextChange)
             ),
             refresh,
@@ -1331,23 +1337,23 @@ impl VcView {
             },
         };
         let mut items = vec![
-            menu::Item::Heading("Version control".into()),
-            action("Compare", Some("Return"), Act::Compare),
-            action("Commit…", Some("Ctrl+M"), Act::Commit),
-            action("Update", None, Act::Update),
-            action("Push…", None, Act::Push),
+            menu::Item::Heading(tr!("Version control").into()),
+            action(tr!("Compare"), Some("Return"), Act::Compare),
+            action(tr!("Commit…"), Some("Ctrl+M"), Act::Commit),
+            action(tr!("Update"), None, Act::Update),
+            action(tr!("Push…"), None, Act::Push),
             menu::Item::Separator,
-            action("Add", None, Act::Add),
-            action("Unstage", None, Act::Unstage),
-            action("Remove", None, Act::Remove),
-            action("Revert…", None, Act::Revert),
-            action("Resolve Conflict", None, Act::Resolve),
-            action("Delete", Some("Delete"), Act::Delete),
-            action("Open Externally", Some("Ctrl+Shift+O"), Act::OpenExternal),
+            action(tr!("Add"), None, Act::Add),
+            action(tr!("Unstage"), None, Act::Unstage),
+            action(tr!("Remove"), None, Act::Remove),
+            action(tr!("Revert…"), None, Act::Revert),
+            action(tr!("Resolve Conflict"), None, Act::Resolve),
+            action(tr!("Delete"), Some("Delete"), Act::Delete),
+            action(tr!("Open Externally"), Some("Ctrl+Shift+O"), Act::OpenExternal),
             menu::Item::Separator,
-            menu::Item::action("Refresh Comparison", Some("Ctrl+R"), Message::Refresh),
+            menu::Item::action(tr!("Refresh Comparison"), Some("Ctrl+R"), Message::Refresh),
             menu::Item::Separator,
-            menu::Item::Heading("Version filters".into()),
+            menu::Item::Heading(tr!("Version Filters").into()),
         ];
         for filter in Filter::STATES {
             items.push(menu::Item::toggle(filter.label(), filter.get(&self.filters), Message::ToggleFilter(filter)));
@@ -1359,11 +1365,11 @@ impl VcView {
         ));
         items.push(menu::Item::Separator);
         items.push(menu::Item::toggle(
-            "Version Control Console",
+            tr!("Version Control Console"),
             shared.settings.vc_console_visible,
             Message::ToggleConsole,
         ));
-        items.push(menu::Item::action("Clear Console", None, Message::ClearConsole));
+        items.push(menu::Item::action(tr!("Clear Console"), None, Message::ClearConsole));
         items
     }
 
@@ -1375,7 +1381,7 @@ impl VcView {
                 ui::BannerKind::Error,
                 primary.as_str(),
                 secondary.clone(),
-                vec![("Dismiss".to_string(), Message::DismissError)],
+                vec![(tr!("Dismiss").to_string(), Message::DismissError)],
             ));
         }
         if shared.settings.vc_console_visible {
@@ -1445,16 +1451,16 @@ impl VcView {
             message: self.act_message(act),
         };
         vec![
-            action("Compare", Act::Compare),
-            action("Commit…", Act::Commit),
+            action(tr!("Compare"), Act::Compare),
+            action(tr!("Commit…"), Act::Commit),
             menu::Item::Separator,
-            action("Add", Act::Add),
-            action("Unstage", Act::Unstage),
-            action("Remove", Act::Remove),
-            action("Revert", Act::Revert),
-            action("Delete", Act::Delete),
+            action(tr!("Add"), Act::Add),
+            action(tr!("Unstage"), Act::Unstage),
+            action(tr!("Remove"), Act::Remove),
+            action(tr!("Revert"), Act::Revert),
+            action(tr!("Delete"), Act::Delete),
             menu::Item::Separator,
-            action("Resolve Conflict", Act::Resolve),
+            action(tr!("Resolve Conflict"), Act::Resolve),
         ]
     }
 
@@ -1484,11 +1490,11 @@ impl VcView {
     }
 
     fn action_bar(&self) -> Element<'_, Message> {
-        let tool = |glyph: &'static str, tip: &'static str, act: Act| ui::tool_button(glyph, tip, self.act_message(act));
-        let commit = ui::text_button("Commit…", self.act_message(Act::Commit));
+        let tool = |glyph: &'static str, tip: String, act: Act| ui::tool_button(glyph, tip, self.act_message(act));
+        let commit = ui::text_button(tr!("Commit…"), self.act_message(Act::Commit));
         let commit = iced::widget::tooltip(
             commit,
-            container(text("Commit changes to version control (Ctrl+M)").size(13))
+            container(text(ui::with_shortcut(tr!("Commit changes to version control"), "Ctrl+M")).size(13))
                 .padding([4, 8])
                 .style(ui::tooltip_box),
             iced::widget::tooltip::Position::Bottom,
@@ -1496,18 +1502,18 @@ impl VcView {
         let actions = row![
             commit,
             ui::separator(true),
-            tool("⇣", "Pull remote changes to the local repository", Act::Update),
-            tool("⇡", "Push local changes to remote", Act::Push),
+            tool("⇣", tr!("Pull remote changes to the local repository").to_string(), Act::Update),
+            tool("⇡", tr!("Push local changes to remote").to_string(), Act::Push),
             ui::separator(true),
-            tool("+", "Add to version control", Act::Add),
-            tool(icon::UNDO, "Remove staged changes", Act::Unstage),
-            tool("−", "Remove from version control", Act::Remove),
-            tool("⟲", "Revert working copy to original state", Act::Revert),
-            tool("✓", "Mark as resolved in version control", Act::Resolve),
+            tool("+", tr!("Add to version control").to_string(), Act::Add),
+            tool(icon::UNDO, tr!("Remove staged changes").to_string(), Act::Unstage),
+            tool("−", tr!("Remove from version control").to_string(), Act::Remove),
+            tool("⟲", tr!("Revert working copy to original state").to_string(), Act::Revert),
+            tool("✓", tr!("Mark as resolved in version control").to_string(), Act::Resolve),
             ui::separator(true),
-            tool("⇄", "Compare selected files (Return)", Act::Compare),
-            tool("↗", "Open in an external editor (Ctrl+Shift+O)", Act::OpenExternal),
-            tool("🗑", "Delete the selected files from the working copy", Act::Delete),
+            tool("⇄", ui::with_shortcut(tr!("Compare selected files"), "Return"), Act::Compare),
+            tool("↗", ui::with_shortcut(tr!("Open in an external editor"), "Ctrl+Shift+O"), Act::OpenExternal),
+            tool("🗑", tr!("Delete the selected files from the working copy").to_string(), Act::Delete),
         ]
         .spacing(2)
         .height(28)
@@ -1529,7 +1535,7 @@ impl VcView {
         .style(ui::tab_button(open))
         .on_press(Message::PathLabel);
         let location = row![
-            ui::tool_button(icon::FOLDER, "Open version controlled folder", Some(Message::ChooseLocation)),
+            ui::tool_button(icon::FOLDER, tr!("Open version controlled folder"), Some(Message::ChooseLocation)),
             label,
         ]
         .spacing(4)
@@ -1543,7 +1549,7 @@ impl VcView {
                     .enumerate()
                     .map(|(index, c)| VcItem {
                         index,
-                        label: c.label.clone(),
+                        label: labels::choice_label(c),
                     })
                     .collect();
                 let selected = items.get(self.active_choice).cloned();
@@ -1552,13 +1558,13 @@ impl VcView {
                         .text_size(13)
                         .padding([4, 8])
                         .width(Length::Shrink),
-                    container(text(choices.tooltip).size(13)).padding([4, 8]).style(ui::tooltip_box),
+                    container(text(labels::choices_tooltip(choices)).size(13)).padding([4, 8]).style(ui::tooltip_box),
                     // Not below: the tooltip would cover the open menu.
                     iced::widget::tooltip::Position::Left,
                 )
                 .into()
             }
-            Some(choices) => text(choices.choices.first().map_or("", |c| c.label.as_str()))
+            Some(choices) => text(choices.choices.first().map(labels::choice_label).unwrap_or_default())
                 .size(13)
                 .into(),
             None => text("…").size(13).style(ui::dim_text).into(),
@@ -1581,7 +1587,7 @@ impl VcView {
     }
 
     fn filter_bar(&self) -> Element<'_, Message> {
-        let mut filters = row![text("Show:").size(13).style(ui::dim_text)].spacing(14).align_y(iced::Center);
+        let mut filters = row![text(tr!("Show:")).size(13).style(ui::dim_text)].spacing(14).align_y(iced::Center);
         for filter in Filter::STATES {
             filters = filters.push(
                 checkbox(filter.get(&self.filters))
@@ -1603,12 +1609,10 @@ impl VcView {
         let status = if self.phase != Phase::Idle && !self.progress.is_empty() {
             format!("{}…", self.progress)
         } else if self.running > 0 {
-            "Running command…".to_string()
+            tr!("Running command…").to_string()
         } else if self.vc.is_some() {
-            match self.tree.entry_count() {
-                1 => "1 item".to_string(),
-                n => format!("{n} items"),
-            }
+            let n = self.tree.entry_count();
+            trn!("{} item", "{} items", n, n)
         } else {
             String::new()
         };
@@ -1630,10 +1634,10 @@ impl VcView {
         let header_cell = |label: &'a str| text(label).size(13).font(ui::bold());
         let header = container(
             row![
-                container(header_cell("Name")).width(Length::FillPortion(5)),
-                container(header_cell("Location")).width(Length::FillPortion(3)),
-                container(header_cell("Status")).width(STATUS_WIDTH),
-                container(header_cell("Extra")).width(Length::FillPortion(3)),
+                container(header_cell(tr!("Name"))).width(Length::FillPortion(5)),
+                container(header_cell(tr!("Location"))).width(Length::FillPortion(3)),
+                container(header_cell(tr!("Status"))).width(STATUS_WIDTH),
+                container(header_cell(tr!("Extra"))).width(Length::FillPortion(3)),
             ]
             .spacing(8),
         )
@@ -1687,18 +1691,23 @@ impl VcView {
                 let extra = if id == 0 {
                     self.push_summary.clone().unwrap_or_default()
                 } else {
-                    entry.options.clone()
+                    labels::extra(&entry.options)
                 };
                 (
                     if node.is_folder() { "▣" } else { "▢" },
                     label,
                     entry.display_location(&self.location).unwrap_or_default(),
-                    entry.status(),
+                    crate::i18n::gettext(entry.status()),
                     extra,
                 )
             }
-            NodeKind::Empty(label) => ("", label.clone(), String::new(), "", String::new()),
-            NodeKind::Error(label) => ("⚠", label.clone(), String::new(), state.label(), String::new()),
+            NodeKind::Empty(label) => {
+                let label = if label == meld_vc::view::EMPTY_LABEL { tr!("(Empty)").to_string() } else { label.clone() };
+                ("", label, String::new(), "", String::new())
+            }
+            NodeKind::Error(label) => {
+                ("⚠", label.clone(), String::new(), crate::i18n::gettext(state.label()), String::new())
+            }
         };
 
         let mut font = Font::DEFAULT;
@@ -1795,9 +1804,9 @@ impl VcView {
         column![
             handle,
             row![
-                text("Console output").size(13).font(ui::bold()),
+                text(tr!("Console output")).size(13).font(ui::bold()),
                 space::horizontal(),
-                ui::text_button("Clear", (!self.console.is_empty()).then_some(Message::ClearConsole)),
+                ui::text_button(tr!("Clear"), (!self.console.is_empty()).then_some(Message::ClearConsole)),
             ]
             .padding([0, 8])
             .align_y(iced::Center),

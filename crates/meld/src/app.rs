@@ -406,6 +406,10 @@ impl Meld {
         if self.quitting {
             return self.quit();
         }
+        // Never leave an empty window: offer a new comparison instead.
+        if self.tabs.is_empty() {
+            return self.new_tab();
+        }
         Task::none()
     }
 
@@ -539,7 +543,7 @@ impl Meld {
                 let id = entry.id;
                 entry.tab.view(&self.shared).map(move |m| Message::Tab(id, m))
             }
-            None => container(text("No comparisons open").style(ui::dim_text))
+            None => container(text(tr!("No comparisons open")).style(ui::dim_text))
                 .center(Length::Fill)
                 .into(),
         };
@@ -550,7 +554,7 @@ impl Meld {
                 ui::BannerKind::Error,
                 notice.as_str(),
                 None,
-                vec![("Dismiss".to_string(), Message::DismissNotice)],
+                vec![(tr!("Dismiss").to_string(), Message::DismissNotice)],
             ));
         }
         let mut base: Element<'_, Message> = content.push(body).into();
@@ -614,7 +618,7 @@ impl Meld {
                 .style(ui::flat_button)
                 .on_press(Message::CloseTab(entry.id));
             let tab_button = iced::widget::mouse_area(
-                container(row![select, close].align_y(iced::Center))
+                container(row![select, close].spacing(2).align_y(iced::Center))
                     .padding(iced::Padding::ZERO.right(4))
                     .style(ui::tab_container(selected)),
             )
@@ -625,7 +629,7 @@ impl Meld {
                 iced::widget::tooltip::Position::Bottom,
             ));
         }
-        tabs = tabs.push(ui::tool_button(icon::ADD, "New comparison (Ctrl+N)", Some(Message::NewTab)));
+        tabs = tabs.push(ui::tool_button(icon::ADD, tr!("New comparison (Ctrl+N)"), Some(Message::NewTab)));
 
         let toolbar: Element<'_, Message> = match self.active_tab() {
             Some(entry) => {
@@ -643,8 +647,8 @@ impl Meld {
                     ))
                     .width(Length::FillPortion(3)),
                 container(toolbar).width(Length::FillPortion(2)).align_right(Length::FillPortion(2)),
-                ui::tool_button("🕘", "Recent comparisons", Some(Message::ToggleMenu(OpenMenu::Recent))),
-                ui::tool_button(icon::MENU, "Main menu (F10)", Some(Message::ToggleMenu(OpenMenu::Main))),
+                ui::tool_button("🕘", tr!("Recent comparisons"), Some(Message::ToggleMenu(OpenMenu::Recent))),
+                ui::tool_button(icon::MENU, tr!("Main menu (F10)"), Some(Message::ToggleMenu(OpenMenu::Main))),
             ]
             .spacing(8)
             .align_y(iced::Center),
@@ -687,24 +691,24 @@ impl Meld {
                 items.push(menu::Item::Separator);
             }
         }
-        items.push(menu::Item::toggle("Fullscreen", self.fullscreen, Message::Command(Command::Fullscreen)));
-        items.push(menu::Item::action("Zoom In", Some("Ctrl++"), Message::Command(Command::ZoomIn)));
-        items.push(menu::Item::action("Zoom Out", Some("Ctrl+-"), Message::Command(Command::ZoomOut)));
-        items.push(menu::Item::action("Reset Zoom", Some("Ctrl+0"), Message::Command(Command::ZoomReset)));
+        items.push(menu::Item::toggle(tr!("Fullscreen"), self.fullscreen, Message::Command(Command::Fullscreen)));
+        items.push(menu::Item::action(tr!("Zoom In"), Some("Ctrl++"), Message::Command(Command::ZoomIn)));
+        items.push(menu::Item::action(tr!("Zoom Out"), Some("Ctrl+-"), Message::Command(Command::ZoomOut)));
+        items.push(menu::Item::action(tr!("Reset Zoom"), Some("Ctrl+0"), Message::Command(Command::ZoomReset)));
         items.push(menu::Item::Separator);
-        items.push(menu::Item::action("Preferences", Some("Ctrl+,"), Message::ShowDialog(DialogKind::Preferences)));
-        items.push(menu::Item::action("Keyboard Shortcuts", None, Message::ShowDialog(DialogKind::Shortcuts)));
-        items.push(menu::Item::action("Help", Some("F1"), Message::Command(Command::Help)));
-        items.push(menu::Item::action("About Meld", None, Message::ShowDialog(DialogKind::About)));
+        items.push(menu::Item::action(tr!("Preferences"), Some("Ctrl+,"), Message::ShowDialog(DialogKind::Preferences)));
+        items.push(menu::Item::action(tr!("Keyboard Shortcuts"), None, Message::ShowDialog(DialogKind::Shortcuts)));
+        items.push(menu::Item::action(tr!("Help"), Some("F1"), Message::Command(Command::Help)));
+        items.push(menu::Item::action(tr!("About Meld"), None, Message::ShowDialog(DialogKind::About)));
         items.push(menu::Item::Separator);
-        items.push(menu::Item::action("Quit", Some("Ctrl+Q"), Message::Command(Command::Quit)));
+        items.push(menu::Item::action(tr!("Quit"), Some("Ctrl+Q"), Message::Command(Command::Quit)));
         items
     }
 
     fn recent_menu(&self) -> Vec<menu::Item<Message>> {
         let recent = self.shared.recent_comparisons();
         if recent.is_empty() {
-            return vec![menu::Item::disabled("No recent comparisons")];
+            return vec![menu::Item::disabled(tr!("No recent comparisons"))];
         }
         recent
             .into_iter()

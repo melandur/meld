@@ -146,75 +146,112 @@ pub fn from_key(key: &Key, modifiers: Modifiers) -> Option<Command> {
     Some(command)
 }
 
-/// Shortcut list for the keyboard shortcuts window.
-pub const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
-    (
-        "General",
-        &[
-            ("Ctrl+N", "New comparison"),
-            ("Ctrl+W", "Close comparison"),
-            ("Ctrl+Q", "Quit"),
-            ("Ctrl+,", "Preferences"),
-            ("Ctrl+PgDn / Ctrl+PgUp", "Next / previous tab"),
-            ("Alt+1…9", "Switch to tab"),
-            ("F10", "Main menu"),
-            ("F11", "Fullscreen"),
-            ("Escape", "Stop the current operation"),
-        ],
-    ),
-    (
-        "Comparisons",
-        &[
-            ("Ctrl+S", "Save"),
-            ("Ctrl+Shift+S", "Save as"),
-            ("Ctrl+Shift+L", "Save all"),
-            ("Ctrl+Z / Ctrl+Shift+Z", "Undo / redo"),
-            ("Ctrl+R, F5", "Refresh"),
-            ("Alt+Down, Ctrl+D", "Next change"),
-            ("Alt+Up, Ctrl+E", "Previous change"),
-            ("Ctrl+K / Ctrl+J", "Next / previous conflict"),
-            ("Alt+PgDn / Alt+PgUp", "Next / previous pane"),
-            ("Ctrl+Shift+O", "Open in external editor"),
-            ("Alt+\\", "Swap panes"),
-            ("F8", "Filters"),
-            ("F9", "Overview map / console"),
-            ("Ctrl+= / Ctrl+- / Ctrl+0", "Zoom in / out / reset"),
-        ],
-    ),
-    (
-        "Changes",
-        &[
-            ("Alt+Left / Alt+Right", "Push change left / right"),
-            ("Alt+Shift+Right / Alt+Shift+Left", "Pull change from left / right"),
-            ("Alt+[ / Alt+]", "Copy change above left / right"),
-            ("Alt+; / Alt+'", "Copy change below left / right"),
-            ("Alt+Delete", "Delete change"),
-        ],
-    ),
-    (
-        "Find",
-        &[
-            ("Ctrl+F", "Find"),
-            ("Ctrl+G, F3", "Find next"),
-            ("Ctrl+Shift+G, Shift+F3", "Find previous"),
-            ("Ctrl+H", "Find and replace"),
-            ("Ctrl+I", "Go to line"),
-        ],
-    ),
-    (
-        "Folder and version control",
-        &[
-            ("Return", "Compare selected"),
-            ("Alt+Left / Alt+Right", "Copy to left / right"),
-            ("Delete", "Delete selected"),
-            ("Ctrl+M", "Commit"),
-        ],
-    ),
-    (
-        "Git Compare",
-        &[("Alt+F7 / Alt+Shift+F7", "Next / previous changed file")],
-    ),
-];
+/// A heading and its (keys, action) rows in the keyboard shortcuts window.
+pub type ShortcutGroup = (&'static str, Vec<(&'static str, &'static str)>);
+
+/// Shortcut list for the keyboard shortcuts window (`help-overlay.ui`),
+/// translated.
+pub fn shortcuts() -> Vec<ShortcutGroup> {
+    vec![
+        (
+            trc!("shortcut window", "Windows and Tabs"),
+            vec![
+                ("Ctrl+N", trc!("shortcut window", "New comparison")),
+                ("Ctrl+W", trc!("shortcut window", "Close a comparison")),
+                ("Ctrl+Q", trc!("shortcut window", "Quit Meld")),
+                ("Ctrl+PgUp, Ctrl+Shift+Tab", trc!("shortcut window", "Go to previous tab")),
+                ("Ctrl+PgDn, Ctrl+Tab", trc!("shortcut window", "Go to next tab")),
+                ("Alt+1…9", trc!("shortcut window", "Switch to tab")),
+            ],
+        ),
+        (
+            trc!("shortcut window", "General"),
+            vec![
+                ("F1", trc!("shortcut window", "Show help")),
+                ("Ctrl+,", trc!("shortcut window", "Show preferences")),
+                ("F10", trc!("shortcut window", "Open menu")),
+                ("F11", trc!("shortcut window", "Fullscreen")),
+            ],
+        ),
+        (
+            trc!("shortcut window", "Common Actions"),
+            vec![
+                ("Escape", trc!("shortcut window", "Stop the current action")),
+                ("Ctrl+R, F5", trc!("shortcut window", "Refresh comparison")),
+                ("Ctrl+Shift+O", trc!("shortcut window", "Open externally")),
+                ("F8", trc!("shortcut window", "Filters")),
+                ("Ctrl+= / Ctrl+- / Ctrl+0", trc!("shortcut window", "Zoom in / out / reset")),
+            ],
+        ),
+        (
+            trc!("shortcut window", "Panes"),
+            vec![
+                ("Alt+PgUp", trc!("shortcut window", "Previous comparison pane")),
+                ("Alt+PgDn", trc!("shortcut window", "Next comparison pane")),
+                ("Alt+\\", trc!("shortcut window", "Swap left and right panes")),
+            ],
+        ),
+        (
+            trc!("shortcut window", "Changes"),
+            vec![
+                ("Alt+Up, Ctrl+E", trc!("shortcut window", "Go to previous change")),
+                ("Alt+Down, Ctrl+D", trc!("shortcut window", "Go to next change")),
+            ],
+        ),
+        (
+            trc!("shortcut window", "Editing"),
+            vec![
+                ("Ctrl+Z", trc!("shortcut window", "Undo")),
+                ("Ctrl+Shift+Z", trc!("shortcut window", "Redo")),
+                ("Ctrl+F", trc!("shortcut window", "Find")),
+                ("Ctrl+G, F3", trc!("shortcut window", "Find Next")),
+                ("Ctrl+Shift+G, Shift+F3", trc!("shortcut window", "Find Previous")),
+                ("Ctrl+H", trc!("shortcut window", "Replace")),
+                ("Ctrl+I", trc!("shortcut window", "Go to line")),
+            ],
+        ),
+        (
+            trc!("shortcut window", "File comparison"),
+            vec![
+                ("Ctrl+S", trc!("shortcut window", "Save current file")),
+                ("Ctrl+Shift+S", trc!("shortcut window", "Save current file to new path")),
+                ("Ctrl+Shift+L", trc!("shortcut window", "Save all files in comparison")),
+                ("Ctrl+J", trc!("shortcut window", "Previous conflict")),
+                ("Ctrl+K", trc!("shortcut window", "Next conflict")),
+                ("Alt+Left", trc!("shortcut window", "Push change to left")),
+                ("Alt+Right", trc!("shortcut window", "Push change to right")),
+                ("Alt+Shift+Right", trc!("shortcut window", "Pull change from left")),
+                ("Alt+Shift+Left", trc!("shortcut window", "Pull change from right")),
+                ("Alt+[", trc!("shortcut window", "Copy change above left")),
+                ("Alt+;", trc!("shortcut window", "Copy change below left")),
+                ("Alt+]", trc!("shortcut window", "Copy change above right")),
+                ("Alt+'", trc!("shortcut window", "Copy change below right")),
+                ("Alt+Delete", trc!("shortcut window", "Delete change")),
+                ("F9", trc!("shortcut window", "Show overview map")),
+            ],
+        ),
+        (
+            trc!("shortcut window", "Folder comparison"),
+            vec![
+                ("Return", trc!("shortcut window", "Compare selected")),
+                ("Alt+Left", trc!("shortcut window", "Copy to left")),
+                ("Alt+Right", trc!("shortcut window", "Copy to right")),
+                ("Delete", trc!("shortcut window", "Delete selected")),
+            ],
+        ),
+        (
+            trc!("shortcut window", "Version control comparison"),
+            vec![
+                ("Ctrl+M", trc!("shortcut window", "Commit to version control")),
+                ("F9", trc!("shortcut window", "Show/hide console output")),
+            ],
+        ),
+        (
+            trc!("shortcut window", "Git Compare"),
+            vec![("Alt+F7 / Alt+Shift+F7", trc!("shortcut window", "Next / previous changed file"))],
+        ),
+    ]
+}
 
 #[cfg(test)]
 mod tests {

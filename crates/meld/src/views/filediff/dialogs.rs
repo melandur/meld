@@ -117,22 +117,22 @@ impl FileDiff {
             Popup::CopyMenu => (
                 vec![
                     menu::Item::Action {
-                        label: "Copy change above the left chunk".into(),
+                        label: tr!("Copy change above the left chunk").into(),
                         shortcut: Some("Alt+["),
                         message: act(Act::CopyLeftUp).filter(|_| s.copy_left),
                     },
                     menu::Item::Action {
-                        label: "Copy change below the left chunk".into(),
+                        label: tr!("Copy change below the left chunk").into(),
                         shortcut: Some("Alt+;"),
                         message: act(Act::CopyLeftDown).filter(|_| s.copy_left),
                     },
                     menu::Item::Action {
-                        label: "Copy change above the right chunk".into(),
+                        label: tr!("Copy change above the right chunk").into(),
                         shortcut: Some("Alt+]"),
                         message: act(Act::CopyRightUp).filter(|_| s.copy_right),
                     },
                     menu::Item::Action {
-                        label: "Copy change below the right chunk".into(),
+                        label: tr!("Copy change below the right chunk").into(),
                         shortcut: Some("Alt+'"),
                         message: act(Act::CopyRightDown).filter(|_| s.copy_right),
                     },
@@ -148,16 +148,16 @@ impl FileDiff {
                         if f.regex.is_some() {
                             menu::Item::toggle(f.name.clone(), f.active, Message::Act(Act::ToggleTextFilter(i)))
                         } else {
-                            menu::Item::disabled(format!("{} (invalid)", f.name))
+                            menu::Item::disabled(tr!("{} (invalid)", f.name))
                         }
                     })
                     .collect();
                 if items.is_empty() {
-                    items.push(menu::Item::disabled("No text filters"));
+                    items.push(menu::Item::disabled(tr!("No text filters")));
                 }
                 items.push(menu::Item::Separator);
                 items.push(menu::Item::toggle(
-                    "Ignore blank lines",
+                    tr!("Ignore blank lines"),
                     self.ignore_blank_lines,
                     Message::Act(Act::ToggleIgnoreBlank),
                 ));
@@ -169,39 +169,39 @@ impl FileDiff {
                 let has_selection = p.buffer.selection().is_some();
                 let mut items = vec![
                     menu::Item::Action {
-                        label: "Undo".into(),
+                        label: tr!("Undo").into(),
                         shortcut: Some("Ctrl+Z"),
                         message: act(Act::Undo).filter(|_| self.undo.can_undo()),
                     },
                     menu::Item::Action {
-                        label: "Redo".into(),
+                        label: tr!("Redo").into(),
                         shortcut: Some("Ctrl+Shift+Z"),
                         message: act(Act::Redo).filter(|_| self.undo.can_redo()),
                     },
                     menu::Item::Separator,
                     menu::Item::Action {
-                        label: "Cut".into(),
+                        label: tr!("Cut").into(),
                         shortcut: Some("Ctrl+X"),
                         message: act(Act::Cut).filter(|_| has_selection && editable),
                     },
                     menu::Item::Action {
-                        label: "Copy".into(),
+                        label: tr!("Copy").into(),
                         shortcut: Some("Ctrl+C"),
                         message: act(Act::Copy).filter(|_| has_selection),
                     },
                     menu::Item::Action {
-                        label: "Paste".into(),
+                        label: tr!("Paste").into(),
                         shortcut: Some("Ctrl+V"),
                         message: act(Act::Paste).filter(|_| editable),
                     },
                     menu::Item::Separator,
                     menu::Item::Action {
-                        label: "Open Containing Folder".into(),
+                        label: tr!("Open Containing Folder").into(),
                         shortcut: None,
                         message: act(Act::OpenFolder).filter(|_| p.file.path.is_some()),
                     },
                     menu::Item::Action {
-                        label: "Copy Full Path".into(),
+                        label: tr!("Copy Full Path").into(),
                         shortcut: None,
                         message: act(Act::CopyFullPath).filter(|_| p.file.path.is_some()),
                     },
@@ -212,15 +212,15 @@ impl FileDiff {
                         && action != SyncpointAction::Disabled
                     {
                         let label = match action {
-                            SyncpointAction::Move => "Move Synchronization Point",
-                            SyncpointAction::Delete => "Remove Synchronization Point",
-                            SyncpointAction::Match => "Match Synchronization Point",
-                            _ => "Add Synchronization Point",
+                            SyncpointAction::Move => tr!("Move Synchronization Point"),
+                            SyncpointAction::Delete => tr!("Remove Synchronization Point"),
+                            SyncpointAction::Match => tr!("Match Synchronization Point"),
+                            _ => tr!("Add Synchronization Point"),
                         };
                         items.push(menu::Item::action(label, None, Message::Act(Act::SyncPoint)));
                     }
                     items.push(menu::Item::action(
-                        "Clear Synchronization Points",
+                        tr!("Clear Synchronization Points"),
                         None,
                         Message::Act(Act::ClearSyncPoints),
                     ));
@@ -260,7 +260,7 @@ impl FileDiff {
             Dialog::ConfirmClose { save } => {
                 let mut list = column![
                     text(
-                        "Open documents contain unsaved changes. Changes which are not saved will be permanently lost."
+                        tr!("If you don’t save, changes will be permanently lost.")
                     )
                     .size(14)
                 ]
@@ -276,18 +276,18 @@ impl FileDiff {
                     list = list.push(cb);
                 }
                 modal::dialog(
-                    "Save changes to documents before closing?",
+                    tr!("Save changes to documents before closing?"),
                     list,
                     vec![
-                        button(text("Cancel"))
+                        button(text(tr!("Cancel")))
                             .style(button::secondary)
                             .on_press(cancel.clone())
                             .into(),
-                        button(text("Discard"))
+                        button(text(tr!("Close without Saving")))
                             .style(button::danger)
                             .on_press(dialog_message(DialogMessage::CloseDiscard))
                             .into(),
-                        button(text("Save"))
+                        button(text(tr!("Save")))
                             .on_press(dialog_message(DialogMessage::CloseSave))
                             .into(),
                     ],
@@ -295,20 +295,20 @@ impl FileDiff {
             }
             Dialog::ConfirmDiscard { unsaved, .. } => {
                 let mut list =
-                    column![text("Changes made to the following documents will be permanently lost:").size(14)]
+                    column![text(tr!("Changes made to the following documents will be permanently lost:")).size(14)]
                         .spacing(4);
                 for name in unsaved {
                     list = list.push(text(format!("\t• {name}")).size(14));
                 }
                 modal::dialog(
-                    "Discard unsaved changes to documents?",
+                    tr!("Discard unsaved changes to documents?"),
                     list,
                     vec![
-                        button(text("Cancel"))
+                        button(text(tr!("Cancel")))
                             .style(button::secondary)
                             .on_press(cancel.clone())
                             .into(),
-                        button(text("Discard"))
+                        button(text(tr!("Discard")))
                             .style(button::danger)
                             .on_press(dialog_message(DialogMessage::DiscardConfirm))
                             .into(),
@@ -316,14 +316,14 @@ impl FileDiff {
                 )
             }
             Dialog::Resolve => modal::dialog(
-                "Mark conflict as resolved?",
-                text("If the conflict was resolved successfully, you may mark it as resolved now.").size(14),
+                tr!("Mark conflict as resolved?"),
+                text(tr!("If the conflict was resolved successfully, you may mark it as resolved now.")).size(14),
                 vec![
-                    button(text("Cancel"))
+                    button(text(tr!("Cancel")))
                         .style(button::secondary)
                         .on_press(cancel.clone())
                         .into(),
-                    button(text("Mark Resolved"))
+                    button(text(tr!("Mark Resolved")))
                         .on_press(dialog_message(DialogMessage::Resolve))
                         .into(),
                 ],
@@ -331,7 +331,7 @@ impl FileDiff {
             Dialog::Error { primary, secondary } => modal::dialog(
                 primary.as_str(),
                 text(secondary.as_str()).size(14),
-                vec![button(text("Close")).on_press(cancel.clone()).into()],
+                vec![button(text(tr!("Close"))).on_press(cancel.clone()).into()],
             ),
             Dialog::Patch {
                 left,
@@ -342,13 +342,13 @@ impl FileDiff {
                 if self.panes.len() == 3 {
                     body = body.push(
                         row![
-                            text("Use differences between:").size(14),
+                            text(tr!("Use differences between:")).size(14),
                             checkbox(*left)
-                                .label("Left and middle panes")
+                                .label(tr!("Left and middle panes"))
                                 .text_size(14)
                                 .on_toggle(|_| dialog_message(DialogMessage::PatchLeft(true))),
                             checkbox(!*left)
-                                .label("Middle and right panes")
+                                .label(tr!("Middle and right panes"))
                                 .text_size(14)
                                 .on_toggle(|_| dialog_message(DialogMessage::PatchLeft(false))),
                         ]
@@ -357,7 +357,7 @@ impl FileDiff {
                 }
                 body = body.push(
                     checkbox(*reverse)
-                        .label("Reverse patch direction")
+                        .label(tr!("Reverse patch direction"))
                         .text_size(14)
                         .on_toggle(|b| dialog_message(DialogMessage::PatchReverse(b))),
                 );
@@ -389,18 +389,18 @@ impl FileDiff {
                     }),
                 );
                 modal::dialog(
-                    "Format as Patch",
+                    tr!("Format as Patch"),
                     body,
                     vec![
-                        button(text("Copy to Clipboard"))
+                        button(text(tr!("Copy to Clipboard")))
                             .style(button::secondary)
                             .on_press(dialog_message(DialogMessage::PatchCopy))
                             .into(),
-                        button(text("Cancel"))
+                        button(text(tr!("Cancel")))
                             .style(button::secondary)
                             .on_press(cancel.clone())
                             .into(),
-                        button(text("Save Patch"))
+                        button(text(tr!("Save Patch")))
                             .on_press(dialog_message(DialogMessage::PatchSave))
                             .into(),
                     ],
@@ -423,15 +423,15 @@ impl FileDiff {
                             .on_press(dialog_message(DialogMessage::PickEncoding(label))),
                     );
                 }
-                self.selector_dialog("Reload with Encoding", filter, list.into(), cancel.clone())
+                self.selector_dialog(tr!("Reload with Encoding"), tr!("Search text encoding…"), filter, list.into(), cancel.clone())
             }
             Dialog::Language { pane, filter } => {
                 let current = self.panes[*pane].language;
                 let needle = filter.to_lowercase();
                 let mut list = column![];
-                if "plain text".contains(&needle) {
+                if tr!("Plain Text").to_lowercase().contains(&needle) {
                     list = list.push(
-                        button(text("Plain Text").size(14))
+                        button(text(tr!("Plain Text")).size(14))
                             .width(Length::Fill)
                             .padding([4, 10])
                             .style(ui::tab_button(current.is_none()))
@@ -452,7 +452,7 @@ impl FileDiff {
                             .on_press(dialog_message(DialogMessage::PickLanguage(Some(lang.id)))),
                     );
                 }
-                self.selector_dialog("Highlighting Mode", filter, list.into(), cancel.clone())
+                self.selector_dialog(tr!("Highlighting Mode"), tr!("Search highlight mode…"), filter, list.into(), cancel.clone())
             }
             Dialog::Display { pane } => {
                 let o = self.view_options;
@@ -467,20 +467,20 @@ impl FileDiff {
                 };
                 let body = column![
                     checkbox(o.show_line_numbers)
-                        .label("Show line numbers")
+                        .label(tr!("Show line numbers"))
                         .on_toggle(|_| Message::Act(Act::ToggleLineNumbers)),
                     checkbox(o.show_whitespace)
-                        .label("Show whitespace")
+                        .label(tr!("Show whitespace"))
                         .on_toggle(|_| Message::Act(Act::ToggleWhitespace)),
                     checkbox(o.highlight_current_line)
-                        .label("Highlight current line")
+                        .label(tr!("Highlight current line"))
                         .on_toggle(|_| Message::Act(Act::ToggleCurrentLine)),
                     checkbox(o.wrap)
-                        .label("Text wrapping")
+                        .label(tr!("Text wrapping"))
                         .on_toggle(|_| Message::Act(Act::ToggleWrap)),
                     ui::separator(false),
                     row_item(
-                        "Text encoding",
+                        tr!("Text encoding"),
                         button(text(super::view::encoding_label(p)).size(13))
                             .padding([4, 10])
                             .style(ui::flat_button)
@@ -488,23 +488,23 @@ impl FileDiff {
                             .into(),
                     ),
                     row_item(
-                        "Highlighting",
+                        tr!("Highlighting"),
                         button(text(super::view::language_label(p)).size(13))
                             .padding([4, 10])
                             .style(ui::flat_button)
                             .on_press(Message::Act(Act::ChooseLanguage(pane)))
                             .into(),
                     ),
-                    row_item("Line endings", super::view::newline_picker(pane, p.file.newline)),
+                    row_item(tr!("Line endings"), super::view::newline_picker(pane, p.file.newline)),
                     checkbox(self.overwrite)
-                        .label("Overwrite mode")
+                        .label(tr!("Overwrite mode"))
                         .on_toggle(|_| Message::Act(Act::ToggleOverwrite)),
                 ]
                 .spacing(10);
                 modal::dialog(
-                    "Display",
+                    tr!("Display"),
                     body,
-                    vec![button(text("Close")).on_press(cancel.clone()).into()],
+                    vec![button(text(tr!("Close"))).on_press(cancel.clone()).into()],
                 )
             }
         };
@@ -514,12 +514,13 @@ impl FileDiff {
     fn selector_dialog<'a>(
         &'a self,
         title: &'a str,
+        placeholder: &'a str,
         filter: &'a str,
         list: Element<'a, Message>,
         cancel: Message,
     ) -> Element<'a, Message> {
         let body = column![
-            text_input("Search", filter)
+            text_input(placeholder, filter)
                 .id(self.dialog_input_id.clone())
                 .size(14)
                 .padding([4, 8])
@@ -531,7 +532,7 @@ impl FileDiff {
         modal::dialog(
             title,
             body,
-            vec![button(text("Cancel")).style(button::secondary).on_press(cancel).into()],
+            vec![button(text(tr!("Cancel"))).style(button::secondary).on_press(cancel).into()],
         )
     }
 }

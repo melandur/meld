@@ -17,11 +17,12 @@ use iced::advanced::{Clipboard, Shell, mouse};
 use iced::widget::{button, column, container, mouse_area, row, space, text, tooltip};
 use iced::{Background, Border, Color, Element, Event, Length, Rectangle, Renderer, Size, Theme, Vector};
 use meld_ailens::cards::{CARD_GAP, layout_cards, reflow};
-use meld_ailens::picker::{parse_iso_date, relative_date};
+use crate::forge::relative_date;
+use meld_ailens::picker::parse_iso_date;
 use meld_ailens::{Card, CardKind, ExplainAction, ExplanationSource, Side};
 
 use super::diffhost::PaneGeometry;
-use super::ellipsis::{Mode, ellipsized};
+use crate::ui::ellipsis::{Mode, ellipsized};
 use crate::ui;
 
 /// Number of commit colors (`.ailens-color-N` in style.css).
@@ -99,9 +100,28 @@ pub fn place_cards(wanted: &[f32], heights: &[f32], gap: f32) -> Vec<f32> {
 /// A Unix time in local time, e.g. `Tue 21 Oct 2026 17:08:48` (the
 /// date's tooltip, `strftime("%c")` in Python).
 pub fn local_date(timestamp: f64) -> Option<String> {
-    const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    const MONTHS: [&str; 12] = [
-        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    let days = [
+        trc!("abbreviated weekday", "Sun"),
+        trc!("abbreviated weekday", "Mon"),
+        trc!("abbreviated weekday", "Tue"),
+        trc!("abbreviated weekday", "Wed"),
+        trc!("abbreviated weekday", "Thu"),
+        trc!("abbreviated weekday", "Fri"),
+        trc!("abbreviated weekday", "Sat"),
+    ];
+    let months = [
+        trc!("abbreviated month", "Jan"),
+        trc!("abbreviated month", "Feb"),
+        trc!("abbreviated month", "Mar"),
+        trc!("abbreviated month", "Apr"),
+        trc!("abbreviated month", "May"),
+        trc!("abbreviated month", "Jun"),
+        trc!("abbreviated month", "Jul"),
+        trc!("abbreviated month", "Aug"),
+        trc!("abbreviated month", "Sep"),
+        trc!("abbreviated month", "Oct"),
+        trc!("abbreviated month", "Nov"),
+        trc!("abbreviated month", "Dec"),
     ];
     if !timestamp.is_finite() {
         return None;
@@ -114,9 +134,9 @@ pub fn local_date(timestamp: f64) -> Option<String> {
     }
     Some(format!(
         "{} {:02} {} {} {:02}:{:02}:{:02}",
-        DAYS.get(tm.tm_wday as usize)?,
+        days.get(tm.tm_wday as usize)?,
         tm.tm_mday,
-        MONTHS.get(tm.tm_mon as usize)?,
+        months.get(tm.tm_mon as usize)?,
         tm.tm_year + 1900,
         tm.tm_hour,
         tm.tm_min,
@@ -198,7 +218,7 @@ fn long_text<'a, M: Clone + 'a>(
     let shown = if expanded { body } else { shorten(&body, SHORT_TEXT) };
     column![
         text(shown).size(13).font(font).wrapping(text::Wrapping::WordOrGlyph),
-        button(text(if expanded { "Show less" } else { "Show more" }).size(12))
+        button(text(if expanded { tr!("Show less") } else { tr!("Show more") }).size(12))
             .padding([0, 0])
             .style(link_button)
             .on_press(on_expand(key.to_string())),
@@ -245,7 +265,7 @@ pub fn card_view<'a, M: Clone + 'a>(
             .on_press((callbacks.commit)(sha.clone()));
             header = header.push(tooltip(
                 sha_button,
-                container(text("Show the full commit message").size(12))
+                container(text(tr!("Show the full commit message")).size(12))
                     .padding([4, 8])
                     .style(ui::tooltip_box),
                 tooltip::Position::Bottom,
@@ -253,9 +273,9 @@ pub fn card_view<'a, M: Clone + 'a>(
         }
         (kind, _) => {
             let label = match kind {
-                CardKind::Staged => "Staged",
-                CardKind::Unstaged => "Unstaged",
-                _ => "Commit unknown",
+                CardKind::Staged => tr!("Staged"),
+                CardKind::Unstaged => tr!("Unstaged"),
+                _ => tr!("Commit unknown"),
             };
             header = header.push(text(label).size(12).font(ui::bold()).wrapping(text::Wrapping::None));
         }
@@ -296,14 +316,18 @@ pub fn card_view<'a, M: Clone + 'a>(
     if !card.why.is_empty() {
         match card.source {
             Some(ExplanationSource::Inferred) => {
-                let by = if card.inferred_by.is_empty() { "a model" } else { card.inferred_by.as_str() };
-                body = body.push(badge_line(format!("Inferred by {by}, not the author’s words")));
+                let line = if card.inferred_by.is_empty() {
+                    tr!("Inferred by a model, not the author’s words").to_string()
+                } else {
+                    tr!("Inferred by {model}, not the author’s words", model = card.inferred_by)
+                };
+                body = body.push(badge_line(line));
             }
             Some(source) => {
                 let label = match source {
-                    ExplanationSource::Commit => "from the commit",
-                    ExplanationSource::Note => "from a note",
-                    ExplanationSource::Inferred => "inferred",
+                    ExplanationSource::Commit => tr!("from the commit"),
+                    ExplanationSource::Note => tr!("from a note"),
+                    ExplanationSource::Inferred => tr!("inferred"),
                 };
                 body = body.push(text(label).size(11).style(dim));
             }
@@ -316,10 +340,14 @@ pub fn card_view<'a, M: Clone + 'a>(
     }
 
     if !card.change_what.is_empty() || !card.change_why.is_empty() {
-        let model = if card.change_model.is_empty() { "a model" } else { card.change_model.as_str() };
+        let line = if card.change_model.is_empty() {
+            tr!("This change · inferred by a model").to_string()
+        } else {
+            tr!("This change · inferred by {model}", model = card.change_model)
+        };
         let mut change = column![
             ui::separator(false),
-            badge_line(format!("This change · inferred by {model}")),
+            badge_line(line),
         ]
         .spacing(3);
         if !card.change_what.is_empty() {
@@ -348,8 +376,8 @@ pub fn card_view<'a, M: Clone + 'a>(
     let busy = states.busy.contains(key);
     if let Some(action) = card.explain {
         let label = match action {
-            ExplainAction::Commit | ExplainAction::Uncommitted => "Explain with Claude",
-            ExplainAction::Changes => "Explain changes",
+            ExplainAction::Commit | ExplainAction::Uncommitted => tr!("Explain with Claude"),
+            ExplainAction::Changes => tr!("Explain changes"),
         };
         let mut explain = row![
             button(text(label).size(12))
@@ -360,7 +388,7 @@ pub fn card_view<'a, M: Clone + 'a>(
         .spacing(6)
         .align_y(iced::Center);
         if busy {
-            explain = explain.push(text("Explaining…").size(12).style(dim));
+            explain = explain.push(text(tr!("Explaining…")).size(12).style(dim));
         }
         body = body.push(explain);
     }
@@ -380,7 +408,7 @@ pub fn card_view<'a, M: Clone + 'a>(
     }
     for build in &card.builds {
         body = body.push(
-            button(text(format!("Build {}", build.strip_suffix(".md").unwrap_or(build))).size(12))
+            button(text(tr!("Build {name}", name = build.strip_suffix(".md").unwrap_or(build))).size(12))
                 .padding(0)
                 .style(link_button)
                 .on_press((callbacks.build)(build.clone())),
@@ -434,7 +462,7 @@ fn justification<'a, M: Clone + 'a>(
     on_expand: fn(String) -> M,
 ) -> Element<'a, M> {
     column![
-        text("Justification").size(11).style(ui::dim_text),
+        text(tr!("Justification")).size(11).style(ui::dim_text),
         long_text(reflow(body), key, states, on_expand, false),
     ]
     .spacing(1)

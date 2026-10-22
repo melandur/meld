@@ -6,81 +6,96 @@ use clap::Parser;
 
 use crate::comparison::{Comparison, PrSpec};
 
-const USAGE_EPILOG: &str = "Meld is a file and directory comparison tool.\n\n\
-    Usage:\n  meld                              Start with an empty window\n  \
-    meld <file|folder>                Start a version control comparison\n  \
-    meld <file> <file> [<file>]       Start a 2- or 3-way file comparison\n  \
-    meld <folder> <folder> [<folder>] Start a 2- or 3-way folder comparison\n  \
-    meld --git [<path>]               Compare two revisions of a Git repository\n  \
-    meld --git --pr <number> [<path>] Review a pull or merge request\n\n\
-    For file comparisons, the special argument @blank may be used instead of\n\
-    a <file> argument to create a blank pane.";
+/// The text after the options in `--help` (`meldapp.py`'s usage).
+fn usage_epilog() -> String {
+    let (file, folder) = (tr!("file"), tr!("folder"));
+    let rows = [
+        ("meld".to_string(), tr!("Start with an empty window")),
+        (format!("meld <{file}|{folder}>"), tr!("Start a version control comparison")),
+        (format!("meld <{file}> <{file}> [<{file}>]"), tr!("Start a 2- or 3-way file comparison")),
+        (format!("meld <{folder}> <{folder}> [<{folder}>]"), tr!("Start a 2- or 3-way folder comparison")),
+        ("meld --git [<path>]".to_string(), tr!("Compare two revisions of a Git repository")),
+        ("meld --git --pr <number> [<path>]".to_string(), tr!("Review a pull or merge request")),
+    ];
+    let width = rows.iter().map(|(u, _)| u.chars().count()).max().unwrap_or(0);
+    let mut out = format!("{}\n\n{}\n", tr!("Meld is a file and directory comparison tool."), tr!("Usage:"));
+    for (usage, what) in rows {
+        out.push_str(&format!("  {usage:width$} {what}\n"));
+    }
+    out.push('\n');
+    out.push_str(tr!(
+        "\n\nFor file comparisons, the special argument @blank may be used instead of\na <file> argument to create a blank pane."
+    ).trim_start_matches('\n'));
+    out
+}
 
 #[derive(Debug, Parser)]
-#[command(name = "meld", version, about = "Visual diff and merge tool", after_help = USAGE_EPILOG)]
+#[command(name = "meld", version, about = tr!("Visual diff and merge tool"), after_help = usage_epilog())]
 pub struct Args {
-    /// Set label to use instead of file name
-    #[arg(short = 'L', long = "label", action = clap::ArgAction::Append)]
+    #[arg(short = 'L', long = "label", action = clap::ArgAction::Append, help = tr!("Set label to use instead of file name"))]
     pub label: Vec<String>,
 
-    /// Open a new tab in an already running instance
-    #[arg(short = 'n', long = "newtab")]
+    #[arg(short = 'n', long = "newtab", help = tr!("Open a new tab in an already running instance"))]
     pub newtab: bool,
 
-    /// Automatically compare all differing files on startup
-    #[arg(short = 'a', long = "auto-compare")]
+    #[arg(short = 'a', long = "auto-compare", help = tr!("Automatically compare all differing files on startup"))]
     pub auto_compare: bool,
 
-    /// Ignored for compatibility
-    #[arg(short = 'u', long = "unified")]
+    #[arg(short = 'u', long = "unified", help = tr!("Ignored for compatibility"))]
     pub unified: bool,
 
-    /// Set the target file for saving a merge result
-    #[arg(short = 'o', long = "output", value_name = "FILE")]
+    #[arg(short = 'o', long = "output", value_name = "FILE", help = tr!("Set the target file for saving a merge result"))]
     pub output: Option<PathBuf>,
 
-    /// Automatically merge files
-    #[arg(long = "auto-merge")]
+    #[arg(long = "auto-merge", help = tr!("Automatically merge files"))]
     pub auto_merge: bool,
 
-    /// Load a saved comparison from a Meld comparison file
-    #[arg(long = "comparison-file", value_name = "FILE")]
+    #[arg(long = "comparison-file", value_name = "FILE", help = tr!("Load a saved comparison from a Meld comparison file"))]
     pub comparison_file: Option<PathBuf>,
 
-    /// Create a diff tab for the supplied files or folders
-    #[arg(long = "diff", value_name = "PATH", num_args = 1..=3)]
+    #[arg(long = "diff", value_name = "PATH", num_args = 1..=3, help = tr!("Create a diff tab for the supplied files or folders"))]
     pub diff_help: Option<Vec<String>>,
 
     /// `--diff` groups, gathered by [`parse`] (clap cannot keep them apart).
     #[arg(skip)]
     pub diff: Vec<Vec<String>>,
 
-    /// Compare two revisions of the Git repository at the given path
-    /// (default: the current folder), with why each change was made
-    #[arg(long = "git")]
+    #[arg(
+        long = "git",
+        help = tr!("Compare two revisions of the Git repository at the given path (default: the current folder), with why each change was made")
+    )]
     pub git: bool,
 
-    /// With --git: the base revision; a branch, tag, SHA, "staged" or
-    /// "working-tree" (default: HEAD)
-    #[arg(long = "base", value_name = "REV")]
+    #[arg(
+        long = "base",
+        value_name = "REV",
+        help = tr!("With --git: the base revision; a branch, tag, SHA, “staged” or “working-tree” (default: HEAD)")
+    )]
     pub base: Option<String>,
 
-    /// With --git: the target revision; also "staged", "unstaged" or
-    /// "working-tree" (default: working-tree)
-    #[arg(long = "target", value_name = "REV")]
+    #[arg(
+        long = "target",
+        value_name = "REV",
+        help = tr!("With --git: the target revision; also “staged”, “unstaged” or “working-tree” (default: working-tree)")
+    )]
     pub target: Option<String>,
 
-    /// With --git: review pull request (GitHub) or merge request (GitLab)
-    /// NUMBER, comparing its merge base with its head
-    #[arg(long = "pr", value_name = "NUMBER", value_parser = parse_pr_number)]
+    #[arg(
+        long = "pr",
+        value_name = "NUMBER",
+        value_parser = parse_pr_number,
+        help = tr!("With --git: review pull request (GitHub) or merge request (GitLab) NUMBER, comparing its merge base with its head")
+    )]
     pub pr: Option<u64>,
 
-    /// With --pr: the git remote whose forge has it (default: the remote
-    /// chosen before, else the first with pull requests)
-    #[arg(long = "remote", value_name = "NAME")]
+    #[arg(
+        long = "remote",
+        value_name = "NAME",
+        help = tr!("With --pr: the git remote whose forge has it (default: the remote chosen before, else the first with pull requests)")
+    )]
     pub remote: Option<String>,
 
-    /// Files or folders to compare
+    #[arg(help = tr!("Files or folders to compare"))]
     pub paths: Vec<String>,
 }
 
@@ -91,7 +106,7 @@ fn parse_pr_number(text: &str) -> Result<u64, String> {
         .parse::<u64>()
         .ok()
         .filter(|n| *n > 0)
-        .ok_or_else(|| format!("“{text}” is not a pull request number"))
+        .ok_or_else(|| tr!("“{text}” is not a pull request number", text = text))
 }
 
 /// Parses a command line (without the program name). `--diff` takes every
@@ -113,7 +128,7 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, clap::Error
             use clap::CommandFactory;
             return Err(Args::command().error(
                 clap::error::ErrorKind::WrongNumberOfValues,
-                "wrong number of arguments supplied to --diff",
+                tr!("wrong number of arguments supplied to --diff"),
             ));
         }
         groups.push(group);
@@ -140,16 +155,13 @@ pub fn launch_from_args(args: Args, cwd: &Path) -> Result<Launch, String> {
     };
 
     if args.paths.len() > 3 {
-        return Err(format!(
-            "too many arguments (wanted 0-3, got {})",
-            args.paths.len()
-        ));
+        return Err(tr!("too many arguments (wanted 0-3, got {})", args.paths.len()));
     }
     if args.auto_merge && args.paths.len() < 3 {
-        return Err("can’t auto-merge less than 3 files".into());
+        return Err(tr!("can’t auto-merge less than 3 files").into());
     }
     if args.auto_merge && args.paths.iter().any(|p| resolve(cwd, p).is_dir()) {
-        return Err("can’t auto-merge directories".into());
+        return Err(tr!("can’t auto-merge directories").into());
     }
 
     let comparison_file = args.comparison_file.clone().or_else(|| {
@@ -163,14 +175,14 @@ pub fn launch_from_args(args: Args, cwd: &Path) -> Result<Launch, String> {
     }
 
     if args.remote.is_some() && args.pr.is_none() {
-        return Err("--remote needs --pr".into());
+        return Err(tr!("--remote needs --pr").into());
     }
     if args.git || args.base.is_some() || args.target.is_some() || args.pr.is_some() {
         if args.paths.len() > 1 {
-            return Err("--git takes at most one path".into());
+            return Err(tr!("--git takes at most one path").into());
         }
         if args.pr.is_some() && (args.base.is_some() || args.target.is_some()) {
-            return Err("--pr compares the pull request’s own base and head; leave out --base and --target".into());
+            return Err(tr!("--pr compares the pull request’s own base and head; leave out --base and --target").into());
         }
         let location = match args.paths.first() {
             Some(p) => resolve(cwd, p),
