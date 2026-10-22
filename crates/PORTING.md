@@ -4,6 +4,14 @@ Meld is being rewritten in Rust with an [iced](https://iced.rs) 0.14 front end.
 The Python sources under `meld/` stay in the tree as the reference until the
 Rust version reaches parity; behaviour, defaults and file formats follow them.
 
+## Running
+
+    mise exec rust@1.98.1 -- cargo run -p meld --release -- [meld arguments]
+
+for example `-- file1 file2`, `-- dir1 dir2 dir3`, `-- .` (version control)
+or `-- --git --base main`. `cargo run -p meld -- --help` lists the options,
+which match the Python `meld` launcher.
+
 ## Toolchain
 
     mise exec rust@1.98.1 -- cargo build

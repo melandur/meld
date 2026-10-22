@@ -693,6 +693,19 @@ impl DirDiff {
             .collect()
     }
 
+    /// Another tab saved `path`: refresh the rows showing it and their
+    /// folders (`on_file_changed()`).
+    pub fn file_changed(&mut self, path: &std::path::Path) -> Task<Message> {
+        let ids: Vec<NodeId> = self
+            .tree
+            .all_rows()
+            .into_iter()
+            .filter(|&id| self.tree.row(id).is_some_and(|row| row.paths.iter().any(|p| p == path)))
+            .flat_map(|id| self.tree.with_ancestors(id))
+            .collect();
+        self.refresh_rows(ids)
+    }
+
     /// Re-reads the state of rows (`_update_item_state()`).
     fn refresh_rows(&self, ids: Vec<NodeId>) -> Task<Message> {
         let rows: Vec<(NodeId, Vec<PathBuf>)> = ids

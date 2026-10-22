@@ -357,6 +357,16 @@ impl VcView {
         }
     }
 
+    /// Another tab saved `path`: refresh the tree if it is ours
+    /// (`on_file_changed()`).
+    pub fn file_changed(&mut self, path: &std::path::Path) -> Task<Message> {
+        if self.vc.is_some() && path.starts_with(&self.location) {
+            self.scan(true)
+        } else {
+            Task::none()
+        }
+    }
+
     /// Rescans the tree, first refreshing the backend's cached state when
     /// `refresh`.
     fn scan(&mut self, refresh: bool) -> Task<Message> {

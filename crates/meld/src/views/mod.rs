@@ -45,6 +45,8 @@ pub enum Event {
     SettingsChanged,
     /// Record a comparison in the recent comparisons list.
     Recent(Comparison),
+    /// A file was saved; other tabs showing it refresh.
+    FileChanged(std::path::PathBuf),
 }
 
 pub enum Tab {
@@ -239,6 +241,15 @@ impl Tab {
             Tab::Vc(t) => map_items(t.menu_items(shared), Message::Vc),
             Tab::Git(t) => map_items(t.menu_items(shared), Message::Git),
             Tab::Image(t) => map_items(t.menu_items(shared), Message::Image),
+        }
+    }
+
+    /// Another tab changed `path` on disk.
+    pub fn file_changed(&mut self, path: &std::path::Path) -> Task<Message> {
+        match self {
+            Tab::Folder(t) => t.file_changed(path).map(Message::Folder),
+            Tab::Vc(t) => t.file_changed(path).map(Message::Vc),
+            _ => Task::none(),
         }
     }
 

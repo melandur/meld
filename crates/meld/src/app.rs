@@ -320,6 +320,12 @@ impl Meld {
                     tasks.push(self.settings_changed());
                 }
                 Event::Recent(comparison) => self.shared.add_recent(&comparison),
+                Event::FileChanged(path) => {
+                    for entry in self.tabs.iter_mut().filter(|t| t.id != id) {
+                        let other = entry.id;
+                        tasks.push(entry.tab.file_changed(&path).map(move |m| Message::Tab(other, m)));
+                    }
+                }
             }
         }
         Task::batch(tasks)
