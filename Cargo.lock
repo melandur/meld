@@ -2350,6 +2350,7 @@ dependencies = [
  "rfd",
  "tempfile",
  "tokio",
+ "zbus",
 ]
 
 [[package]]

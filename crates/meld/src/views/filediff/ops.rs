@@ -1391,17 +1391,13 @@ impl FileDiff {
                 }
             }
             Act::OpenFile(pane) => {
-                let mut dialog = rfd::AsyncFileDialog::new().set_title(match pane {
+                let title = match pane {
                     0 => "Open Left File",
                     1 if self.panes.len() == 3 => "Open Middle File",
                     _ => "Open Right File",
-                });
-                if let Some(dir) = self.panes[pane].file.path.as_ref().and_then(|p| p.parent()) {
-                    dialog = dialog.set_directory(dir);
-                }
-                return Task::perform(dialog.pick_file(), move |h| {
-                    Message::OpenChosen(pane, h.map(|h| h.path().to_path_buf()))
-                });
+                };
+                let dir = self.panes[pane].file.path.as_ref().and_then(|p| p.parent()).map(std::path::PathBuf::from);
+                return crate::ui::chooser::pick_file(title, dir).map(move |path| Message::OpenChosen(pane, path));
             }
             Act::Display(pane) => self.dialog = Some(Dialog::Display { pane }),
             Act::ToggleOverwrite => self.overwrite = !self.overwrite,
@@ -1549,10 +1545,10 @@ impl FileDiff {
                 }
             }
             DialogMessage::PatchSave => {
-                let dialog = rfd::AsyncFileDialog::new().set_title("Save Patch");
-                return Task::perform(dialog.save_file(), |h| {
-                    Message::PatchSaveChosen(h.map(|h| h.path().to_path_buf()))
-                });
+                // Next to the compared files rather than in the chooser's
+                // working folder.
+                let dir = self.panes.iter().find_map(|p| p.file.target()?.parent().map(std::path::PathBuf::from));
+                return crate::ui::chooser::save_file("Save Patch", dir, None).map(Message::PatchSaveChosen);
             }
             DialogMessage::Filter(text) => {
                 if let Some(Dialog::Encoding { filter, .. } | Dialog::Language { filter, .. }) = &mut self.dialog {

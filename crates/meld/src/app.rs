@@ -41,6 +41,8 @@ pub struct Meld {
     next_id: TabId,
     open_menu: Option<OpenMenu>,
     dialog: Option<Dialog>,
+    /// The built-in file chooser, when no system one is available.
+    chooser: Option<ui::chooser::Dialog>,
     notice: Option<String>,
     fullscreen: bool,
     window: Option<window::Id>,
@@ -82,6 +84,8 @@ pub enum Message {
     DismissNotice,
     /// A menu item was chosen: close the menu, then act.
     MenuPick(Box<Message>),
+    ChooserRequest(ui::chooser::Request),
+    Chooser(ui::chooser::Message),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,6 +105,7 @@ impl Meld {
             next_id: 1,
             open_menu: None,
             dialog: None,
+            chooser: None,
             notice: None,
             fullscreen: false,
             window: None,
@@ -307,6 +312,25 @@ impl Meld {
                 self.notice = None;
                 Task::none()
             }
+            Message::ChooserRequest(request) => {
+                if let Some(old) = self.chooser.take() {
+                    old.cancel();
+                }
+                self.open_menu = None;
+                let (chooser, task) = ui::chooser::Dialog::new(request);
+                self.chooser = Some(chooser);
+                task.map(Message::Chooser)
+            }
+            Message::Chooser(message) => {
+                let Some(chooser) = &mut self.chooser else {
+                    return Task::none();
+                };
+                let (closed, task) = chooser.update(message);
+                if closed {
+                    self.chooser = None;
+                }
+                task.map(Message::Chooser)
+            }
         }
     }
 
@@ -406,6 +430,10 @@ impl Meld {
     }
 
     fn command(&mut self, command: Command) -> Task<Message> {
+        // The file chooser handles its own keys (`chooser::keys`).
+        if self.chooser.is_some() {
+            return Task::none();
+        }
         // Escape closes menus and dialogs before it reaches a tab.
         if command == Command::Stop && (self.open_menu.is_some() || self.dialog.is_some()) {
             self.open_menu = None;
@@ -492,7 +520,11 @@ impl Meld {
             window::close_requests().map(|_| Message::CloseRequested),
             window::resize_events().map(|(_, size)| Message::WindowResized(size)),
             instance::listen().map(Message::Remote),
+            ui::chooser::requests().map(Message::ChooserRequest),
         ];
+        if self.chooser.is_some() {
+            subs.push(ui::chooser::keys().map(Message::Chooser));
+        }
         for entry in &self.tabs {
             let id = entry.id;
             subs.push(entry.tab.subscription().with(id).map(|(id, m)| Message::Tab(id, m)));
@@ -532,7 +564,7 @@ impl Meld {
             base = menu::overlay(base, items, anchor, Message::CloseMenu);
         }
 
-        match &self.dialog {
+        let page = match &self.dialog {
             None => base,
             Some(Dialog::Preferences(prefs)) => ui::modal::modal(
                 base,
@@ -546,6 +578,14 @@ impl Meld {
                 dialogs::confirm_quit(unsaved, Message::CloseDialog, Message::QuitAnyway),
                 Message::CloseDialog,
             ),
+        };
+        match &self.chooser {
+            Some(chooser) => ui::modal::modal(
+                page,
+                chooser.view().map(Message::Chooser),
+                Message::Chooser(ui::chooser::Message::Ignore),
+            ),
+            None => page,
         }
     }
 

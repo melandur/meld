@@ -1,6 +1,7 @@
 //! Shared look and small building blocks: header-bar buttons, menus,
 //! modal dialogs and the palette used by every view.
 
+pub mod chooser;
 pub mod menu;
 pub mod modal;
 pub mod pathlabel;

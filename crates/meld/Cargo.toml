@@ -21,6 +21,7 @@ iced.workspace = true
 clap.workspace = true
 tokio.workspace = true
 rfd.workspace = true
+zbus.workspace = true
 open.workspace = true
 log.workspace = true
 env_logger.workspace = true

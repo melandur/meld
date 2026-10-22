@@ -1547,15 +1547,11 @@ impl GitCompare {
                 task
             }
             Message::ChooseRepository => {
-                let mut dialog = rfd::AsyncFileDialog::new().set_title("Choose a Git Repository or Worktree");
-                if let Some(info) = &self.info {
-                    dialog = dialog.set_directory(&info.root);
-                } else if self.location.is_dir() {
-                    dialog = dialog.set_directory(&self.location);
-                }
-                Task::perform(dialog.pick_folder(), |h| {
-                    Message::RepositoryChosen(h.map(|h| h.path().to_path_buf()))
-                })
+                // Starts next to the current repository, so that a sibling
+                // repository or worktree is one click away.
+                let current = self.info.as_ref().map_or(&self.location, |info| &info.root);
+                let start = current.parent().map(std::path::Path::to_path_buf);
+                ui::chooser::pick_folder("Choose a Git Repository or Worktree", start).map(Message::RepositoryChosen)
             }
             Message::RepositoryChosen(Some(path)) => {
                 self.jobs.cancel_all();

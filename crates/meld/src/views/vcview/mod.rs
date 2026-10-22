@@ -847,12 +847,9 @@ impl VcView {
                 self.update_sensitivity();
             }
             Message::ChooseLocation => {
-                let dialog = rfd::AsyncFileDialog::new()
-                    .set_title("Select Folder")
-                    .set_directory(&self.location);
-                return Task::perform(dialog.pick_folder(), |h| {
-                    Message::LocationChosen(h.map(|h| h.path().to_path_buf()))
-                });
+                // Starts next to the current folder, like `set_file()` did.
+                let start = self.location.parent().map(std::path::Path::to_path_buf);
+                return ui::chooser::pick_folder("Select Folder", start).map(Message::LocationChosen);
             }
             Message::LocationChosen(path) => {
                 if let Some(path) = path {

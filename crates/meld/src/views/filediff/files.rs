@@ -381,16 +381,9 @@ impl FileDiff {
                 1 if self.panes.len() == 3 => "Save Middle Pane As",
                 _ => "Save Right Pane As",
             };
-            let mut dialog = rfd::AsyncFileDialog::new().set_title(title);
-            if let Some(dir) = p.file.target().and_then(|t| t.parent()) {
-                dialog = dialog.set_directory(dir);
-            }
-            if let Some(name) = p.file.target().and_then(|t| t.file_name()) {
-                dialog = dialog.set_file_name(name.to_string_lossy());
-            }
-            return Task::perform(dialog.save_file(), move |h| {
-                Message::SaveAsChosen(pane, h.map(|h| h.path().to_path_buf()))
-            });
+            let dir = p.file.target().and_then(|t| t.parent()).map(PathBuf::from);
+            let name = p.file.target().and_then(|t| t.file_name()).map(|n| n.to_string_lossy().into_owned());
+            return crate::ui::chooser::save_file(title, dir, name).map(move |path| Message::SaveAsChosen(pane, path));
         }
         self.do_save(pane, force)
     }

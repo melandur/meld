@@ -51,6 +51,9 @@ on background tasks.
 - Errors: `thiserror` enums per crate. No `unwrap()` on user data.
 - Every crate's `lib.rs` starts with a doc comment listing its public API and
   which Python modules it replaces.
+- File and folder choosers go through `ui::chooser` (`pick_file`,
+  `pick_folder`, `save_file`), never rfd directly: it falls back from the
+  portal to zenity/kdialog and then to a dialog in the window.
 - Settings live in `$XDG_CONFIG_HOME/meld/settings.toml` (keys from the
   gschema, kebab-case, same defaults); recent comparisons in
   `$XDG_DATA_HOME/meld/recent.toml`.

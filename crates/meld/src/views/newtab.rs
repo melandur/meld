@@ -147,24 +147,13 @@ impl NewTab {
                     return Task::none();
                 };
                 let title = kind.chooser_labels()[pane];
-                let mut dialog = rfd::AsyncFileDialog::new().set_title(title);
                 let start = self
                     .chosen(pane)
                     .and_then(|p| p.parent().map(PathBuf::from))
                     .or_else(|| self.last_folder.clone())
                     .or_else(dirs_home);
-                if let Some(start) = start {
-                    dialog = dialog.set_directory(start);
-                }
-                return if kind.picks_folders() {
-                    Task::perform(dialog.pick_folder(), move |h| {
-                        Message::Chosen(pane, h.map(|h| h.path().to_path_buf()))
-                    })
-                } else {
-                    Task::perform(dialog.pick_file(), move |h| {
-                        Message::Chosen(pane, h.map(|h| h.path().to_path_buf()))
-                    })
-                };
+                let pick = if kind.picks_folders() { ui::chooser::pick_folder } else { ui::chooser::pick_file };
+                return pick(title, start).map(move |path| Message::Chosen(pane, path));
             }
             Message::Chosen(pane, path) => {
                 let Some(path) = path else {

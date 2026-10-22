@@ -633,6 +633,7 @@ pub fn write_atomically(path: &Path, data: &[u8], backup: bool) -> io::Result<()
 }
 
 fn replace_via_temp(target: &Path, data: &[u8], existing: Option<&fs::Metadata>) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
     let dir = match target.parent() {
         Some(p) if !p.as_os_str().is_empty() => p,
         _ => Path::new("."),
@@ -641,9 +642,12 @@ fn replace_via_temp(target: &Path, data: &[u8], existing: Option<&fs::Metadata>)
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
+    // A new file gets the usual 0666 less the umask, not the temporary
+    // file's private 0600 (`open` applies the umask to this mode).
     let mut temp = tempfile::Builder::new()
         .prefix(&format!(".{name}."))
         .suffix(".tmp")
+        .permissions(fs::Permissions::from_mode(0o666))
         .tempfile_in(dir)?;
     temp.write_all(data)?;
     if let Some(meta) = existing {
@@ -814,6 +818,22 @@ mod tests {
         assert_eq!(
             fs::metadata(&real).unwrap().permissions().mode() & 0o777,
             0o640
+        );
+    }
+
+    #[test]
+    fn save_gives_new_files_the_usual_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        // `fs::write` creates with 0666 less the umask.
+        let reference = dir.path().join("reference.txt");
+        fs::write(&reference, b"x").unwrap();
+        let new = dir.path().join("new.txt");
+        write_atomically(&new, b"new", false).unwrap();
+        assert_eq!(fs::read(&new).unwrap(), b"new");
+        assert_eq!(
+            fs::metadata(&new).unwrap().permissions().mode() & 0o777,
+            fs::metadata(&reference).unwrap().permissions().mode() & 0o777
         );
     }
 

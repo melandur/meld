@@ -1262,20 +1262,15 @@ impl DirDiff {
                 }
             }
             Message::Browse(pane) => {
-                let mut dialog = rfd::AsyncFileDialog::new().set_title("Select Folder");
+                // Starts next to the current folder, like `set_file()` did.
                 let start = self
                     .roots
                     .get(pane)
                     .filter(|r| !r.as_os_str().is_empty())
-                    .cloned()
+                    .and_then(|r| r.parent().map(Path::to_path_buf))
                     .or_else(|| self.last_folder.clone())
                     .or_else(|| std::env::var_os("HOME").map(PathBuf::from));
-                if let Some(start) = start {
-                    dialog = dialog.set_directory(start);
-                }
-                return Task::perform(dialog.pick_folder(), move |handle| {
-                    Message::Browsed(pane, handle.map(|h| h.path().to_path_buf()))
-                });
+                return ui::chooser::pick_folder("Select Folder", start).map(move |path| Message::Browsed(pane, path));
             }
             Message::Browsed(pane, path) => {
                 let Some(path) = path else {
