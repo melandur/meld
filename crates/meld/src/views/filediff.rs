@@ -77,6 +77,7 @@ pub struct Options {
     pub labels: Vec<String>,
     pub merge_output: Option<std::path::PathBuf>,
     pub auto_merge: bool,
+    pub extras: crate::comparison::FileExtras,
 }
 
 impl FileDiff {

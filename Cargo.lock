@@ -2335,6 +2335,7 @@ dependencies = [
  "iced",
  "log",
  "meld-config",
+ "meld-vc",
  "open",
  "rfd",
  "tempfile",

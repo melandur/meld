@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Comparison {
     /// Two or three files; `None` is a blank pane.
     Files {
@@ -11,6 +11,7 @@ pub enum Comparison {
         labels: Vec<String>,
         merge_output: Option<PathBuf>,
         auto_merge: bool,
+        extras: FileExtras,
     },
     /// Two or three folders.
     Folders {
@@ -35,6 +36,20 @@ pub enum Comparison {
     Images { paths: Vec<PathBuf> },
     /// A saved `.meldcmp` comparison file.
     SavedFile(PathBuf),
+}
+
+/// Extra details of file comparisons opened from a version control view.
+#[derive(Debug, Clone, Default)]
+pub struct FileExtras {
+    /// Tab label instead of the file names.
+    pub tab_label: Option<String>,
+    /// Offer to mark the merged file resolved after saving it.
+    pub prompt_resolve: bool,
+    /// Old/new roles of the two panes when they differ from left/right.
+    pub diff_sides: Option<[meld_config::DiffSide; 2]>,
+    /// Temporary files (base revisions and the like) to delete when the
+    /// comparison closes.
+    pub temp_files: Vec<PathBuf>,
 }
 
 impl Comparison {
@@ -88,6 +103,7 @@ impl Comparison {
             labels: Vec::new(),
             merge_output: None,
             auto_merge: false,
+            extras: FileExtras::default(),
         }
     }
 

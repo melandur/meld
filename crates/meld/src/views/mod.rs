@@ -98,6 +98,7 @@ impl Tab {
                 labels,
                 merge_output,
                 auto_merge,
+                extras,
             } => {
                 let (tab, task) = filediff::FileDiff::new(
                     filediff::Options {
@@ -105,6 +106,7 @@ impl Tab {
                         labels,
                         merge_output,
                         auto_merge,
+                        extras,
                         ..filediff::Options::default()
                     },
                     shared,
