@@ -17,21 +17,23 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use iced::widget::{button, column, container, mouse_area, row, scrollable, space, text, text_editor, tooltip};
-use iced::{Background, Border, Color, Element, Length, Theme, Vector};
 use crate::forge::relative_date;
+use iced::widget::{
+    button, column, container, mouse_area, row, scrollable, space, text, text_editor, tooltip,
+};
+use iced::{Background, Border, Color, Element, Length, Theme, Vector};
 use meld_ailens::picker::{EntryKind, parse_iso_date};
 use meld_ailens::{PickerEntry, Revision, Side};
 use meld_forge::fetch::pr_ref;
 use meld_forge::{
-    Comment, ConversationItem, Discussion, DraftComment, FetchedPullRequest, Forge, ForgeKind, ForgeRemote,
-    PullRequest, PullRequestDetails, ReviewEvent, ReviewSubmission, ReviewThread,
+    Comment, ConversationItem, Discussion, DraftComment, FetchedPullRequest, Forge, ForgeKind,
+    ForgeRemote, PullRequest, PullRequestDetails, ReviewEvent, ReviewSubmission, ReviewThread,
 };
 
 use super::diffhost::PaneGeometry;
-use crate::ui::ellipsis::{Mode, ellipsized};
 use super::whycolumn::{local_date, shorten};
 use crate::ui;
+use crate::ui::ellipsis::{Mode, ellipsized};
 
 /// Comments longer than this are cut short until expanded.
 const LONG_COMMENT: usize = 300;
@@ -64,7 +66,9 @@ pub enum ComposerKind {
         line: u32,
         edit: Option<usize>,
     },
-    Reply { thread: String },
+    Reply {
+        thread: String,
+    },
     Review,
 }
 
@@ -202,9 +206,19 @@ impl PrReview {
     }
 
     /// Opens the composer for a line comment.
-    pub fn comment_on(&mut self, path: String, original_path: Option<String>, side: Side, line: u32) {
+    pub fn comment_on(
+        &mut self,
+        path: String,
+        original_path: Option<String>,
+        side: Side,
+        line: u32,
+    ) {
         // Editing the pending comment on that line, if there is one
-        if let Some(index) = self.drafts.iter().position(|d| d.path == path && d.side == side && d.line == line) {
+        if let Some(index) = self
+            .drafts
+            .iter()
+            .position(|d| d.path == path && d.side == side && d.line == line)
+        {
             self.edit_draft(index);
             return;
         }
@@ -353,8 +367,15 @@ impl PrReview {
                     composer.problem = Some(tr!("Write the reply first.").into());
                     return Action::None;
                 }
-                let Some(thread) = self.discussion.threads.iter().find(|t| t.id == thread).cloned() else {
-                    composer.problem = Some(tr!("That thread is gone; reload the comments.").into());
+                let Some(thread) = self
+                    .discussion
+                    .threads
+                    .iter()
+                    .find(|t| t.id == thread)
+                    .cloned()
+                else {
+                    composer.problem =
+                        Some(tr!("That thread is gone; reload the comments.").into());
                     return Action::None;
                 };
                 self.confirm = Some(Post::Reply { thread, body });
@@ -405,12 +426,18 @@ impl PrReview {
                 self.discussion = discussion;
                 self.discussion_status = None;
             }
-            Err(err) => self.discussion_status = Some(tr!("Couldn’t load the comments: {err}", err = err)),
+            Err(err) => {
+                self.discussion_status = Some(tr!("Couldn’t load the comments: {err}", err = err))
+            }
         }
     }
 
     /// Threads and pending comments on `path`, in the order they appear.
-    fn on_file<'a>(&'a self, path: &'a str, original: Option<&'a str>) -> impl Iterator<Item = &'a ReviewThread> + 'a {
+    fn on_file<'a>(
+        &'a self,
+        path: &'a str,
+        original: Option<&'a str>,
+    ) -> impl Iterator<Item = &'a ReviewThread> + 'a {
         self.discussion
             .threads
             .iter()
@@ -430,8 +457,14 @@ impl PrReview {
         let pr = &self.details.pr;
         let mut line = row![
             crate::forge::state_badge(pr),
-            text(self.reference()).size(14).style(ui::dim_text).wrapping(text::Wrapping::None),
-            ellipsized(pr.title.as_str(), Mode::End).size(14).font(ui::bold()).max_width(520.0),
+            text(self.reference())
+                .size(14)
+                .style(ui::dim_text)
+                .wrapping(text::Wrapping::None),
+            ellipsized(pr.title.as_str(), Mode::End)
+                .size(14)
+                .font(ui::bold())
+                .max_width(520.0),
         ]
         .spacing(8)
         .align_y(iced::Center);
@@ -450,9 +483,14 @@ impl PrReview {
         }
         let facts = facts.join(" · ");
         line = line.push(
-            container(ellipsized(facts, Mode::End).size(12).style(ui::dim_text).width(Length::Fill))
-                .width(Length::Fill)
-                .clip(true),
+            container(
+                ellipsized(facts, Mode::End)
+                    .size(12)
+                    .style(ui::dim_text)
+                    .width(Length::Fill),
+            )
+            .width(Length::Fill)
+            .clip(true),
         );
         for label in pr.labels.iter().take(4) {
             line = line.push(pill(label.clone()));
@@ -464,7 +502,12 @@ impl PrReview {
             if comments == 0 {
                 tr!("Description").to_string()
             } else {
-                trn!("Description · {} comment", "Description · {} comments", comments, comments)
+                trn!(
+                    "Description · {} comment",
+                    "Description · {} comments",
+                    comments,
+                    comments
+                )
             }
         );
         line = line
@@ -493,8 +536,16 @@ impl PrReview {
                     .on_press(Message::StartReview),
                 tr!("Comment, approve or request changes"),
             ))
-            .push(ui::tool_button("⟳", tr!("Reload the comments"), Some(Message::RefreshComments)))
-            .push(ui::tool_button("↗", tr!("Open in the browser"), Some(Message::OpenInBrowser)));
+            .push(ui::tool_button(
+                "⟳",
+                tr!("Reload the comments"),
+                Some(Message::RefreshComments),
+            ))
+            .push(ui::tool_button(
+                "↗",
+                tr!("Open in the browser"),
+                Some(Message::OpenInBrowser),
+            ));
         let mut strip = column![container(line).padding([4, 8])];
         if self.show_details {
             strip = strip.push(ui::separator(false)).push(self.details_panel());
@@ -502,7 +553,9 @@ impl PrReview {
         container(strip)
             .width(Length::Fill)
             .style(|theme: &Theme| container::Style {
-                background: Some(Background::Color(theme.extended_palette().background.weak.color)),
+                background: Some(Background::Color(
+                    theme.extended_palette().background.weak.color,
+                )),
                 ..container::Style::default()
             })
             .into()
@@ -513,7 +566,9 @@ impl PrReview {
         let body = self.details.body.trim();
         let mut panel = column![].spacing(10).width(Length::Fill);
         let mut created = Vec::new();
-        if let Some(date) = parse_iso_date(&self.details.pr.created_at).filter(|_| !self.details.pr.created_at.is_empty()) {
+        if let Some(date) = parse_iso_date(&self.details.pr.created_at)
+            .filter(|_| !self.details.pr.created_at.is_empty())
+        {
             created.push(tr!("opened {when}", when = relative_date(date, now)));
         }
         if let (Some(add), Some(del)) = (self.details.additions, self.details.deletions) {
@@ -528,20 +583,32 @@ impl PrReview {
         panel = panel.push(if body.is_empty() {
             Element::from(text(tr!("No description.")).size(13).style(ui::dim_text))
         } else {
-            text(body).size(13).wrapping(text::Wrapping::WordOrGlyph).into()
+            text(body)
+                .size(13)
+                .wrapping(text::Wrapping::WordOrGlyph)
+                .into()
         });
         panel = panel.push(ui::separator(false));
         panel = panel.push(text(tr!("Conversation")).size(13).font(ui::bold()));
         if let Some(status) = &self.discussion_status {
             panel = panel.push(text(status.as_str()).size(12).style(ui::dim_text));
         } else if self.discussion.conversation.is_empty() {
-            panel = panel.push(text(tr!("No comments outside the code.")).size(12).style(ui::dim_text));
+            panel = panel.push(
+                text(tr!("No comments outside the code."))
+                    .size(12)
+                    .style(ui::dim_text),
+            );
         }
         for item in &self.discussion.conversation {
             panel = panel.push(conversation_item(item, &self.expanded, now));
         }
         if !self.discussion.threads.is_empty() {
-            let files: HashSet<&str> = self.discussion.threads.iter().map(|t| t.path.as_str()).collect();
+            let files: HashSet<&str> = self
+                .discussion
+                .threads
+                .iter()
+                .map(|t| t.path.as_str())
+                .collect();
             panel = panel.push(
                 text(trn!(
                     "{threads} line comment threads on {} file, shown beside the code",
@@ -604,7 +671,10 @@ impl PrReview {
             header = header.push(space::horizontal());
         }
         if thread.outdated {
-            header = header.push(tip(pill(tr!("Outdated").into()), tr!("Made on an older version of this change")));
+            header = header.push(tip(
+                pill(tr!("Outdated").into()),
+                tr!("Made on an older version of this change"),
+            ));
         }
         if thread.resolved {
             header = header.push(pill(tr!("Resolved").into()));
@@ -614,7 +684,11 @@ impl PrReview {
         }
         body = body.push(header);
         let count = thread.comments.len();
-        let hidden = if expanded { 0 } else { count.saturating_sub(1 + SHOWN_REPLIES) };
+        let hidden = if expanded {
+            0
+        } else {
+            count.saturating_sub(1 + SHOWN_REPLIES)
+        };
         for (index, comment) in thread.comments.iter().enumerate() {
             if index > 0 && index <= hidden {
                 continue;
@@ -625,7 +699,11 @@ impl PrReview {
             } else if let Some(date) = date_label(&comment.created_at, now) {
                 body = body.push(date);
             }
-            body = body.push(comment_body(comment, &format!("{}:{}", thread.id, comment.id), &self.expanded));
+            body = body.push(comment_body(
+                comment,
+                &format!("{}:{}", thread.id, comment.id),
+                &self.expanded,
+            ));
             if index == 0 && hidden > 0 {
                 body = body.push(
                     button(text(trn!("{} more reply", "{} more replies", hidden, hidden)).size(12))
@@ -668,7 +746,11 @@ impl PrReview {
         let mut body = column![].spacing(10).width(600);
         let (title, save) = match &composer.kind {
             ComposerKind::Line {
-                path, side, line, edit, ..
+                path,
+                side,
+                line,
+                edit,
+                ..
             } => {
                 body = body.push(
                     text(match side {
@@ -686,13 +768,21 @@ impl PrReview {
                 );
                 (
                     tr!("Comment on {path}", path = path),
-                    if edit.is_some() { tr!("Save Comment") } else { tr!("Add to Review") },
+                    if edit.is_some() {
+                        tr!("Save Comment")
+                    } else {
+                        tr!("Add to Review")
+                    },
                 )
             }
             ComposerKind::Reply { thread } => {
                 if let Some(thread) = self.discussion.threads.iter().find(|t| t.id == *thread) {
                     if let Some(last) = thread.comments.last() {
-                        body = body.push(quote(format!("{}: {}", last.author, shorten(last.body.trim(), 400))));
+                        body = body.push(quote(format!(
+                            "{}: {}",
+                            last.author,
+                            shorten(last.body.trim(), 400)
+                        )));
                     }
                     (
                         tr!(
@@ -709,34 +799,56 @@ impl PrReview {
             ComposerKind::Review => {
                 let options = ReviewEvent::ALL
                     .iter()
-                    .filter(|e| **e != ReviewEvent::RequestChanges || self.kind().can_request_changes())
-                    .map(|e| (crate::i18n::gettext(e.label()).to_string(), Message::SetEvent(*e)))
+                    .filter(|e| {
+                        **e != ReviewEvent::RequestChanges || self.kind().can_request_changes()
+                    })
+                    .map(|e| {
+                        (
+                            crate::i18n::gettext(e.label()).to_string(),
+                            Message::SetEvent(*e),
+                        )
+                    })
                     .collect::<Vec<_>>();
                 let selected = ReviewEvent::ALL
                     .iter()
-                    .filter(|e| **e != ReviewEvent::RequestChanges || self.kind().can_request_changes())
+                    .filter(|e| {
+                        **e != ReviewEvent::RequestChanges || self.kind().can_request_changes()
+                    })
                     .position(|e| *e == composer.event);
                 body = body.push(crate::forge::chips(options, selected));
                 if self.drafts.is_empty() {
                     body = body.push(
-                        text(tr!("No line comments. Click a line and press Comment on Line to add some."))
-                            .size(12)
-                            .style(ui::dim_text),
+                        text(tr!(
+                            "No line comments. Click a line and press Comment on Line to add some."
+                        ))
+                        .size(12)
+                        .style(ui::dim_text),
                     );
                 } else {
                     let count = self.drafts.len();
-                    let mut list = column![text(trn!("{} line comment", "{} line comments", count, count)).size(12).font(ui::bold())]
-                        .spacing(2);
+                    let mut list = column![
+                        text(trn!("{} line comment", "{} line comments", count, count))
+                            .size(12)
+                            .font(ui::bold())
+                    ]
+                    .spacing(2);
                     for draft in &self.drafts {
                         list = list.push(
-                            text(format!("{} — {}", draft.location(), shorten(first_line(&draft.body), 80)))
-                                .size(12)
-                                .style(ui::dim_text),
+                            text(format!(
+                                "{} — {}",
+                                draft.location(),
+                                shorten(first_line(&draft.body), 80)
+                            ))
+                            .size(12)
+                            .style(ui::dim_text),
                         );
                     }
                     body = body.push(list);
                 }
-                (tr!("Review {reference}", reference = self.reference()), tr!("Post Review…"))
+                (
+                    tr!("Review {reference}", reference = self.reference()),
+                    tr!("Post Review…"),
+                )
             }
         };
         body = body.push(editor);
@@ -747,7 +859,10 @@ impl PrReview {
             title,
             body,
             vec![
-                button(text(tr!("Cancel"))).style(button::secondary).on_press(Message::CancelComposer).into(),
+                button(text(tr!("Cancel")))
+                    .style(button::secondary)
+                    .on_press(Message::CancelComposer)
+                    .into(),
                 button(text(save)).on_press(Message::Save).into(),
             ],
         )
@@ -783,7 +898,10 @@ impl PrReview {
                     );
                 }
             }
-            Post::Reply { thread, body: reply } => {
+            Post::Reply {
+                thread,
+                body: reply,
+            } => {
                 let path = thread.path.as_str();
                 let line = thread.anchor_line().unwrap_or(0);
                 items = items.push(
@@ -794,7 +912,11 @@ impl PrReview {
                             path = path,
                             line = line
                         ),
-                        None => tr!("A reply to the thread on {path} line {line}", path = path, line = line),
+                        None => tr!(
+                            "A reply to the thread on {path} line {line}",
+                            path = path,
+                            line = line
+                        ),
                     })
                     .size(14)
                     .font(ui::bold()),
@@ -804,7 +926,11 @@ impl PrReview {
         }
         body = body.push(container(scrollable(items)).max_height(360));
         if self.posting {
-            body = body.push(text(format!("⏳ {}", tr!("Posting…"))).size(13).style(ui::dim_text));
+            body = body.push(
+                text(format!("⏳ {}", tr!("Posting…")))
+                    .size(13)
+                    .style(ui::dim_text),
+            );
         }
         let post_label = match post {
             Post::Review(review) => match review.event {
@@ -834,11 +960,14 @@ impl PrReview {
 pub fn picker_entry(remote: &ForgeRemote, pr: &PullRequest, now: f64) -> PickerEntry {
     let reference = remote.kind.reference(pr.number);
     let label = format!("{reference} {}", pr.title);
-    let description = [crate::i18n::pgettext("pull request state", pr.state_label()).to_string(), crate::forge::pr_description(pr, now)]
-        .into_iter()
-        .filter(|p| !p.is_empty())
-        .collect::<Vec<_>>()
-        .join(" · ");
+    let description = [
+        crate::i18n::pgettext("pull request state", pr.state_label()).to_string(),
+        crate::forge::pr_description(pr, now),
+    ]
+    .into_iter()
+    .filter(|p| !p.is_empty())
+    .collect::<Vec<_>>()
+    .join(" · ");
     let search_text = format!("{} {label} {description}", pr.search_text()).to_lowercase();
     PickerEntry {
         kind: EntryKind::PullRequest,
@@ -868,13 +997,19 @@ fn editor_text(editor: &text_editor::Content) -> String {
 }
 
 fn first_line(text: &str) -> &str {
-    text.lines().find(|l| !l.trim().is_empty()).unwrap_or_default().trim()
+    text.lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or_default()
+        .trim()
 }
 
 fn tip<'a>(content: impl Into<Element<'a, Message>>, tip: &'a str) -> Element<'a, Message> {
     tooltip(
         content,
-        container(text(tip).size(12)).max_width(360).padding([4, 8]).style(ui::tooltip_box),
+        container(text(tip).size(12))
+            .max_width(360)
+            .padding([4, 8])
+            .style(ui::tooltip_box),
         tooltip::Position::Bottom,
     )
     .delay(Duration::from_millis(500))
@@ -885,7 +1020,14 @@ fn pill<'a, M: 'a>(label: String) -> Element<'a, M> {
     container(text(label).size(11).wrapping(text::Wrapping::None))
         .padding([0, 6])
         .style(|theme: &Theme| container::Style {
-            background: Some(Background::Color(theme.extended_palette().background.base.text.scale_alpha(0.1))),
+            background: Some(Background::Color(
+                theme
+                    .extended_palette()
+                    .background
+                    .base
+                    .text
+                    .scale_alpha(0.1),
+            )),
             border: Border::default().rounded(9),
             ..container::Style::default()
         })
@@ -897,7 +1039,9 @@ fn quote<'a, M: 'a>(body: String) -> Element<'a, M> {
         .width(Length::Fill)
         .padding([4, 10])
         .style(|theme: &Theme| container::Style {
-            background: Some(Background::Color(theme.extended_palette().background.weak.color)),
+            background: Some(Background::Color(
+                theme.extended_palette().background.weak.color,
+            )),
             border: Border::default().rounded(4),
             ..container::Style::default()
         })
@@ -930,7 +1074,9 @@ fn date_label<'a>(date: &str, now: f64) -> Option<Element<'a, Message>> {
     let parsed = parse_iso_date(date).filter(|_| !date.is_empty())?;
     Some(
         tooltip(
-            text(relative_date(parsed, now)).size(11).style(ui::dim_text),
+            text(relative_date(parsed, now))
+                .size(11)
+                .style(ui::dim_text),
             container(text(local_date(parsed).unwrap_or_else(|| date.to_string())).size(12))
                 .padding([4, 8])
                 .style(ui::tooltip_box),
@@ -950,26 +1096,48 @@ fn comment_header<'a>(comment: &'a Comment, now: f64) -> Element<'a, Message> {
     header.into()
 }
 
-fn comment_body<'a>(comment: &'a Comment, key: &str, expanded: &HashSet<String>) -> Element<'a, Message> {
+fn comment_body<'a>(
+    comment: &'a Comment,
+    key: &str,
+    expanded: &HashSet<String>,
+) -> Element<'a, Message> {
     let body = comment.body.trim();
     if body.chars().count() <= LONG_COMMENT {
-        return text(body).size(13).wrapping(text::Wrapping::WordOrGlyph).into();
+        return text(body)
+            .size(13)
+            .wrapping(text::Wrapping::WordOrGlyph)
+            .into();
     }
     let open = expanded.contains(key);
     column![
-        text(if open { body.to_string() } else { shorten(body, LONG_COMMENT) })
-            .size(13)
-            .wrapping(text::Wrapping::WordOrGlyph),
-        button(text(if open { tr!("Show less") } else { tr!("Show more") }).size(12))
-            .padding(0)
-            .style(link_button)
-            .on_press(Message::Expand(key.to_string())),
+        text(if open {
+            body.to_string()
+        } else {
+            shorten(body, LONG_COMMENT)
+        })
+        .size(13)
+        .wrapping(text::Wrapping::WordOrGlyph),
+        button(
+            text(if open {
+                tr!("Show less")
+            } else {
+                tr!("Show more")
+            })
+            .size(12)
+        )
+        .padding(0)
+        .style(link_button)
+        .on_press(Message::Expand(key.to_string())),
     ]
     .spacing(2)
     .into()
 }
 
-fn conversation_item<'a>(item: &'a ConversationItem, expanded: &HashSet<String>, now: f64) -> Element<'a, Message> {
+fn conversation_item<'a>(
+    item: &'a ConversationItem,
+    expanded: &HashSet<String>,
+    now: f64,
+) -> Element<'a, Message> {
     let mut header = row![text(item.comment.author.as_str()).size(13).font(ui::bold())]
         .spacing(6)
         .align_y(iced::Center);
@@ -981,7 +1149,11 @@ fn conversation_item<'a>(item: &'a ConversationItem, expanded: &HashSet<String>,
     }
     let mut column = column![header].spacing(2);
     if !item.comment.body.trim().is_empty() {
-        column = column.push(comment_body(&item.comment, &format!("conversation:{}", item.comment.id), expanded));
+        column = column.push(comment_body(
+            &item.comment,
+            &format!("conversation:{}", item.comment.id),
+            expanded,
+        ));
     }
     column.into()
 }
@@ -990,12 +1162,16 @@ fn draft_card(draft: &DraftComment, index: usize) -> Element<'_, Message> {
     let body = column![
         row![
             pill(tr!("Pending").into()),
-            text(format!("L{}", draft.line)).size(11).style(ui::dim_text),
+            text(format!("L{}", draft.line))
+                .size(11)
+                .style(ui::dim_text),
             space::horizontal(),
         ]
         .spacing(6)
         .align_y(iced::Center),
-        text(draft.body.trim()).size(13).wrapping(text::Wrapping::WordOrGlyph),
+        text(draft.body.trim())
+            .size(13)
+            .wrapping(text::Wrapping::WordOrGlyph),
         row![
             button(text(tr!("Edit")).size(12))
                 .padding([2, 10])
@@ -1010,12 +1186,22 @@ fn draft_card(draft: &DraftComment, index: usize) -> Element<'_, Message> {
     ]
     .spacing(4)
     .width(Length::Fill);
-    card(body.into(), hex(DRAFT_COLOR), false, Some((draft.side, draft.line)))
+    card(
+        body.into(),
+        hex(DRAFT_COLOR),
+        false,
+        Some((draft.side, draft.line)),
+    )
 }
 
 /// A card like the Why column's, with a colored edge, that highlights its
 /// line while hovered.
-fn card<'a>(body: Element<'a, Message>, color: Color, faded: bool, at: Option<(Side, u32)>) -> Element<'a, Message> {
+fn card<'a>(
+    body: Element<'a, Message>,
+    color: Color,
+    faded: bool,
+    at: Option<(Side, u32)>,
+) -> Element<'a, Message> {
     let edge_color = if faded { color.scale_alpha(0.4) } else { color };
     let edge = container(space::vertical())
         .width(4)
@@ -1025,22 +1211,28 @@ fn card<'a>(body: Element<'a, Message>, color: Color, faded: bool, at: Option<(S
             border: Border::default().rounded(iced::border::Radius::default().left(6)),
             ..container::Style::default()
         });
-    let boxed = container(row![edge, container(body).padding([6, 8]).width(Length::Fill)])
-        .width(Length::Fill)
-        .style(move |theme: &Theme| {
-            let palette = theme.extended_palette();
-            container::Style {
-                background: Some(Background::Color(palette.background.base.color)),
-                text_color: Some(palette.background.base.text),
-                border: Border::default().rounded(6).width(1).color(color.scale_alpha(0.35)),
-                shadow: iced::Shadow {
-                    color: Color::BLACK.scale_alpha(0.12),
-                    offset: Vector::new(0.0, 1.0),
-                    blur_radius: 2.0,
-                },
-                ..container::Style::default()
-            }
-        });
+    let boxed = container(row![
+        edge,
+        container(body).padding([6, 8]).width(Length::Fill)
+    ])
+    .width(Length::Fill)
+    .style(move |theme: &Theme| {
+        let palette = theme.extended_palette();
+        container::Style {
+            background: Some(Background::Color(palette.background.base.color)),
+            text_color: Some(palette.background.base.text),
+            border: Border::default()
+                .rounded(6)
+                .width(1)
+                .color(color.scale_alpha(0.35)),
+            shadow: iced::Shadow {
+                color: Color::BLACK.scale_alpha(0.12),
+                offset: Vector::new(0.0, 1.0),
+                blur_radius: 2.0,
+            },
+            ..container::Style::default()
+        }
+    });
     mouse_area(container(boxed).padding([0, 6]))
         .on_enter(Message::Hover(at))
         .on_exit(Message::Hover(None))
@@ -1054,7 +1246,8 @@ mod tests {
     use std::sync::Arc;
 
     fn review() -> PrReview {
-        let remote = meld_forge::remote::parse_remote("github", "git@github.com:melandur/meld.git").unwrap();
+        let remote =
+            meld_forge::remote::parse_remote("github", "git@github.com:melandur/meld.git").unwrap();
         let forge = Forge::new(remote, Arc::new(ScriptedRunner::new()));
         let details = PullRequestDetails {
             pr: PullRequest {
@@ -1075,7 +1268,9 @@ mod tests {
 
     fn type_text(review: &mut PrReview, text: &str) {
         for c in text.chars() {
-            review.update(Message::Editor(text_editor::Action::Edit(text_editor::Edit::Insert(c))));
+            review.update(Message::Editor(text_editor::Action::Edit(
+                text_editor::Edit::Insert(c),
+            )));
         }
     }
 
@@ -1084,7 +1279,10 @@ mod tests {
         let mut r = review();
         r.comment_on("a.rs".into(), None, Side::New, 4);
         assert_eq!(r.update(Message::Save), Action::None);
-        assert!(r.composer.as_ref().unwrap().problem.is_some(), "empty comments are refused");
+        assert!(
+            r.composer.as_ref().unwrap().problem.is_some(),
+            "empty comments are refused"
+        );
         type_text(&mut r, "Why?");
         assert_eq!(r.update(Message::Save), Action::None);
         assert!(r.composer.is_none() && r.confirm.is_none());
@@ -1168,13 +1366,17 @@ mod tests {
         assert!(r.confirm.is_none());
         type_text(&mut r, "Because");
         r.update(Message::Save);
-        assert!(matches!(&r.confirm, Some(Post::Reply { thread, body }) if thread.id == "100" && body == "Because"));
+        assert!(
+            matches!(&r.confirm, Some(Post::Reply { thread, body }) if thread.id == "100" && body == "Because")
+        );
         assert_eq!(r.thread_count("a.rs"), 1);
     }
 
     #[test]
     fn pull_requests_become_picker_entries() {
-        let remote = meld_forge::remote::parse_remote("origin", "https://gitlab.gnome.org/GNOME/meld.git").unwrap();
+        let remote =
+            meld_forge::remote::parse_remote("origin", "https://gitlab.gnome.org/GNOME/meld.git")
+                .unwrap();
         let pr = PullRequest {
             number: 5,
             title: "Port".into(),
@@ -1185,7 +1387,10 @@ mod tests {
         assert_eq!(entry.kind, EntryKind::PullRequest);
         assert_eq!(entry.section, "Merge requests");
         assert_eq!(entry.label, "!5 Port");
-        assert_eq!(entry.revision, Revision::commit("refs/meld/pr/origin/5/head"));
+        assert_eq!(
+            entry.revision,
+            Revision::commit("refs/meld/pr/origin/5/head")
+        );
         assert!(entry.search_text.contains("zed"));
         let r = review();
         assert!(r.matches(

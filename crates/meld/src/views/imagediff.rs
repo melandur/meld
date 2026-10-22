@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use iced::widget::image::{FilterMethod, Handle};
-use iced::widget::{column, container, image, mouse_area, row, scrollable, space, stack, text, tooltip};
+use iced::widget::{
+    column, container, image, mouse_area, row, scrollable, space, stack, text, tooltip,
+};
 use iced::{Background, ContentFit, Element, Length, Subscription, Task, Theme};
 
 use crate::command::Command;
@@ -115,7 +117,9 @@ impl ImageDiff {
                 Message::Loaded(
                     generation,
                     pane,
-                    result.unwrap_or_else(|| Err(tr!("The image couldn’t be loaded").into())).map(Arc::new),
+                    result
+                        .unwrap_or_else(|| Err(tr!("The image couldn’t be loaded").into()))
+                        .map(Arc::new),
                 )
             })
         }))
@@ -135,7 +139,12 @@ impl ImageDiff {
         Vec::new()
     }
 
-    pub fn update(&mut self, message: Message, _shared: &mut Shared, events: &mut Vec<Event>) -> Task<Message> {
+    pub fn update(
+        &mut self,
+        message: Message,
+        _shared: &mut Shared,
+        events: &mut Vec<Event>,
+    ) -> Task<Message> {
         match message {
             Message::Loaded(generation, pane, result) => {
                 if generation != self.generation || pane >= self.panes.len() {
@@ -179,8 +188,16 @@ impl ImageDiff {
                     Zoom::Fit => 1.0,
                     Zoom::Scale(s) => s,
                 };
-                let factor = if matches!(message, Message::ZoomIn) { 1.25 } else { 0.8 };
-                let next = if self.zoom == Zoom::Fit { current } else { current * factor };
+                let factor = if matches!(message, Message::ZoomIn) {
+                    1.25
+                } else {
+                    0.8
+                };
+                let next = if self.zoom == Zoom::Fit {
+                    current
+                } else {
+                    current * factor
+                };
                 self.zoom = Zoom::Scale(next.clamp(MIN_SCALE, MAX_SCALE));
             }
             Message::ToggleDifferences => self.show_differences = !self.show_differences,
@@ -188,17 +205,21 @@ impl ImageDiff {
             Message::Scrolled(pane, viewport) => {
                 if self.lock_scrolling && matches!(self.zoom, Zoom::Scale(_)) {
                     let offset = viewport.absolute_offset();
-                    return Task::batch(self.scroll_ids.iter().enumerate().filter(|(p, _)| *p != pane).map(
-                        |(_, id)| {
-                            iced::widget::operation::scroll_to(
-                                id.clone(),
-                                iced::widget::operation::AbsoluteOffset {
-                                    x: Some(offset.x),
-                                    y: Some(offset.y),
-                                },
-                            )
-                        },
-                    ));
+                    return Task::batch(
+                        self.scroll_ids
+                            .iter()
+                            .enumerate()
+                            .filter(|(p, _)| *p != pane)
+                            .map(|(_, id)| {
+                                iced::widget::operation::scroll_to(
+                                    id.clone(),
+                                    iced::widget::operation::AbsoluteOffset {
+                                        x: Some(offset.x),
+                                        y: Some(offset.y),
+                                    },
+                                )
+                            }),
+                    );
                 }
             }
             Message::OpenExternal | Message::OpenFolder => {
@@ -211,7 +232,9 @@ impl ImageDiff {
                         let settings = meld_files::ExternalEditorSettings::default();
                         meld_files::open_external_command(&path, 1, &settings, parent)
                             .map_err(|e| e.to_string())
-                            .and_then(|argv| meld_files::spawn_detached(&argv).map_err(|e| e.to_string()))
+                            .and_then(|argv| {
+                                meld_files::spawn_detached(&argv).map_err(|e| e.to_string())
+                            })
                             .err()
                     }),
                     |error| Message::Opened(error.flatten()),
@@ -232,7 +255,12 @@ impl ImageDiff {
         Task::none()
     }
 
-    pub fn command(&mut self, command: Command, shared: &mut Shared, events: &mut Vec<Event>) -> Task<Message> {
+    pub fn command(
+        &mut self,
+        command: Command,
+        shared: &mut Shared,
+        events: &mut Vec<Event>,
+    ) -> Task<Message> {
         let n = self.paths.len().max(1);
         match command {
             Command::OpenExternal => self.update(Message::OpenExternal, shared, events),
@@ -249,7 +277,11 @@ impl ImageDiff {
         }
     }
 
-    pub fn request_close(&mut self, _shared: &mut Shared, events: &mut Vec<Event>) -> Task<Message> {
+    pub fn request_close(
+        &mut self,
+        _shared: &mut Shared,
+        events: &mut Vec<Event>,
+    ) -> Task<Message> {
         events.push(Event::Close { status: 0 });
         Task::none()
     }
@@ -272,10 +304,23 @@ impl ImageDiff {
             text(scale_label).size(13).style(ui::dim_text),
             ui::tool_button("−", tr!("Zoom out"), Some(Message::ZoomOut)),
             ui::tool_button("+", tr!("Zoom in"), Some(Message::ZoomIn)),
-            ui::tool_button("1:1", tr!("Actual size"), Some(Message::Zoom(Zoom::Scale(1.0)))),
+            ui::tool_button(
+                "1:1",
+                tr!("Actual size"),
+                Some(Message::Zoom(Zoom::Scale(1.0)))
+            ),
             ui::tool_button("⤢", tr!("Zoom to fit"), Some(Message::Zoom(Zoom::Fit))),
-            ui::tool_button("◐", tr!("Highlight differences"), Some(Message::ToggleDifferences)),
-            tool_button(ui::icon::REFRESH, tr!("Reload"), "Ctrl+R", Some(Message::Reload)),
+            ui::tool_button(
+                "◐",
+                tr!("Highlight differences"),
+                Some(Message::ToggleDifferences)
+            ),
+            tool_button(
+                ui::icon::REFRESH,
+                tr!("Reload"),
+                "Ctrl+R",
+                Some(Message::Reload)
+            ),
         ]
         .spacing(2)
         .align_y(iced::Center)
@@ -284,14 +329,30 @@ impl ImageDiff {
 
     pub fn menu_items(&self, _shared: &Shared) -> Vec<menu::Item<Message>> {
         vec![
-            menu::Item::toggle(tr!("Zoom to Fit"), self.zoom == Zoom::Fit, Message::Zoom(Zoom::Fit)),
+            menu::Item::toggle(
+                tr!("Zoom to Fit"),
+                self.zoom == Zoom::Fit,
+                Message::Zoom(Zoom::Fit),
+            ),
             menu::Item::action(tr!("Actual Size"), None, Message::Zoom(Zoom::Scale(1.0))),
             menu::Item::action(tr!("Zoom Image In"), None, Message::ZoomIn),
             menu::Item::action(tr!("Zoom Image Out"), None, Message::ZoomOut),
-            menu::Item::toggle(tr!("Highlight Differences"), self.show_differences, Message::ToggleDifferences),
-            menu::Item::toggle(tr!("Lock Scrolling"), self.lock_scrolling, Message::ToggleLock),
+            menu::Item::toggle(
+                tr!("Highlight Differences"),
+                self.show_differences,
+                Message::ToggleDifferences,
+            ),
+            menu::Item::toggle(
+                tr!("Lock Scrolling"),
+                self.lock_scrolling,
+                Message::ToggleLock,
+            ),
             menu::Item::Separator,
-            menu::Item::action(tr!("Open Externally"), Some("Ctrl+Shift+O"), Message::OpenExternal),
+            menu::Item::action(
+                tr!("Open Externally"),
+                Some("Ctrl+Shift+O"),
+                Message::OpenExternal,
+            ),
             menu::Item::action(tr!("Open Containing Folder"), None, Message::OpenFolder),
             menu::Item::action(tr!("Copy Full Path"), None, Message::CopyPath),
             menu::Item::action(tr!("Reload"), Some("Ctrl+R"), Message::Reload),
@@ -306,7 +367,12 @@ impl ImageDiff {
             } else {
                 BannerKind::Warning
             };
-            content = content.push(ui::banner(kind, comparison.summary.as_str(), comparison.details.clone(), Vec::new()));
+            content = content.push(ui::banner(
+                kind,
+                comparison.summary.as_str(),
+                comparison.details.clone(),
+                Vec::new(),
+            ));
         }
         let mut panes = row![].width(Length::Fill).height(Length::Fill);
         for pane in 0..self.paths.len() {
@@ -339,8 +405,18 @@ impl ImageDiff {
         let header = tooltip(
             container(
                 row![
-                    text(name).size(13).font(if focused { ui::bold() } else { iced::Font::DEFAULT }).wrapping(text::Wrapping::None),
-                    text(info).size(12).style(ui::dim_text).wrapping(text::Wrapping::None),
+                    text(name)
+                        .size(13)
+                        .font(if focused {
+                            ui::bold()
+                        } else {
+                            iced::Font::DEFAULT
+                        })
+                        .wrapping(text::Wrapping::None),
+                    text(info)
+                        .size(12)
+                        .style(ui::dim_text)
+                        .wrapping(text::Wrapping::None),
                 ]
                 .spacing(10)
                 .align_y(iced::Center),
@@ -349,13 +425,20 @@ impl ImageDiff {
             .width(Length::Fill)
             .clip(true)
             .style(ui::header_bar),
-            container(text(path.display().to_string()).size(13)).padding([4, 8]).style(ui::tooltip_box),
+            container(text(path.display().to_string()).size(13))
+                .padding([4, 8])
+                .style(ui::tooltip_box),
             tooltip::Position::Bottom,
         );
 
         let body: Element<'_, Message> = match &self.panes[pane] {
-            Pane::Loading => container(text(tr!("Loading…")).style(ui::dim_text)).center(Length::Fill).into(),
-            Pane::Failed(err) => container(text(err.as_str()).style(ui::dim_text)).padding(20).center(Length::Fill).into(),
+            Pane::Loading => container(text(tr!("Loading…")).style(ui::dim_text))
+                .center(Length::Fill)
+                .into(),
+            Pane::Failed(err) => container(text(err.as_str()).style(ui::dim_text))
+                .padding(20)
+                .center(Length::Fill)
+                .into(),
             Pane::Loaded(decoded) => {
                 let overlay = self
                     .show_differences
@@ -378,12 +461,20 @@ impl ImageDiff {
                                     .height(Length::Fill),
                             );
                         }
-                        container(layers).padding(8).width(Length::Fill).height(Length::Fill).into()
+                        container(layers)
+                            .padding(8)
+                            .width(Length::Fill)
+                            .height(Length::Fill)
+                            .into()
                     }
                     Zoom::Scale(scale) => {
                         let w = decoded.width as f32 * scale;
                         let h = decoded.height as f32 * scale;
-                        let filter = if scale >= 2.0 { FilterMethod::Nearest } else { FilterMethod::Linear };
+                        let filter = if scale >= 2.0 {
+                            FilterMethod::Nearest
+                        } else {
+                            FilterMethod::Linear
+                        };
                         let mut layers = stack![
                             image(decoded.handle.clone())
                                 .content_fit(ContentFit::Fill)
@@ -414,19 +505,24 @@ impl ImageDiff {
                 }
             }
         };
-        let body = container(body).width(Length::Fill).height(Length::Fill).style(|theme: &Theme| {
-            container::Style {
-                background: Some(Background::Color(theme.extended_palette().background.weak.color)),
+        let body = container(body)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(|theme: &Theme| container::Style {
+                background: Some(Background::Color(
+                    theme.extended_palette().background.weak.color,
+                )),
                 ..container::Style::default()
-            }
-        });
+            });
         mouse_area(column![header, ui::separator(false), body].width(Length::FillPortion(1)))
             .on_press(Message::Focus(pane))
             .into()
     }
 }
 
-fn background<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> impl Future<Output = Option<T>> {
+fn background<T: Send + 'static>(
+    f: impl FnOnce() -> T + Send + 'static,
+) -> impl Future<Output = Option<T>> {
     let (tx, rx) = iced::futures::channel::oneshot::channel();
     std::thread::spawn(move || {
         let _ = tx.send(f());
@@ -442,7 +538,13 @@ fn decode(path: &Path) -> Result<Decoded, String> {
         .map_err(|e| e.to_string())?;
     let format = reader
         .format()
-        .map(|f| f.extensions_str().first().copied().unwrap_or("image").to_ascii_uppercase())
+        .map(|f| {
+            f.extensions_str()
+                .first()
+                .copied()
+                .unwrap_or("image")
+                .to_ascii_uppercase()
+        })
         .unwrap_or_else(|| tr!("Unknown").into());
     let rgba = reader.decode().map_err(|e| e.to_string())?.to_rgba8();
     let (width, height) = rgba.dimensions();
@@ -460,7 +562,10 @@ fn decode(path: &Path) -> Result<Decoded, String> {
 
 /// Which pixels differ between two same-sized RGBA buffers.
 fn difference_mask(a: &[u8], b: &[u8]) -> Vec<bool> {
-    a.chunks_exact(4).zip(b.chunks_exact(4)).map(|(p, q)| p != q).collect()
+    a.chunks_exact(4)
+        .zip(b.chunks_exact(4))
+        .map(|(p, q)| p != q)
+        .collect()
 }
 
 /// Compares neighbouring images (left–middle, middle–right).
@@ -557,7 +662,12 @@ fn compare(images: &[Arc<Decoded>]) -> Comparison {
 
 /// A toolbar button like [`ui::tool_button`], whose tooltip is the
 /// translated `tip` followed by its shortcut.
-fn tool_button<'a>(glyph: &'a str, tip: &str, shortcut: &str, on_press: Option<Message>) -> Element<'a, Message> {
+fn tool_button<'a>(
+    glyph: &'a str,
+    tip: &str,
+    shortcut: &str,
+    on_press: Option<Message>,
+) -> Element<'a, Message> {
     ui::tool_button(glyph, ui::with_shortcut(tip, shortcut), on_press)
 }
 
@@ -607,9 +717,15 @@ mod tests {
         let b = decoded(2, 1, vec![1, 2, 3, 255, 4, 5, 7, 255]);
         let result = compare(&[a, b]);
         assert!(!result.identical);
-        assert_eq!(result.details.as_deref(), Some("1 of 2 pixels differ (50.00%)"));
+        assert_eq!(
+            result.details.as_deref(),
+            Some("1 of 2 pixels differ (50.00%)")
+        );
         assert!(result.overlays.iter().all(Option::is_some));
-        assert_eq!(difference_mask(&[0, 0, 0, 0, 1, 1, 1, 1], &[0, 0, 0, 0, 1, 1, 1, 2]), [false, true]);
+        assert_eq!(
+            difference_mask(&[0, 0, 0, 0, 1, 1, 1, 1], &[0, 0, 0, 0, 1, 1, 1, 2]),
+            [false, true]
+        );
     }
 
     #[test]

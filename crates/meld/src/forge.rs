@@ -10,7 +10,9 @@ use std::sync::{Arc, LazyLock, Mutex};
 use iced::Color;
 use meld_ailens::picker::parse_iso_date;
 use meld_ailens::{CancelToken, GitOptions, GitRepository};
-use meld_forge::{Forge, ForgeKind, PrState, ProcessRunner, PullRequest, Runner, StateFilter, default_remote};
+use meld_forge::{
+    Forge, ForgeKind, PrState, ProcessRunner, PullRequest, Runner, StateFilter, default_remote,
+};
 
 /// The remote picked per repository root, for this session.
 static CHOSEN: LazyLock<Mutex<HashMap<PathBuf, String>>> = LazyLock::new(Default::default);
@@ -60,7 +62,11 @@ impl Remotes {
 /// The forges of the repository `repo`: `preferred` (a remote's name)
 /// when it is one of them, else the remote picked before, else the first
 /// with pull requests (which asks each forge).
-pub fn remotes_of(repo: &GitRepository, preferred: Option<&str>, cancel: &CancelToken) -> meld_forge::Result<Remotes> {
+pub fn remotes_of(
+    repo: &GitRepository,
+    preferred: Option<&str>,
+    cancel: &CancelToken,
+) -> meld_forge::Result<Remotes> {
     let runner = runner();
     let forges: Vec<Forge> = meld_forge::remote::forge_remotes(repo, cancel)?
         .into_iter()
@@ -82,13 +88,19 @@ pub fn remotes_of(repo: &GitRepository, preferred: Option<&str>, cancel: &Cancel
 }
 
 /// [`remotes_of`] the repository that `location` is in.
-pub fn load_remotes(location: &Path, preferred: Option<&str>, cancel: &CancelToken) -> meld_forge::Result<Remotes> {
+pub fn load_remotes(
+    location: &Path,
+    preferred: Option<&str>,
+    cancel: &CancelToken,
+) -> meld_forge::Result<Remotes> {
     let repo = GitRepository::discover(location, &GitOptions::default(), cancel)?;
     remotes_of(&repo, preferred, cancel)
 }
 
 /// Runs `work` on a thread of its own; None if it panicked.
-pub fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) -> impl Future<Output = Option<T>> {
+pub fn blocking<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+) -> impl Future<Output = Option<T>> {
     let (sender, receiver) = iced::futures::channel::oneshot::channel();
     let spawned = std::thread::Builder::new()
         .name("meld-forge".into())
@@ -104,7 +116,14 @@ pub fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) ->
 /// e.g. "3 days ago", "in 2 hours", "now" (`meld_ailens::picker::relative_date`,
 /// translated); dates are seconds since the epoch.
 pub fn relative_date(date: f64, now: f64) -> String {
-    const UNITS: [u64; 6] = [365 * 24 * 3600, 30 * 24 * 3600, 7 * 24 * 3600, 24 * 3600, 3600, 60];
+    const UNITS: [u64; 6] = [
+        365 * 24 * 3600,
+        30 * 24 * 3600,
+        7 * 24 * 3600,
+        24 * 3600,
+        3600,
+        60,
+    ];
     let seconds = (date - now).round() as i64;
     let abs = seconds.unsigned_abs();
     let Some(unit) = UNITS.iter().position(|&size| abs >= size) else {
@@ -196,14 +215,22 @@ pub fn state_color(pr: &PullRequest) -> Color {
 pub fn state_badge<'a, M: 'a>(pr: &PullRequest) -> iced::Element<'a, M> {
     use iced::widget::{container, text};
     let color = state_color(pr);
-    container(text(crate::i18n::pgettext("pull request state", pr.state_label())).size(11).color(Color::WHITE).wrapping(text::Wrapping::None))
-        .padding([1, 7])
-        .style(move |_theme: &iced::Theme| container::Style {
-            background: Some(iced::Background::Color(color)),
-            border: iced::Border::default().rounded(9),
-            ..container::Style::default()
-        })
-        .into()
+    container(
+        text(crate::i18n::pgettext(
+            "pull request state",
+            pr.state_label(),
+        ))
+        .size(11)
+        .color(Color::WHITE)
+        .wrapping(text::Wrapping::None),
+    )
+    .padding([1, 7])
+    .style(move |_theme: &iced::Theme| container::Style {
+        background: Some(iced::Background::Color(color)),
+        border: iced::Border::default().rounded(9),
+        ..container::Style::default()
+    })
+    .into()
 }
 
 /// A row of toggle chips, one per option; the `selected` one highlighted.
@@ -253,7 +280,10 @@ mod tests {
             ..Default::default()
         };
         let now = parse_iso_date("2026-10-22T00:00:00Z").unwrap();
-        assert_eq!(pr_description(&pr, now), "alice · updated 2 days ago · feature → main · bug");
+        assert_eq!(
+            pr_description(&pr, now),
+            "alice · updated 2 days ago · feature → main · bug"
+        );
         assert_eq!(pr_description(&PullRequest::default(), now), "");
     }
 

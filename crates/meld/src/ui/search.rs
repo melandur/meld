@@ -75,7 +75,12 @@ pub enum EntryKey {
 /// bottom), searching from `current` in the direction of `step`. Rows
 /// match when their name starts with `key`, ignoring case; if no row
 /// does, rows containing `key` match. Searches don't wrap around.
-pub fn find_row<S: AsRef<str>>(names: &[S], key: &str, current: Option<usize>, step: Step) -> Option<usize> {
+pub fn find_row<S: AsRef<str>>(
+    names: &[S],
+    key: &str,
+    current: Option<usize>,
+    step: Step,
+) -> Option<usize> {
     let key = key.to_lowercase();
     if key.is_empty() {
         return None;
@@ -84,7 +89,11 @@ pub fn find_row<S: AsRef<str>>(names: &[S], key: &str, current: Option<usize>, s
     let prefix = folded.iter().any(|n| n.starts_with(&key));
     let matches = |i: &usize| {
         let name = &folded[*i];
-        if prefix { name.starts_with(&key) } else { name.contains(&key) }
+        if prefix {
+            name.starts_with(&key)
+        } else {
+            name.contains(&key)
+        }
     };
     match step {
         Step::First => (0..folded.len()).find(matches),
@@ -110,7 +119,9 @@ pub fn start_key(key: &Key, modifiers: Modifiers) -> Option<String> {
         return None;
     };
     let c = c.as_str();
-    if matches!(c, "+" | "-" | "*" | "=" | "/" | "\\") || c.chars().any(|ch| ch.is_control() || ch.is_whitespace()) {
+    if matches!(c, "+" | "-" | "*" | "=" | "/" | "\\")
+        || c.chars().any(|ch| ch.is_control() || ch.is_whitespace())
+    {
         return None;
     }
     Some(c.to_string())
@@ -127,9 +138,13 @@ pub fn entry_key(key: &Key, modifiers: Modifiers) -> Option<EntryKey> {
         Key::Named(Named::ArrowUp) => Some(EntryKey::Step(Step::Previous)),
         Key::Named(Named::ArrowDown) => Some(EntryKey::Step(Step::Next)),
         Key::Named(Named::Enter) => Some(EntryKey::Activate),
-        Key::Character(c) if modifiers.command() && c.eq_ignore_ascii_case("g") => Some(EntryKey::Step(
-            if modifiers.shift() { Step::Previous } else { Step::Next },
-        )),
+        Key::Character(c) if modifiers.command() && c.eq_ignore_ascii_case("g") => {
+            Some(EntryKey::Step(if modifiers.shift() {
+                Step::Previous
+            } else {
+                Step::Next
+            }))
+        }
         _ => None,
     }
 }
@@ -155,9 +170,12 @@ pub fn overlay<'a, M: Clone + 'a>(
     .style(super::popover);
     iced::widget::stack![
         base.into(),
-        column![space::vertical(), row![space::horizontal(), entry].padding(10)]
-            .width(Length::Fill)
-            .height(Length::Fill),
+        column![
+            space::vertical(),
+            row![space::horizontal(), entry].padding(10)
+        ]
+        .width(Length::Fill)
+        .height(Length::Fill),
     ]
     .into()
 }
@@ -166,16 +184,31 @@ pub fn overlay<'a, M: Clone + 'a>(
 mod tests {
     use super::*;
 
-    const NAMES: [&str; 6] = ["src", "README.md", "Cargo.toml", "readme.txt", "build.rs", "docs"];
+    const NAMES: [&str; 6] = [
+        "src",
+        "README.md",
+        "Cargo.toml",
+        "readme.txt",
+        "build.rs",
+        "docs",
+    ];
 
     #[test]
     fn prefix_matches_ignore_case() {
         assert_eq!(find_row(&NAMES, "re", None, Step::First), Some(1));
         assert_eq!(find_row(&NAMES, "RE", Some(1), Step::Next), Some(3));
-        assert_eq!(find_row(&NAMES, "re", Some(3), Step::Next), None, "no wrapping");
+        assert_eq!(
+            find_row(&NAMES, "re", Some(3), Step::Next),
+            None,
+            "no wrapping"
+        );
         assert_eq!(find_row(&NAMES, "re", Some(3), Step::Previous), Some(1));
         assert_eq!(find_row(&NAMES, "re", Some(1), Step::Previous), None);
-        assert_eq!(find_row(&NAMES, "c", Some(4), Step::First), Some(2), "changes search from the top");
+        assert_eq!(
+            find_row(&NAMES, "c", Some(4), Step::First),
+            Some(2),
+            "changes search from the top"
+        );
         assert_eq!(find_row(&NAMES, "", None, Step::First), None);
     }
 
@@ -192,15 +225,33 @@ mod tests {
     #[test]
     fn keys() {
         let none = Modifiers::empty();
-        assert_eq!(start_key(&Key::Character("a".into()), none).as_deref(), Some("a"));
-        assert_eq!(start_key(&Key::Character("A".into()), Modifiers::SHIFT).as_deref(), Some("A"));
-        assert_eq!(start_key(&Key::Character("a".into()), Modifiers::CTRL), None);
+        assert_eq!(
+            start_key(&Key::Character("a".into()), none).as_deref(),
+            Some("a")
+        );
+        assert_eq!(
+            start_key(&Key::Character("A".into()), Modifiers::SHIFT).as_deref(),
+            Some("A")
+        );
+        assert_eq!(
+            start_key(&Key::Character("a".into()), Modifiers::CTRL),
+            None
+        );
         assert_eq!(start_key(&Key::Character("+".into()), none), None);
         assert_eq!(start_key(&Key::Character(" ".into()), none), None);
         assert_eq!(start_key(&Key::Named(Named::ArrowDown), none), None);
-        assert_eq!(entry_key(&Key::Named(Named::Escape), none), Some(EntryKey::Close));
-        assert_eq!(entry_key(&Key::Named(Named::ArrowUp), none), Some(EntryKey::Step(Step::Previous)));
-        assert_eq!(entry_key(&Key::Named(Named::Enter), none), Some(EntryKey::Activate));
+        assert_eq!(
+            entry_key(&Key::Named(Named::Escape), none),
+            Some(EntryKey::Close)
+        );
+        assert_eq!(
+            entry_key(&Key::Named(Named::ArrowUp), none),
+            Some(EntryKey::Step(Step::Previous))
+        );
+        assert_eq!(
+            entry_key(&Key::Named(Named::Enter), none),
+            Some(EntryKey::Activate)
+        );
         assert_eq!(entry_key(&Key::Character("x".into()), none), None);
     }
 

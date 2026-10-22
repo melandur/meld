@@ -13,10 +13,12 @@ pub fn modal<'a, M: Clone + 'a>(
     stack![
         base.into(),
         opaque(
-            mouse_area(center(opaque(content)).style(|_theme: &Theme| container::Style {
-                background: Some(Color::BLACK.scale_alpha(0.45).into()),
-                ..container::Style::default()
-            }))
+            mouse_area(
+                center(opaque(content)).style(|_theme: &Theme| container::Style {
+                    background: Some(Color::BLACK.scale_alpha(0.45).into()),
+                    ..container::Style::default()
+                })
+            )
             .on_press(on_blur)
         )
     ]
@@ -36,9 +38,13 @@ pub fn dialog<'a, M: Clone + 'a>(
         button_row = button_row.push(b);
     }
     container(
-        column![text(title).size(18).font(super::bold()), body.into(), button_row]
-            .spacing(16)
-            .max_width(640),
+        column![
+            text(title).size(18).font(super::bold()),
+            body.into(),
+            button_row
+        ]
+        .spacing(16)
+        .max_width(640),
     )
     .padding(20)
     .max_width(680)

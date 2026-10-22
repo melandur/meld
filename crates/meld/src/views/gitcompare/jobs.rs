@@ -145,18 +145,17 @@ where
             let progress = move |text: &str| {
                 let _ = progress_sender.unbounded_send(Event::Progress(text.to_string()));
             };
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                work(&cancel, &progress)
-            }))
-            .unwrap_or_else(|panic| {
-                let text = panic
-                    .downcast_ref::<&str>()
-                    .map(|s| s.to_string())
-                    .or_else(|| panic.downcast_ref::<String>().cloned())
-                    .unwrap_or_else(|| "unknown error".into());
-                log::error!("Git Compare job panicked: {text}");
-                Err(Error::msg(tr!("Internal error: {text}", text = text)))
-            });
+            let result =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(&cancel, &progress)))
+                    .unwrap_or_else(|panic| {
+                        let text = panic
+                            .downcast_ref::<&str>()
+                            .map(|s| s.to_string())
+                            .or_else(|| panic.downcast_ref::<String>().cloned())
+                            .unwrap_or_else(|| "unknown error".into());
+                        log::error!("Git Compare job panicked: {text}");
+                        Err(Error::msg(tr!("Internal error: {text}", text = text)))
+                    });
             let _ = sender.unbounded_send(Event::Done(result));
         });
     if let Err(err) = spawned {

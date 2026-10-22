@@ -102,14 +102,17 @@ fn lex(src: &str) -> Result<Lexed, String> {
                             'x' => {
                                 let hex: String = chars[i..i + 2].iter().collect();
                                 i += 2;
-                                let v = u32::from_str_radix(&hex, 16).map_err(|_| format!("line {line}: bad \\x"))?;
+                                let v = u32::from_str_radix(&hex, 16)
+                                    .map_err(|_| format!("line {line}: bad \\x"))?;
                                 s.push(char::from_u32(v).unwrap_or('\u{fffd}'));
                             }
                             'u' => {
-                                let end = i + chars[i..].iter().position(|&c| c == '}').unwrap_or(0);
+                                let end =
+                                    i + chars[i..].iter().position(|&c| c == '}').unwrap_or(0);
                                 let hex: String = chars[i + 1..end].iter().collect();
                                 i = end + 1;
-                                let v = u32::from_str_radix(&hex, 16).map_err(|_| format!("line {line}: bad \\u"))?;
+                                let v = u32::from_str_radix(&hex, 16)
+                                    .map_err(|_| format!("line {line}: bad \\u"))?;
                                 s.push(char::from_u32(v).unwrap_or('\u{fffd}'));
                             }
                             '\n' => {
@@ -185,7 +188,10 @@ fn lex(src: &str) -> Result<Lexed, String> {
             }
             toks.push((Tok::Ident(chars[start..i].iter().collect()), line));
         } else if c.is_ascii_digit() {
-            while at(i).is_alphanumeric() || at(i) == '_' || (at(i) == '.' && at(i + 1).is_ascii_digit()) {
+            while at(i).is_alphanumeric()
+                || at(i) == '_'
+                || (at(i) == '.' && at(i + 1).is_ascii_digit())
+            {
                 i += 1;
             }
             toks.push((Tok::Other, line));
@@ -212,7 +218,10 @@ fn translator_comments(comments: &[(usize, String)], line: usize) -> Vec<String>
         want -= 1;
     }
     block.reverse();
-    match block.iter().position(|t| t.to_ascii_lowercase().starts_with("translators:")) {
+    match block
+        .iter()
+        .position(|t| t.to_ascii_lowercase().starts_with("translators:"))
+    {
         Some(start) => vec![block[start..].join(" ")],
         None => Vec::new(),
     }
@@ -226,14 +235,18 @@ pub fn extract(src: &str, file: &str) -> Result<Vec<Message>, String> {
     let mut i = 0;
     while i + 2 < toks.len() {
         let kind = match &toks[i].0 {
-            Tok::Ident(name) if matches!(name.as_str(), "tr" | "trc" | "trn" | "n_" | "nc_") => name.clone(),
+            Tok::Ident(name) if matches!(name.as_str(), "tr" | "trc" | "trn" | "n_" | "nc_") => {
+                name.clone()
+            }
             _ => {
                 i += 1;
                 continue;
             }
         };
         // `tr!(`, not `macro_rules! tr` or `fn tr(`
-        let after_macro_rules = i > 1 && toks[i - 1].0 == Tok::Punct('!') && toks[i - 2].0 == Tok::Ident("macro_rules".into());
+        let after_macro_rules = i > 1
+            && toks[i - 1].0 == Tok::Punct('!')
+            && toks[i - 2].0 == Tok::Ident("macro_rules".into());
         if after_macro_rules
             || toks[i + 1].0 != Tok::Punct('!')
             || !matches!(toks[i + 2].0, Tok::Punct('(' | '[' | '{'))
@@ -271,7 +284,10 @@ pub fn extract(src: &str, file: &str) -> Result<Vec<Message>, String> {
         let literal = |n: usize| -> Result<String, String> {
             match args.get(n).map(Vec::as_slice) {
                 Some([Tok::Str(s)]) => Ok(s.clone()),
-                _ => Err(format!("{location}: {kind}! needs a string literal as argument {}", n + 1)),
+                _ => Err(format!(
+                    "{location}: {kind}! needs a string literal as argument {}",
+                    n + 1
+                )),
             }
         };
         let mut message = Message {
@@ -335,13 +351,16 @@ pub fn problems(messages: &[Message]) -> Vec<String> {
             let has_args = m.positional > 0 || !m.named.is_empty();
             for piece in pieces {
                 match piece {
-                    po::Piece::Named(name) if !m.named.iter().any(|n| n == name) => out.push(format!(
-                        "{}: {:?}: `{{{name}}}` needs an explicit `{name} = …` argument",
+                    po::Piece::Named(name) if !m.named.iter().any(|n| n == name) => {
+                        out.push(format!(
+                            "{}: {:?}: `{{{name}}}` needs an explicit `{name} = …` argument",
+                            m.location, text
+                        ))
+                    }
+                    po::Piece::Positional(_) if !has_args => out.push(format!(
+                        "{}: {:?}: placeholder without arguments",
                         m.location, text
                     )),
-                    po::Piece::Positional(_) if !has_args => {
-                        out.push(format!("{}: {:?}: placeholder without arguments", m.location, text))
-                    }
                     _ => {}
                 }
             }
@@ -380,7 +399,17 @@ macro_rules! tr { () => {} }
         let ids: Vec<&str> = m.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(
             ids,
-            ["Save", "{} file", "Quit Meld", "{name} changed in {}", "raw \"quoted\"", "multi line\n", "Label", "Open", "after char"]
+            [
+                "Save",
+                "{} file",
+                "Quit Meld",
+                "{name} changed in {}",
+                "raw \"quoted\"",
+                "multi line\n",
+                "Label",
+                "Open",
+                "after char"
+            ]
         );
         assert_eq!(m[0].location, "x.rs:4");
         assert_eq!(m[1].plural.as_deref(), Some("{} files"));
@@ -388,7 +417,10 @@ macro_rules! tr { () => {} }
         assert_eq!(m[1].positional, 1);
         assert_eq!(m[2].context.as_deref(), Some("shortcut window"));
         assert_eq!(m[7].context.as_deref(), Some("state"));
-        assert_eq!((m[3].positional, m[3].named.clone()), (1, vec!["name".to_string()]));
+        assert_eq!(
+            (m[3].positional, m[3].named.clone()),
+            (1, vec!["name".to_string()])
+        );
         assert!(problems(&m).is_empty(), "{:?}", problems(&m));
     }
 

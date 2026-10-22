@@ -63,7 +63,12 @@ pub struct Colors {
 
 impl Colors {
     pub fn new(colors: &DiffColors) -> Colors {
-        let c = |chunk: meld_config::ChunkColors| (crate::shared::color(chunk.fill), crate::shared::color(chunk.line));
+        let c = |chunk: meld_config::ChunkColors| {
+            (
+                crate::shared::color(chunk.fill),
+                crate::shared::color(chunk.line),
+            )
+        };
         Colors {
             insert: c(colors.insert),
             delete: c(colors.delete),
@@ -117,7 +122,11 @@ impl<Message: Clone> canvas::Program<Message> for Cell<Message> {
         if dy == 0.0 {
             return None;
         }
-        let message = if dy > 0.0 { self.on_scroll.0.clone() } else { self.on_scroll.1.clone() };
+        let message = if dy > 0.0 {
+            self.on_scroll.0.clone()
+        } else {
+            self.on_scroll.1.clone()
+        };
         Some(canvas::Action::publish(message).and_capture())
     }
 
@@ -139,11 +148,17 @@ impl<Message: Clone> canvas::Program<Message> for Cell<Message> {
         frame.fill_rectangle(Point::ORIGIN, Size::new(width, height), fill);
         let stroke = Stroke::default().with_width(1.0).with_color(line);
         if self.top {
-            frame.stroke(&Path::line(Point::new(0.0, 0.5), Point::new(width, 0.5)), stroke);
+            frame.stroke(
+                &Path::line(Point::new(0.0, 0.5), Point::new(width, 0.5)),
+                stroke,
+            );
         }
         if self.bottom {
             frame.stroke(
-                &Path::line(Point::new(0.0, height - 0.5), Point::new(width, height - 0.5)),
+                &Path::line(
+                    Point::new(0.0, height - 0.5),
+                    Point::new(width, height - 0.5),
+                ),
                 stroke,
             );
         }
@@ -199,15 +214,24 @@ mod tests {
     fn links_between_panes() {
         use State::{Conflict, Error, Modified, New, NonExist, Normal};
         assert_eq!(link(&entry(&[Normal, Normal]), 0, 1), None);
-        assert_eq!(link(&entry(&[Modified, Modified]), 0, 1), Some(Link::Replace));
+        assert_eq!(
+            link(&entry(&[Modified, Modified]), 0, 1),
+            Some(Link::Replace)
+        );
         assert_eq!(link(&entry(&[New, NonExist]), 0, 1), Some(Link::Delete));
         assert_eq!(link(&entry(&[NonExist, New]), 0, 1), Some(Link::Insert));
         assert_eq!(link(&entry(&[NonExist, NonExist, New]), 0, 1), None);
         // Three panes: the first two are the same, the third is missing
         assert_eq!(link(&entry(&[New, New, NonExist]), 0, 1), None);
-        assert_eq!(link(&entry(&[New, New, NonExist]), 1, 2), Some(Link::Delete));
+        assert_eq!(
+            link(&entry(&[New, New, NonExist]), 1, 2),
+            Some(Link::Delete)
+        );
         assert_eq!(link(&entry(&[Error, Error]), 0, 1), Some(Link::Error));
-        assert_eq!(link(&entry(&[Conflict, Conflict]), 0, 1), Some(Link::Conflict));
+        assert_eq!(
+            link(&entry(&[Conflict, Conflict]), 0, 1),
+            Some(Link::Conflict)
+        );
         assert_eq!(link(&Kind::Empty, 0, 1), None);
         assert_eq!(link(&entry(&[Normal, Normal]), 0, 5), None);
     }

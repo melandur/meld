@@ -111,7 +111,11 @@ impl Meld {
             window: None,
             quitting: false,
         };
-        let launch = LAUNCH.lock().ok().and_then(|mut l| l.take()).unwrap_or_default();
+        let launch = LAUNCH
+            .lock()
+            .ok()
+            .and_then(|mut l| l.take())
+            .unwrap_or_default();
         let mut tasks = Vec::new();
         for (i, comparison) in launch.comparisons.into_iter().enumerate() {
             tasks.push(app.open(comparison, None, i == 0));
@@ -153,14 +157,21 @@ impl Meld {
     }
 
     fn active_tab(&self) -> Option<&TabEntry> {
-        self.active.and_then(|id| self.tabs.iter().find(|t| t.id == id))
+        self.active
+            .and_then(|id| self.tabs.iter().find(|t| t.id == id))
     }
 
     fn tab_mut(&mut self, id: TabId) -> Option<&mut TabEntry> {
         self.tabs.iter_mut().find(|t| t.id == id)
     }
 
-    fn add_tab(&mut self, tab: Tab, task: Task<views::Message>, waiter: Option<instance::Waiter>, primary: bool) -> Task<Message> {
+    fn add_tab(
+        &mut self,
+        tab: Tab,
+        task: Task<views::Message>,
+        waiter: Option<instance::Waiter>,
+        primary: bool,
+    ) -> Task<Message> {
         let id = self.next_id;
         self.next_id += 1;
         // Open next to the current tab, like Meld does.
@@ -186,7 +197,12 @@ impl Meld {
         self.add_tab(tab, Task::none(), None, false)
     }
 
-    fn open(&mut self, comparison: Comparison, waiter: Option<instance::Waiter>, primary: bool) -> Task<Message> {
+    fn open(
+        &mut self,
+        comparison: Comparison,
+        waiter: Option<instance::Waiter>,
+        primary: bool,
+    ) -> Task<Message> {
         match Tab::open(comparison.clone(), &mut self.shared) {
             Ok((tab, task)) => {
                 self.shared.add_recent(&comparison);
@@ -229,7 +245,11 @@ impl Meld {
                 self.open(comparison, None, false)
             }
             Message::ToggleMenu(menu) => {
-                self.open_menu = if self.open_menu == Some(menu) { None } else { Some(menu) };
+                self.open_menu = if self.open_menu == Some(menu) {
+                    None
+                } else {
+                    Some(menu)
+                };
                 Task::none()
             }
             Message::CloseMenu => {
@@ -239,9 +259,9 @@ impl Meld {
             Message::ShowDialog(kind) => {
                 self.open_menu = None;
                 self.dialog = Some(match kind {
-                    DialogKind::Preferences => {
-                        Dialog::Preferences(Box::new(dialogs::preferences::Preferences::new(&self.shared)))
-                    }
+                    DialogKind::Preferences => Dialog::Preferences(Box::new(
+                        dialogs::preferences::Preferences::new(&self.shared),
+                    )),
                     DialogKind::Shortcuts => Dialog::Shortcuts,
                     DialogKind::About => Dialog::About,
                 });
@@ -339,7 +359,8 @@ impl Meld {
         for event in events {
             match event {
                 Event::Open(comparison) => tasks.push(self.open(comparison, None, false)),
-                Event::Replace(comparison) => match Tab::open(comparison.clone(), &mut self.shared) {
+                Event::Replace(comparison) => match Tab::open(comparison.clone(), &mut self.shared)
+                {
                     Ok((tab, task)) => {
                         self.shared.add_recent(&comparison);
                         if let Some(entry) = self.tab_mut(id) {
@@ -359,7 +380,12 @@ impl Meld {
                 Event::FileChanged(path) => {
                     for entry in self.tabs.iter_mut().filter(|t| t.id != id) {
                         let other = entry.id;
-                        tasks.push(entry.tab.file_changed(&path).map(move |m| Message::Tab(other, m)));
+                        tasks.push(
+                            entry
+                                .tab
+                                .file_changed(&path)
+                                .map(move |m| Message::Tab(other, m)),
+                        );
                     }
                 }
             }
@@ -372,7 +398,10 @@ impl Meld {
         let shared = &self.shared;
         Task::batch(self.tabs.iter_mut().map(|entry| {
             let id = entry.id;
-            entry.tab.settings_changed(shared).map(move |m| Message::Tab(id, m))
+            entry
+                .tab
+                .settings_changed(shared)
+                .map(move |m| Message::Tab(id, m))
         }))
     }
 
@@ -467,7 +496,11 @@ impl Meld {
             Command::NextTab | Command::PreviousTab => {
                 if let Some(i) = index {
                     let n = self.tabs.len();
-                    let next = if command == Command::NextTab { (i + 1) % n } else { (i + n - 1) % n };
+                    let next = if command == Command::NextTab {
+                        (i + 1) % n
+                    } else {
+                        (i + n - 1) % n
+                    };
                     self.active = Some(self.tabs[next].id);
                 }
                 Task::none()
@@ -531,7 +564,13 @@ impl Meld {
         }
         for entry in &self.tabs {
             let id = entry.id;
-            subs.push(entry.tab.subscription().with(id).map(|(id, m)| Message::Tab(id, m)));
+            subs.push(
+                entry
+                    .tab
+                    .subscription()
+                    .with(id)
+                    .map(|(id, m)| Message::Tab(id, m)),
+            );
         }
         Subscription::batch(subs)
     }
@@ -541,7 +580,10 @@ impl Meld {
         let body: Element<'_, Message> = match self.active_tab() {
             Some(entry) => {
                 let id = entry.id;
-                entry.tab.view(&self.shared).map(move |m| Message::Tab(id, m))
+                entry
+                    .tab
+                    .view(&self.shared)
+                    .map(move |m| Message::Tab(id, m))
             }
             None => container(text(tr!("No comparisons open")).style(ui::dim_text))
                 .center(Length::Fill)
@@ -575,8 +617,16 @@ impl Meld {
                 prefs.view(&self.shared).map(Message::Preferences),
                 Message::CloseDialog,
             ),
-            Some(Dialog::Shortcuts) => ui::modal::modal(base, dialogs::shortcuts(Message::CloseDialog), Message::CloseDialog),
-            Some(Dialog::About) => ui::modal::modal(base, dialogs::about(Message::CloseDialog), Message::CloseDialog),
+            Some(Dialog::Shortcuts) => ui::modal::modal(
+                base,
+                dialogs::shortcuts(Message::CloseDialog),
+                Message::CloseDialog,
+            ),
+            Some(Dialog::About) => ui::modal::modal(
+                base,
+                dialogs::about(Message::CloseDialog),
+                Message::CloseDialog,
+            ),
             Some(Dialog::ConfirmQuit(unsaved)) => ui::modal::modal(
                 base,
                 dialogs::confirm_quit(unsaved, Message::CloseDialog, Message::QuitAnyway),
@@ -605,9 +655,13 @@ impl Meld {
                 label = label.push(text(icon::MODIFIED).size(10));
             }
             label = label.push(
-                container(text(shorten_middle(&entry.tab.title(), 30)).size(14).wrapping(text::Wrapping::None))
-                    .max_width(240)
-                    .clip(true),
+                container(
+                    text(shorten_middle(&entry.tab.title(), 30))
+                        .size(14)
+                        .wrapping(text::Wrapping::None),
+                )
+                .max_width(240)
+                .clip(true),
             );
             let select = button(label)
                 .padding(iced::Padding::from([4, 6]).right(2))
@@ -625,16 +679,25 @@ impl Meld {
             .on_middle_press(Message::CloseTab(entry.id));
             tabs = tabs.push(iced::widget::tooltip(
                 tab_button,
-                container(text(entry.tab.tooltip()).size(13)).padding([4, 8]).style(ui::tooltip_box),
+                container(text(entry.tab.tooltip()).size(13))
+                    .padding([4, 8])
+                    .style(ui::tooltip_box),
                 iced::widget::tooltip::Position::Bottom,
             ));
         }
-        tabs = tabs.push(ui::tool_button(icon::ADD, tr!("New comparison (Ctrl+N)"), Some(Message::NewTab)));
+        tabs = tabs.push(ui::tool_button(
+            icon::ADD,
+            tr!("New comparison (Ctrl+N)"),
+            Some(Message::NewTab),
+        ));
 
         let toolbar: Element<'_, Message> = match self.active_tab() {
             Some(entry) => {
                 let id = entry.id;
-                entry.tab.toolbar(&self.shared).map(move |m| Message::Tab(id, m))
+                entry
+                    .tab
+                    .toolbar(&self.shared)
+                    .map(move |m| Message::Tab(id, m))
             }
             None => space::horizontal().into(),
         };
@@ -646,9 +709,19 @@ impl Meld {
                         scrollable::Scrollbar::new().width(2).scroller_width(2)
                     ))
                     .width(Length::FillPortion(3)),
-                container(toolbar).width(Length::FillPortion(2)).align_right(Length::FillPortion(2)),
-                ui::tool_button("🕘", tr!("Recent comparisons"), Some(Message::ToggleMenu(OpenMenu::Recent))),
-                ui::tool_button(icon::MENU, tr!("Main menu (F10)"), Some(Message::ToggleMenu(OpenMenu::Main))),
+                container(toolbar)
+                    .width(Length::FillPortion(2))
+                    .align_right(Length::FillPortion(2)),
+                ui::tool_button(
+                    "🕘",
+                    tr!("Recent comparisons"),
+                    Some(Message::ToggleMenu(OpenMenu::Recent))
+                ),
+                ui::tool_button(
+                    icon::MENU,
+                    tr!("Main menu (F10)"),
+                    Some(Message::ToggleMenu(OpenMenu::Main))
+                ),
             ]
             .spacing(8)
             .align_y(iced::Center),
@@ -691,17 +764,53 @@ impl Meld {
                 items.push(menu::Item::Separator);
             }
         }
-        items.push(menu::Item::toggle(tr!("Fullscreen"), self.fullscreen, Message::Command(Command::Fullscreen)));
-        items.push(menu::Item::action(tr!("Zoom In"), Some("Ctrl++"), Message::Command(Command::ZoomIn)));
-        items.push(menu::Item::action(tr!("Zoom Out"), Some("Ctrl+-"), Message::Command(Command::ZoomOut)));
-        items.push(menu::Item::action(tr!("Reset Zoom"), Some("Ctrl+0"), Message::Command(Command::ZoomReset)));
+        items.push(menu::Item::toggle(
+            tr!("Fullscreen"),
+            self.fullscreen,
+            Message::Command(Command::Fullscreen),
+        ));
+        items.push(menu::Item::action(
+            tr!("Zoom In"),
+            Some("Ctrl++"),
+            Message::Command(Command::ZoomIn),
+        ));
+        items.push(menu::Item::action(
+            tr!("Zoom Out"),
+            Some("Ctrl+-"),
+            Message::Command(Command::ZoomOut),
+        ));
+        items.push(menu::Item::action(
+            tr!("Reset Zoom"),
+            Some("Ctrl+0"),
+            Message::Command(Command::ZoomReset),
+        ));
         items.push(menu::Item::Separator);
-        items.push(menu::Item::action(tr!("Preferences"), Some("Ctrl+,"), Message::ShowDialog(DialogKind::Preferences)));
-        items.push(menu::Item::action(tr!("Keyboard Shortcuts"), None, Message::ShowDialog(DialogKind::Shortcuts)));
-        items.push(menu::Item::action(tr!("Help"), Some("F1"), Message::Command(Command::Help)));
-        items.push(menu::Item::action(tr!("About Meld"), None, Message::ShowDialog(DialogKind::About)));
+        items.push(menu::Item::action(
+            tr!("Preferences"),
+            Some("Ctrl+,"),
+            Message::ShowDialog(DialogKind::Preferences),
+        ));
+        items.push(menu::Item::action(
+            tr!("Keyboard Shortcuts"),
+            None,
+            Message::ShowDialog(DialogKind::Shortcuts),
+        ));
+        items.push(menu::Item::action(
+            tr!("Help"),
+            Some("F1"),
+            Message::Command(Command::Help),
+        ));
+        items.push(menu::Item::action(
+            tr!("About Meld"),
+            None,
+            Message::ShowDialog(DialogKind::About),
+        ));
         items.push(menu::Item::Separator);
-        items.push(menu::Item::action(tr!("Quit"), Some("Ctrl+Q"), Message::Command(Command::Quit)));
+        items.push(menu::Item::action(
+            tr!("Quit"),
+            Some("Ctrl+Q"),
+            Message::Command(Command::Quit),
+        ));
         items
     }
 
@@ -724,13 +833,18 @@ pub const APP_ID: &str = "org.gnome.Meld.Rust";
 
 /// The dark Meld icon, rasterised from the bundled SVG for the window.
 fn window_icon() -> Option<window::Icon> {
-    const SVG: &[u8] = include_bytes!("../../../data/icons/hicolor/scalable/apps/org.gnome.Meld-dark.svg");
+    const SVG: &[u8] =
+        include_bytes!("../../../data/icons/hicolor/scalable/apps/org.gnome.Meld-dark.svg");
     const SIZE: u32 = 256;
 
     let tree = resvg::usvg::Tree::from_data(SVG, &resvg::usvg::Options::default()).ok()?;
     let mut pixmap = resvg::tiny_skia::Pixmap::new(SIZE, SIZE)?;
     let scale = SIZE as f32 / tree.size().width().max(tree.size().height());
-    resvg::render(&tree, resvg::tiny_skia::Transform::from_scale(scale, scale), &mut pixmap.as_mut());
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
 
     let rgba = pixmap
         .pixels()

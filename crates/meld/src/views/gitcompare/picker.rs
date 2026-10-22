@@ -20,9 +20,9 @@ use meld_ailens::picker::{EntryKind, filter_entries};
 use meld_ailens::{PickerEntry, PickerSide, Revision, RevisionKind};
 use meld_forge::StateFilter;
 
-use crate::ui::ellipsis::{Mode, ellipsized};
 use super::popover::popover;
 use crate::ui;
+use crate::ui::ellipsis::{Mode, ellipsized};
 
 /// Most rows the list shows at once; typing narrows it down.
 pub const MAX_ROWS: usize = 400;
@@ -162,7 +162,10 @@ impl Picker {
         }
         if let Some(prs) = &mut self.prs {
             let known: HashSet<&Revision> = prs.entries.iter().map(|e| &e.revision).collect();
-            prs.search_results = entries.into_iter().filter(|e| !known.contains(&e.revision)).collect();
+            prs.search_results = entries
+                .into_iter()
+                .filter(|e| !known.contains(&e.revision))
+                .collect();
         }
         self.refilter_keeping_selection();
     }
@@ -228,7 +231,11 @@ impl Picker {
     /// The status line under the list.
     pub fn status_text(&self) -> String {
         if self.total > MAX_ROWS {
-            tr!("Showing {shown} of {total}; type to narrow down", shown = MAX_ROWS, total = self.total)
+            tr!(
+                "Showing {shown} of {total}; type to narrow down",
+                shown = MAX_ROWS,
+                total = self.total
+            )
         } else {
             self.status.clone()
         }
@@ -281,7 +288,10 @@ impl Picker {
         let y = self.selected as f32 * 38.0 + headings as f32 * 24.0 - 120.0;
         iced::widget::operation::scroll_to(
             self.list_id.clone(),
-            scrollable::AbsoluteOffset { x: None, y: Some(y.max(0.0)) },
+            scrollable::AbsoluteOffset {
+                x: None,
+                y: Some(y.max(0.0)),
+            },
         )
     }
 
@@ -296,7 +306,9 @@ impl Picker {
         let face = row![
             text(self.title()).size(13).style(ui::dim_text),
             // Long refs and commit subjects keep both ends
-            ellipsized(self.label.as_str(), Mode::Middle).size(14).max_width(LABEL_WIDTH),
+            ellipsized(self.label.as_str(), Mode::Middle)
+                .size(14)
+                .max_width(LABEL_WIDTH),
             text("▾").size(12),
         ]
         .spacing(6)
@@ -331,7 +343,10 @@ impl Picker {
             .into()
     }
 
-    fn popup<'a, M: Clone + 'a>(&'a self, map: impl Fn(Message) -> M + Copy + 'a) -> Element<'a, M> {
+    fn popup<'a, M: Clone + 'a>(
+        &'a self,
+        map: impl Fn(Message) -> M + Copy + 'a,
+    ) -> Element<'a, M> {
         let placeholder = if self.prs.is_some() {
             tr!("Branch, tag, commit message, author, SHA or pull request")
         } else {
@@ -349,23 +364,35 @@ impl Picker {
         for (index, entry) in self.rows.iter().enumerate() {
             if section != Some(entry.section.as_str()) {
                 list = list.push(
-                    container(text(section_label(entry.section.as_str())).size(13).font(ui::bold()))
-                        .padding(iced::Padding {
-                            top: if section.is_some() { 8.0 } else { 2.0 },
-                            bottom: 2.0,
-                            left: 6.0,
-                            right: 6.0,
-                        }),
+                    container(
+                        text(section_label(entry.section.as_str()))
+                            .size(13)
+                            .font(ui::bold()),
+                    )
+                    .padding(iced::Padding {
+                        top: if section.is_some() { 8.0 } else { 2.0 },
+                        bottom: 2.0,
+                        left: 6.0,
+                        right: 6.0,
+                    }),
                 );
                 section = Some(entry.section.as_str());
             }
-            list = list.push(entry_row(entry, index == self.selected, map(Message::Pick(index))));
+            list = list.push(entry_row(
+                entry,
+                index == self.selected,
+                map(Message::Pick(index)),
+            ));
         }
         if self.rows.is_empty() {
             list = list.push(
-                container(text(tr!("No matching revisions")).size(13).style(ui::dim_text))
-                    .padding(20)
-                    .center_x(Length::Fill),
+                container(
+                    text(tr!("No matching revisions"))
+                        .size(13)
+                        .style(ui::dim_text),
+                )
+                .padding(20)
+                .center_x(Length::Fill),
             );
         }
 
@@ -374,13 +401,21 @@ impl Picker {
             let filters = crate::forge::chips(
                 StateFilter::ALL
                     .iter()
-                    .map(|f| (crate::i18n::pgettext("pull request state", f.label()).to_string(), map(Message::PrFilter(*f))))
+                    .map(|f| {
+                        (
+                            crate::i18n::pgettext("pull request state", f.label()).to_string(),
+                            map(Message::PrFilter(*f)),
+                        )
+                    })
                     .collect(),
                 StateFilter::ALL.iter().position(|f| *f == prs.filter),
             );
-            let mut line = row![text(tr!("Pull requests")).size(12).style(ui::dim_text), filters]
-                .spacing(8)
-                .align_y(iced::Center);
+            let mut line = row![
+                text(tr!("Pull requests")).size(12).style(ui::dim_text),
+                filters
+            ]
+            .spacing(8)
+            .align_y(iced::Center);
             if prs.remotes.len() > 1 {
                 let remotes = prs
                     .remotes
@@ -414,7 +449,11 @@ impl Picker {
             body = body.push(text(status).size(11).style(ui::dim_text));
         }
         container(body)
-            .width(if self.prs.as_ref().is_some_and(|p| p.remotes.len() > 1) { 640 } else { 480 })
+            .width(if self.prs.as_ref().is_some_and(|p| p.remotes.len() > 1) {
+                640
+            } else {
+                480
+            })
             .max_height(560)
             .padding(8)
             .style(ui::popover)
@@ -450,8 +489,16 @@ pub fn entry_tooltip(entry: &PickerEntry) -> String {
     }
 }
 
-fn entry_row<'a, M: Clone + 'a>(entry: &'a PickerEntry, selected: bool, on_press: M) -> Element<'a, M> {
-    let mut texts = column![ellipsized(entry.label.as_str(), Mode::End).size(14).width(Length::Fill)];
+fn entry_row<'a, M: Clone + 'a>(
+    entry: &'a PickerEntry,
+    selected: bool,
+    on_press: M,
+) -> Element<'a, M> {
+    let mut texts = column![
+        ellipsized(entry.label.as_str(), Mode::End)
+            .size(14)
+            .width(Length::Fill)
+    ];
     if !entry.description.is_empty() {
         texts = texts.push(
             ellipsized(entry.description.as_str(), Mode::End)
@@ -461,16 +508,27 @@ fn entry_row<'a, M: Clone + 'a>(entry: &'a PickerEntry, selected: bool, on_press
         );
     }
     let row = button(
-        row![text(icon(entry)).size(14).width(18).center(), texts.width(Length::Fill)]
-            .spacing(8)
-            .align_y(iced::Center),
+        row![
+            text(icon(entry)).size(14).width(18).center(),
+            texts.width(Length::Fill)
+        ]
+        .spacing(8)
+        .align_y(iced::Center),
     )
     .width(Length::Fill)
     .padding([3, 6])
     .style(move |theme: &Theme, status| {
         let mut style = ui::flat_button(theme, status);
         if selected {
-            style.background = Some(theme.extended_palette().primary.weak.color.scale_alpha(0.5).into());
+            style.background = Some(
+                theme
+                    .extended_palette()
+                    .primary
+                    .weak
+                    .color
+                    .scale_alpha(0.5)
+                    .into(),
+            );
         }
         style
     })
@@ -504,11 +562,17 @@ fn picker_button(open: bool) -> impl Fn(&Theme, button::Status) -> button::Style
 
 /// The picker's label before the comparison resolved it (`_describe_revision`).
 pub fn describe_revision(revision: &Revision) -> String {
-    let worktree = revision.worktree.as_ref().and_then(|w| w.file_name()).map(|name| name.to_string_lossy());
+    let worktree = revision
+        .worktree
+        .as_ref()
+        .and_then(|w| w.file_name())
+        .map(|name| name.to_string_lossy());
     match (revision.kind, worktree) {
         (RevisionKind::Index, Some(name)) => tr!("Staged ({worktree})", worktree = name),
         (RevisionKind::Index, None) => tr!("Staged").into(),
-        (RevisionKind::WorkingTree, Some(name)) => tr!("Working Tree ({worktree})", worktree = name),
+        (RevisionKind::WorkingTree, Some(name)) => {
+            tr!("Working Tree ({worktree})", worktree = name)
+        }
         (RevisionKind::WorkingTree, None) => tr!("Working Tree").into(),
         (RevisionKind::Commit, _) => revision.ref_name.clone().unwrap_or_else(|| "HEAD".into()),
     }
@@ -595,11 +659,18 @@ mod tests {
         assert_eq!(outcome, Outcome::ScheduleSearch(1));
         // Every word matches (labels or SHAs); text with spaces can't be a ref
         assert!(p.rows().iter().all(|e| e.kind == EntryKind::Commit));
-        assert!(p.rows().iter().all(|e| e.search_text.contains("number") && e.search_text.contains("44")));
+        assert!(
+            p.rows()
+                .iter()
+                .all(|e| e.search_text.contains("number") && e.search_text.contains("44"))
+        );
         assert!(p.rows().iter().any(|e| e.label == "Change number 449"));
         assert_eq!(p.status_text(), "");
         // Something that could be a SHA is offered first
-        assert_eq!(p.update(Message::Query("c0ffee".into())), Outcome::ScheduleSearch(2));
+        assert_eq!(
+            p.update(Message::Query("c0ffee".into())),
+            Outcome::ScheduleSearch(2)
+        );
         assert_eq!(p.rows()[0].kind, EntryKind::Typed);
         assert_eq!(p.rows()[0].revision, Revision::commit("c0ffee"));
         assert_eq!(p.update(Message::Query(" ".into())), Outcome::None);
@@ -611,7 +682,10 @@ mod tests {
         p.update(Message::Query("old".into()));
         let old = build_entries(
             &PickerSources {
-                commits: &[commit(&"f".repeat(40), "An old change"), commit(&format!("{:040x}", 3), "Change number 3")],
+                commits: &[
+                    commit(&"f".repeat(40), "An old change"),
+                    commit(&format!("{:040x}", 3), "Change number 3"),
+                ],
                 now: Some(0.0),
                 ..Default::default()
             },
@@ -669,16 +743,33 @@ mod tests {
             ..Default::default()
         }));
         let kinds: Vec<EntryKind> = p.rows().iter().map(|e| e.kind).take(4).collect();
-        assert_eq!(kinds, [EntryKind::Head, EntryKind::Branch, EntryKind::PullRequest, EntryKind::PullRequest]);
+        assert_eq!(
+            kinds,
+            [
+                EntryKind::Head,
+                EntryKind::Branch,
+                EntryKind::PullRequest,
+                EntryKind::PullRequest
+            ]
+        );
         assert_eq!(p.rows()[4].kind, EntryKind::Commit);
         p.update(Message::Query("reviews".into()));
         let labels: Vec<&str> = p.rows().iter().map(|e| e.label.as_str()).collect();
         assert_eq!(labels, ["Use “reviews”", "#12 Add reviews"]);
         // Forge search results join, without repeating known ones
-        p.set_pr_search_results("reviews", vec![pr_entry(12, "Add reviews"), pr_entry(40, "More reviews")]);
+        p.set_pr_search_results(
+            "reviews",
+            vec![pr_entry(12, "Add reviews"), pr_entry(40, "More reviews")],
+        );
         let labels: Vec<&str> = p.rows().iter().map(|e| e.label.as_str()).collect();
-        assert_eq!(labels, ["Use “reviews”", "#12 Add reviews", "#40 More reviews"]);
-        assert_eq!(p.update(Message::PrFilter(StateFilter::Merged)), Outcome::PrFilter(StateFilter::Merged));
+        assert_eq!(
+            labels,
+            ["Use “reviews”", "#12 Add reviews", "#40 More reviews"]
+        );
+        assert_eq!(
+            p.update(Message::PrFilter(StateFilter::Merged)),
+            Outcome::PrFilter(StateFilter::Merged)
+        );
         assert_eq!(p.update(Message::PrRemote(1)), Outcome::PrRemote(1));
         assert!(p.prs().is_some());
         p.set_prs(None);

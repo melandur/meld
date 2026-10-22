@@ -5,7 +5,9 @@
 
 use std::path::{Path, PathBuf};
 
-use iced::widget::{button, column, container, pick_list, row, scrollable, space, stack, text, text_editor};
+use iced::widget::{
+    button, column, container, pick_list, row, scrollable, space, stack, text, text_editor,
+};
 use iced::{Background, Border, Element, Length, Theme};
 use meld_vc::MessageHistory;
 
@@ -89,8 +91,13 @@ const ALERT_WIDTH: f32 = 460.0;
 fn card(theme: &Theme) -> container::Style {
     let palette = theme.extended_palette();
     container::Style {
-        background: Some(Background::Color(palette.background.weak.color.scale_alpha(0.5))),
-        border: Border::default().rounded(6).width(1).color(palette.background.strong.color),
+        background: Some(Background::Color(
+            palette.background.weak.color.scale_alpha(0.5),
+        )),
+        border: Border::default()
+            .rounded(6)
+            .width(1)
+            .color(palette.background.strong.color),
         ..container::Style::default()
     }
 }
@@ -109,9 +116,13 @@ fn frame<'a>(
         button_row = button_row.push(b);
     }
     container(
-        column![text(title).size(18).font(ui::bold()), body.into(), button_row]
-            .spacing(16)
-            .width(Length::Fill),
+        column![
+            text(title).size(18).font(ui::bold()),
+            body.into(),
+            button_row
+        ]
+        .spacing(16)
+        .width(Length::Fill),
     )
     .padding(20)
     .width(width + 40.0)
@@ -124,7 +135,10 @@ fn heading<'a>(label: &'a str) -> Element<'a, Message> {
 }
 
 fn cancel_button<'a>() -> Element<'a, Message> {
-    button(text(tr!("Cancel"))).style(button::secondary).on_press(Message::CloseDialog).into()
+    button(text(tr!("Cancel")))
+        .style(button::secondary)
+        .on_press(Message::CloseDialog)
+        .into()
 }
 
 fn file_list<'a>(lines: Vec<String>) -> Element<'a, Message> {
@@ -236,7 +250,10 @@ pub fn view<'a>(dialog: &'a Dialog, shared: &'a Shared, location: &Path) -> Elem
 
 fn commit_view<'a>(commit: &'a CommitDialog, shared: &'a Shared) -> Element<'a, Message> {
     let files: Element<'a, Message> = match &commit.files {
-        None => text(tr!("Looking for files to commit…")).size(13).style(ui::dim_text).into(),
+        None => text(tr!("Looking for files to commit…"))
+            .size(13)
+            .style(ui::dim_text)
+            .into(),
         Some(Ok(lines)) => file_list(lines.clone()),
         Some(Err(e)) => text(e.clone()).size(13).style(text::danger).into(),
     };
@@ -258,29 +275,43 @@ fn commit_view<'a>(commit: &'a CommitDialog, shared: &'a Shared) -> Element<'a, 
         .on_action(Message::CommitEdit);
 
     let settings = &shared.settings;
-    let editor: Element<'a, Message> = if settings.vc_show_commit_margin && settings.vc_commit_margin > 0 {
-        let x = padding + settings.vc_commit_margin as f32 * char_width;
-        let line = container(space::vertical())
-            .width(1)
-            .height(Length::Fill)
-            .style(|theme: &Theme| container::Style {
-                background: Some(Background::Color(
-                    theme.extended_palette().background.strong.color.scale_alpha(0.8),
-                )),
-                ..container::Style::default()
-            });
-        stack![editor, row![space::horizontal().width(x), line].height(Length::Fill)].into()
-    } else {
-        editor.into()
-    };
+    let editor: Element<'a, Message> =
+        if settings.vc_show_commit_margin && settings.vc_commit_margin > 0 {
+            let x = padding + settings.vc_commit_margin as f32 * char_width;
+            let line = container(space::vertical())
+                .width(1)
+                .height(Length::Fill)
+                .style(|theme: &Theme| container::Style {
+                    background: Some(Background::Color(
+                        theme
+                            .extended_palette()
+                            .background
+                            .strong
+                            .color
+                            .scale_alpha(0.8),
+                    )),
+                    ..container::Style::default()
+                });
+            stack![
+                editor,
+                row![space::horizontal().width(x), line].height(Length::Fill)
+            ]
+            .into()
+        } else {
+            editor.into()
+        };
 
     let history = commit.history_items();
     let previous = row![
         text(tr!("Previous logs:")).size(14),
-        pick_list(history, commit.history_choice.clone(), Message::CommitHistory)
-            .placeholder("")
-            .text_size(13)
-            .width(Length::Fill),
+        pick_list(
+            history,
+            commit.history_choice.clone(),
+            Message::CommitHistory
+        )
+        .placeholder("")
+        .text_size(13)
+        .width(Length::Fill),
     ]
     .spacing(12)
     .align_y(iced::Center);
@@ -316,7 +347,11 @@ mod tests {
     #[test]
     fn names_relative_to_location() {
         let names = relative_names(
-            &[PathBuf::from("/r/a/b.txt"), PathBuf::from("/r"), PathBuf::from("/x/y")],
+            &[
+                PathBuf::from("/r/a/b.txt"),
+                PathBuf::from("/r"),
+                PathBuf::from("/x/y"),
+            ],
             Path::new("/r"),
         );
         assert_eq!(names, ["a/b.txt", "/r", "/x/y"]);

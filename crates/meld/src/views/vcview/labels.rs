@@ -30,7 +30,11 @@ pub fn choice_label(choice: &VcChoice) -> String {
 
 /// The backend chooser's tooltip.
 pub fn choices_tooltip(choices: &VcChoices) -> &'static str {
-    if choices.choices.iter().any(|c| c.enabled() && c.kind != VcKind::Null) {
+    if choices
+        .choices
+        .iter()
+        .any(|c| c.enabled() && c.kind != VcKind::Null)
+    {
         tr!("Choose which version control system to use")
     } else {
         tr!("No valid version control system found in this folder")
@@ -42,12 +46,23 @@ pub fn push_summary(summary: &str) -> String {
     let parse = || -> Option<String> {
         let (count, rest) = summary.split_once(' ')?;
         let commits: usize = count.parse().ok()?;
-        let rest = rest.strip_prefix("unpushed commits").or_else(|| rest.strip_prefix("unpushed commit"))?;
-        let commits_text = trn!("{} unpushed commit", "{} unpushed commits", commits, commits);
+        let rest = rest
+            .strip_prefix("unpushed commits")
+            .or_else(|| rest.strip_prefix("unpushed commit"))?;
+        let commits_text = trn!(
+            "{} unpushed commit",
+            "{} unpushed commits",
+            commits,
+            commits
+        );
         if rest.is_empty() {
             return Some(commits_text);
         }
-        let branches: usize = rest.strip_prefix(" in ")?.strip_suffix(" branches")?.parse().ok()?;
+        let branches: usize = rest
+            .strip_prefix(" in ")?
+            .strip_suffix(" branches")?
+            .parse()
+            .ok()?;
         let branches_text = trn!("{} branch", "{} branches", branches, branches);
         Some(tr!(
             "{unpushed_commits} in {unpushed_branches}",
@@ -70,8 +85,15 @@ pub fn extra(options: &str) -> String {
             "Staged" => tr!("Staged").to_string(),
             "Partially staged" => tr!("Partially staged").to_string(),
             _ => {
-                if let Some((old, new)) = item.strip_prefix("Mode changed from ").and_then(|r| r.split_once(" to ")) {
-                    tr!("Mode changed from {old_mode} to {new_mode}", old_mode = old, new_mode = new)
+                if let Some((old, new)) = item
+                    .strip_prefix("Mode changed from ")
+                    .and_then(|r| r.split_once(" to "))
+                {
+                    tr!(
+                        "Mode changed from {old_mode} to {new_mode}",
+                        old_mode = old,
+                        new_mode = new
+                    )
                 } else if let Some(rev) = item.strip_prefix("Rev ") {
                     tr!("Rev {}", rev)
                 } else {
@@ -90,10 +112,18 @@ pub fn diff_label(label: &str) -> String {
         (" — repository", |b| tr!("{} — repository", b)),
         (" — local", |b| tr!("{} — local", b)),
         (" — remote", |b| tr!("{} — remote", b)),
-        (" (working, repository)", |b| tr!("{} (working, repository)", b)),
-        (" (repository, working)", |b| tr!("{} (repository, working)", b)),
-        (" (local, merge, remote)", |b| tr!("{} (local, merge, remote)", b)),
-        (" (remote, merge, local)", |b| tr!("{} (remote, merge, local)", b)),
+        (" (working, repository)", |b| {
+            tr!("{} (working, repository)", b)
+        }),
+        (" (repository, working)", |b| {
+            tr!("{} (repository, working)", b)
+        }),
+        (" (local, merge, remote)", |b| {
+            tr!("{} (local, merge, remote)", b)
+        }),
+        (" (remote, merge, local)", |b| {
+            tr!("{} (remote, merge, local)", b)
+        }),
     ];
     for (suffix, translate) in forms {
         if let Some(base) = label.strip_suffix(suffix) {
@@ -102,7 +132,6 @@ pub fn diff_label(label: &str) -> String {
     }
     label.to_string()
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -114,10 +143,20 @@ mod tests {
         if crate::i18n::language().is_some() {
             return;
         }
-        for s in ["1 unpushed commit", "3 unpushed commits", "3 unpushed commits in 2 branches", "odd"] {
+        for s in [
+            "1 unpushed commit",
+            "3 unpushed commits",
+            "3 unpushed commits in 2 branches",
+            "odd",
+        ] {
             assert_eq!(push_summary(s), s);
         }
-        for s in ["Staged", "Mode changed from 000000 to 100644; Staged", "Rev 3", "other"] {
+        for s in [
+            "Staged",
+            "Mode changed from 000000 to 100644; Staged",
+            "Rev 3",
+            "other",
+        ] {
             assert_eq!(extra(s), s);
         }
         for s in ["a — local", "a.txt (repository, working)", "plain"] {

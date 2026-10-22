@@ -59,8 +59,8 @@ use iced::{Element, Font, Size, Subscription, Task, Vector};
 use meld_diff::{FileComparison, InlineCache, Syncpoints, TextBuffer, UndoAction, UndoSequence};
 use meld_files::{NewlineType, Newlines, TextEncoding};
 use meld_widgets::{
-    Action, Buffer, ChunkAction, Highlighter, InlineHighlight, LineFlash, MapScroll, MapStyle, Metrics, PaneStyle,
-    WrapLayout, WrapMode,
+    Action, Buffer, ChunkAction, Highlighter, InlineHighlight, LineFlash, MapScroll, MapStyle,
+    Metrics, PaneStyle, WrapLayout, WrapMode,
 };
 
 use crate::command::Command;
@@ -643,7 +643,8 @@ impl FileDiff {
         };
         diff.refresh_styles(shared);
         for pane in &mut diff.panes {
-            pane.buffer.set_indentation(diff.tab_width, diff.insert_spaces);
+            pane.buffer
+                .set_indentation(diff.tab_width, diff.insert_spaces);
         }
         diff.refresh_wraps();
         diff
@@ -672,7 +673,10 @@ impl FileDiff {
     }
 
     /// A single version-controlled file compared with its base revision.
-    pub fn new_vc_file(path: PathBuf, shared: &mut Shared) -> Result<(Self, Task<Message>), String> {
+    pub fn new_vc_file(
+        path: PathBuf,
+        shared: &mut Shared,
+    ) -> Result<(Self, Task<Message>), String> {
         let mut diff = Self::with_panes(2, shared);
         diff.panes[0].file.state = LoadState::Loading;
         diff.panes[1].file.state = LoadState::Loading;
@@ -809,22 +813,24 @@ impl FileDiff {
                 continue;
             }
             pane.hover = self.derived.highlights.get(i).cloned().unwrap_or_default();
-            pane.hover.extend(
-                pane.hover_lines
-                    .iter()
-                    .filter(|r| !r.is_empty())
-                    .map(|r| meld_widgets::LineHighlight {
+            pane.hover
+                .extend(pane.hover_lines.iter().filter(|r| !r.is_empty()).map(|r| {
+                    meld_widgets::LineHighlight {
                         lines: r.clone(),
                         kind: meld_widgets::ChunkKind::Error,
                         current: false,
-                    }),
-            );
+                    }
+                }));
         }
     }
 
     /// Whether files are being loaded or compared.
     pub fn is_loading(&self) -> bool {
-        self.job.is_some() || self.panes.iter().any(|p| p.file.state == LoadState::Loading)
+        self.job.is_some()
+            || self
+                .panes
+                .iter()
+                .any(|p| p.file.state == LoadState::Loading)
     }
 
     fn is_modified(&self, pane: usize) -> bool {
@@ -834,7 +840,10 @@ impl FileDiff {
     /// `on_undo_checkpointed`: track modified flags.
     fn process_undo_events(&mut self) {
         for event in self.undo.take_events() {
-            if let meld_diff::UndoEvent::Checkpointed { buffer, checkpointed } = event
+            if let meld_diff::UndoEvent::Checkpointed {
+                buffer,
+                checkpointed,
+            } = event
                 && let Some(pane) = self.panes.get_mut(buffer)
             {
                 pane.modified = !checkpointed;
@@ -868,11 +877,14 @@ impl FileDiff {
 
     fn refresh_styles(&mut self, shared: &Shared) {
         let n = self.panes.len();
-        let sides = meld_config::diff_sides(n, self.extras.diff_sides.as_ref().map(|s| s.as_slice()));
+        let sides =
+            meld_config::diff_sides(n, self.extras.diff_sides.as_ref().map(|s| s.as_slice()));
         self.styles = (0..n)
             .map(|i| style::pane_style(shared, &style::pane_colors(shared, sides[i])))
             .collect();
-        self.focus_colors = (0..n).map(|i| style::focus_color(shared, sides[i])).collect();
+        self.focus_colors = (0..n)
+            .map(|i| style::focus_color(shared, sides[i]))
+            .collect();
         // Link maps are side-less; only a two-way comparison has a side on
         // its left pane, and three-way ones have none.
         self.link_style = style::pane_style(shared, &style::link_colors(shared, sides[0]));
@@ -887,7 +899,11 @@ impl FileDiff {
     }
 
     pub fn title(&self) -> String {
-        tab_title(&self.labels(), &self.modified_flags(), self.extras.tab_label.as_deref())
+        tab_title(
+            &self.labels(),
+            &self.modified_flags(),
+            self.extras.tab_label.as_deref(),
+        )
     }
 
     pub fn tooltip(&self) -> String {
@@ -912,7 +928,12 @@ impl FileDiff {
             .collect()
     }
 
-    pub fn update(&mut self, message: Message, shared: &mut Shared, events: &mut Vec<Event>) -> Task<Message> {
+    pub fn update(
+        &mut self,
+        message: Message,
+        shared: &mut Shared,
+        events: &mut Vec<Event>,
+    ) -> Task<Message> {
         let task = self.handle(message, shared, events);
         self.after_message();
         task
@@ -927,7 +948,12 @@ impl FileDiff {
         self.refresh_decorations();
     }
 
-    fn handle(&mut self, message: Message, shared: &mut Shared, events: &mut Vec<Event>) -> Task<Message> {
+    fn handle(
+        &mut self,
+        message: Message,
+        shared: &mut Shared,
+        events: &mut Vec<Event>,
+    ) -> Task<Message> {
         match message {
             Message::Pane(pane, action) => self.pane_action(pane, action),
             Message::MapScroll(pane, s) => {
@@ -949,7 +975,9 @@ impl FileDiff {
                 self.gutter_action(from, to, index, action);
                 Task::none()
             }
-            Message::Loaded(generation, pane, result) => self.file_loaded(generation, pane, result, shared),
+            Message::Loaded(generation, pane, result) => {
+                self.file_loaded(generation, pane, result, shared)
+            }
             Message::Diffed(generation, result) => self.diff_done(generation, result),
             Message::Saved(pane, result) => self.file_saved(pane, result, shared, events),
             Message::SaveAsChosen(pane, path) => match path {
@@ -996,7 +1024,10 @@ impl FileDiff {
             },
             Message::Resolved(result) => {
                 if let Err(err) = result {
-                    events.push(Event::Notify(tr!("Could not mark the conflict resolved: {}", err)));
+                    events.push(Event::Notify(tr!(
+                        "Could not mark the conflict resolved: {}",
+                        err
+                    )));
                 }
                 self.finish_close(events)
             }
@@ -1041,7 +1072,10 @@ impl FileDiff {
                 if self.go_to.is_some() {
                     return self.handle(Message::GoToLineDone, shared, events);
                 }
-                if matches!(self.dialog, Some(Dialog::Encoding { .. } | Dialog::Language { .. })) {
+                if matches!(
+                    self.dialog,
+                    Some(Dialog::Encoding { .. } | Dialog::Language { .. })
+                ) {
                     self.dialog = None;
                 }
                 Task::none()
@@ -1049,7 +1083,12 @@ impl FileDiff {
         }
     }
 
-    pub fn command(&mut self, command: Command, shared: &mut Shared, events: &mut Vec<Event>) -> Task<Message> {
+    pub fn command(
+        &mut self,
+        command: Command,
+        shared: &mut Shared,
+        events: &mut Vec<Event>,
+    ) -> Task<Message> {
         if command == Command::Stop {
             return self.stop();
         }
@@ -1119,7 +1158,11 @@ impl FileDiff {
         Task::none()
     }
 
-    pub fn request_close(&mut self, _shared: &mut Shared, events: &mut Vec<Event>) -> Task<Message> {
+    pub fn request_close(
+        &mut self,
+        _shared: &mut Shared,
+        events: &mut Vec<Event>,
+    ) -> Task<Message> {
         self.close_state = CloseState::Closing;
         let modified = self.modified_flags();
         if !modified.iter().any(|m| *m) {
@@ -1138,7 +1181,8 @@ impl FileDiff {
         self.tab_width = settings.indent_width.max(1) as usize;
         self.insert_spaces = settings.insert_spaces_instead_of_tabs;
         for pane in &mut self.panes {
-            pane.buffer.set_indentation(self.tab_width, self.insert_spaces);
+            pane.buffer
+                .set_indentation(self.tab_width, self.insert_spaces);
         }
         self.show_overview_map = settings.show_overview_map;
         self.map_style = map_style(settings.overview_map_style);
@@ -1198,14 +1242,14 @@ impl FileDiff {
             iced::event::listen_with(|event, status, _window| match event {
                 iced::Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
                     match (key.as_ref(), status) {
-                        (keyboard::Key::Named(keyboard::key::Named::Escape), iced::event::Status::Captured) => {
-                            Some(Message::CapturedEscape)
-                        }
-                        (keyboard::Key::Named(keyboard::key::Named::Insert), iced::event::Status::Ignored)
-                            if modifiers.is_empty() =>
-                        {
-                            Some(Message::Act(Act::ToggleOverwrite))
-                        }
+                        (
+                            keyboard::Key::Named(keyboard::key::Named::Escape),
+                            iced::event::Status::Captured,
+                        ) => Some(Message::CapturedEscape),
+                        (
+                            keyboard::Key::Named(keyboard::key::Named::Insert),
+                            iced::event::Status::Ignored,
+                        ) if modifiers.is_empty() => Some(Message::Act(Act::ToggleOverwrite)),
                         _ => None,
                     }
                 }
@@ -1214,7 +1258,9 @@ impl FileDiff {
             iced::time::every(std::time::Duration::from_secs(2)).map(|_| Message::CheckDisk),
         ];
         if self.is_loading() {
-            subs.push(iced::time::every(std::time::Duration::from_millis(120)).map(|_| Message::Spin));
+            subs.push(
+                iced::time::every(std::time::Duration::from_millis(120)).map(|_| Message::Spin),
+            );
         }
         if !self.flashes.is_empty() {
             subs.push(iced::window::frames().map(Message::Tick));
@@ -1318,8 +1364,14 @@ mod tests {
 
     #[test]
     fn titles() {
-        let labels = vec!["/home/u/a/foo.txt".to_string(), "/home/u/b/foo.txt".to_string()];
-        assert_eq!(tab_title(&labels, &[false, true], None), "[a] foo.txt — [b] foo.txt*");
+        let labels = vec![
+            "/home/u/a/foo.txt".to_string(),
+            "/home/u/b/foo.txt".to_string(),
+        ];
+        assert_eq!(
+            tab_title(&labels, &[false, true], None),
+            "[a] foo.txt — [b] foo.txt*"
+        );
         let labels = vec![
             "/x/one.py".to_string(),
             "/x/two.py".to_string(),
@@ -1330,7 +1382,11 @@ mod tests {
             "/x/one.py — /x/two.py — <unnamed>"
         );
         assert_eq!(
-            tab_title(&labels, &[true, true, true], Some("foo (working, repository)")),
+            tab_title(
+                &labels,
+                &[true, true, true],
+                Some("foo (working, repository)")
+            ),
             "foo (working, repository)"
         );
     }

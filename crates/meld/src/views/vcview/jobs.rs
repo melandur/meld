@@ -14,7 +14,8 @@ use std::time::{Duration, Instant};
 use iced::futures::{SinkExt, Stream};
 use meld_vc::commit::{COMMIT_HISTORY_ID, DEFAULT_HISTORY_LENGTH};
 use meld_vc::{
-    Action, DiffOptions, DiffRequest, Entry, MessageHistory, StatusFilters, Vc, VcChoices, VcError, VcKind, VcRow,
+    Action, DiffOptions, DiffRequest, Entry, MessageHistory, StatusFilters, Vc, VcChoices, VcError,
+    VcKind, VcRow,
 };
 
 pub type SharedVc = Arc<Mutex<Box<dyn Vc>>>;
@@ -51,7 +52,9 @@ impl<T> std::fmt::Debug for Slot<T> {
 }
 
 /// Runs blocking work on tokio's blocking thread pool.
-pub async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T, String> {
+pub async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, String> {
     tokio::task::spawn_blocking(f)
         .await
         .map_err(|e| tr!("Background task failed: {}", e))
@@ -61,20 +64,23 @@ pub async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static)
 fn blocking_stream<E: Send + 'static>(
     f: impl FnOnce(&dyn Fn(E)) + Send + 'static,
 ) -> impl Stream<Item = E> {
-    iced::stream::channel(64, async move |mut out: iced::futures::channel::mpsc::Sender<E>| {
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let worker = tokio::task::spawn_blocking(move || {
-            f(&|event| {
-                let _ = tx.send(event);
-            })
-        });
-        while let Some(event) = rx.recv().await {
-            if out.send(event).await.is_err() {
-                break;
+    iced::stream::channel(
+        64,
+        async move |mut out: iced::futures::channel::mpsc::Sender<E>| {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let worker = tokio::task::spawn_blocking(move || {
+                f(&|event| {
+                    let _ = tx.send(event);
+                })
+            });
+            while let Some(event) = rx.recv().await {
+                if out.send(event).await.is_err() {
+                    break;
+                }
             }
-        }
-        let _ = worker.await;
-    })
+            let _ = worker.await;
+        },
+    )
 }
 
 // ----- Backends -----
@@ -197,7 +203,8 @@ pub fn scan(
                 ScanScope::Folder(folder) => {
                     emit(ScanEvent::Progress(tr!("Scanning repository").into()));
                     forget_below(&mut **vc, folder);
-                    vc.refresh_vc_state(Some(folder)).map_err(|e| e.to_string())?;
+                    vc.refresh_vc_state(Some(folder))
+                        .map_err(|e| e.to_string())?;
                     (folder.clone(), Some(folder.clone()))
                 }
             };
@@ -244,7 +251,8 @@ pub async fn refresh_entry(vc: SharedVc, path: PathBuf) -> Result<Entry, String>
     blocking(move || {
         let mut vc = lock(&vc);
         forget_below(&mut **vc, &path);
-        vc.refresh_vc_state(Some(&path)).map_err(|e| e.to_string())?;
+        vc.refresh_vc_state(Some(&path))
+            .map_err(|e| e.to_string())?;
         Ok(vc.get_entry(&path))
     })
     .await?
@@ -273,7 +281,12 @@ pub enum CommandEvent {
 /// Builds the commands for `action` and runs them one after another,
 /// echoing each command line and its output to the console
 /// (`_command_iter`).
-pub fn run_action(vc: SharedVc, action: Action, files: Vec<PathBuf>, message: String) -> impl Stream<Item = CommandEvent> {
+pub fn run_action(
+    vc: SharedVc,
+    action: Action,
+    files: Vec<PathBuf>,
+    message: String,
+) -> impl Stream<Item = CommandEvent> {
     blocking_stream(move |emit| {
         let commands = lock(&vc).action_commands(action, &files, &message);
         let commands = match commands {
@@ -296,9 +309,15 @@ pub fn run_action(vc: SharedVc, action: Action, files: Vec<PathBuf>, message: St
             match command.run() {
                 Ok(output) => {
                     if !output.stderr.is_empty() {
-                        emit(CommandEvent::Console(ConsoleKind::Error, output.stderr.clone()));
+                        emit(CommandEvent::Console(
+                            ConsoleKind::Error,
+                            output.stderr.clone(),
+                        ));
                     }
-                    emit(CommandEvent::Console(ConsoleKind::Output, format!("{}\n", output.stdout)));
+                    emit(CommandEvent::Console(
+                        ConsoleKind::Output,
+                        format!("{}\n", output.stdout),
+                    ));
                     failed |= !output.success();
                 }
                 Err(e) => {
@@ -310,7 +329,11 @@ pub fn run_action(vc: SharedVc, action: Action, files: Vec<PathBuf>, message: St
                 refresh.push(command.working_dir.clone());
             }
         }
-        emit(CommandEvent::Finished { refresh, failed, error });
+        emit(CommandEvent::Finished {
+            refresh,
+            failed,
+            error,
+        });
     })
 }
 
@@ -318,12 +341,19 @@ pub fn run_action(vc: SharedVc, action: Action, files: Vec<PathBuf>, message: St
 
 /// Prepares comparisons for `paths` (`run_diff`): base revisions and
 /// conflict sides are written to temporary files.
-pub async fn prepare_diffs(vc: SharedVc, paths: Vec<PathBuf>, options: DiffOptions) -> Vec<Result<DiffRequest, String>> {
+pub async fn prepare_diffs(
+    vc: SharedVc,
+    paths: Vec<PathBuf>,
+    options: DiffOptions,
+) -> Vec<Result<DiffRequest, String>> {
     blocking(move || {
         let vc = lock(&vc);
         paths
             .iter()
-            .map(|p| meld_vc::prepare_diff(&**vc, p, &options).map_err(|e| format!("{}: {e}", p.display())))
+            .map(|p| {
+                meld_vc::prepare_diff(&**vc, p, &options)
+                    .map_err(|e| format!("{}: {e}", p.display()))
+            })
             .collect()
     })
     .await
@@ -346,15 +376,21 @@ pub async fn commit_info(vc: SharedVc, selected: Vec<PathBuf>) -> CommitInfo {
         let prefill = vc.get_commit_message_prefill().filter(|m| !m.is_empty());
         drop(vc);
         let history = MessageHistory::default_path()
-            .and_then(|p| match MessageHistory::load(&p, COMMIT_HISTORY_ID, DEFAULT_HISTORY_LENGTH) {
-                Ok(h) => Some(h),
-                Err(e) => {
-                    log::warn!("could not read commit message history: {e}");
-                    None
+            .and_then(|p| {
+                match MessageHistory::load(&p, COMMIT_HISTORY_ID, DEFAULT_HISTORY_LENGTH) {
+                    Ok(h) => Some(h),
+                    Err(e) => {
+                        log::warn!("could not read commit message history: {e}");
+                        None
+                    }
                 }
             })
             .unwrap_or_default();
-        CommitInfo { files, prefill, history }
+        CommitInfo {
+            files,
+            prefill,
+            history,
+        }
     })
     .await
     .unwrap_or_else(|e| CommitInfo {
@@ -400,11 +436,13 @@ pub async fn trash(paths: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<Stri
                 Ok(_) => trashed.push(path),
                 // Like Meld, folders that can't be trashed are not
                 // deleted recursively.
-                Err(meld_files::TrashError::NeedsConfirmation { is_dir: true, .. }) => errors.push(format!(
-                    "{}: {}",
-                    tr!("Error deleting {}", path.display()),
-                    tr!("Deleting remote folders is not supported")
-                )),
+                Err(meld_files::TrashError::NeedsConfirmation { is_dir: true, .. }) => {
+                    errors.push(format!(
+                        "{}: {}",
+                        tr!("Error deleting {}", path.display()),
+                        tr!("Deleting remote folders is not supported")
+                    ))
+                }
                 Err(meld_files::TrashError::NeedsConfirmation { .. }) => confirm.push(path),
                 Err(e) => errors.push(format!("{}: {e}", tr!("Error deleting {}", path.display()))),
             }

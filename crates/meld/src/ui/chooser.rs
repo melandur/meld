@@ -66,7 +66,12 @@ pub fn save_file(title: &str, dir: Option<PathBuf>, name: Option<String>) -> Tas
     run(Mode::Save, title, dir, name)
 }
 
-fn run(mode: Mode, title: &str, dir: Option<PathBuf>, name: Option<String>) -> Task<Option<PathBuf>> {
+fn run(
+    mode: Mode,
+    title: &str,
+    dir: Option<PathBuf>,
+    name: Option<String>,
+) -> Task<Option<PathBuf>> {
     // Without a folder the portal would show its own working directory.
     let dir = dir
         .filter(|d| d.is_dir())
@@ -104,7 +109,12 @@ fn backends() -> Vec<Backend> {
     let forced = std::env::var("MELD_FILE_CHOOSER").ok();
     match backend_from_env(forced.as_deref()) {
         Some(backend) => vec![backend, Backend::Builtin],
-        None => vec![Backend::Portal, Backend::Zenity, Backend::Kdialog, Backend::Builtin],
+        None => vec![
+            Backend::Portal,
+            Backend::Zenity,
+            Backend::Kdialog,
+            Backend::Builtin,
+        ],
     }
 }
 
@@ -218,12 +228,21 @@ fn kdialog_args(options: &Options) -> Vec<std::ffi::OsString> {
         Mode::Save => "--getsavefilename",
     };
     let start = start_path(options).unwrap_or_else(|| PathBuf::from("."));
-    vec!["--title".into(), options.title.clone().into(), flag.into(), start.into_os_string()]
+    vec![
+        "--title".into(),
+        options.title.clone().into(),
+        flag.into(),
+        start.into_os_string(),
+    ]
 }
 
 /// The outcome of a zenity/kdialog run: the path, `None` when cancelled,
 /// or an error when the program could not show its dialog.
-fn external_result(code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> Result<Option<PathBuf>, String> {
+fn external_result(
+    code: Option<i32>,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> Result<Option<PathBuf>, String> {
     let stderr_text = String::from_utf8_lossy(stderr);
     let lower = stderr_text.to_lowercase();
     // GTK and Qt exit with 1 when there is no display, like a cancel.
@@ -267,7 +286,9 @@ pub struct Request {
 
 impl std::fmt::Debug for Request {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Request").field("options", &self.options).finish_non_exhaustive()
+        f.debug_struct("Request")
+            .field("options", &self.options)
+            .finish_non_exhaustive()
     }
 }
 
@@ -297,7 +318,10 @@ fn notify() -> &'static Notify {
 
 async fn builtin(options: Options) -> Option<PathBuf> {
     let (request, reply) = Request::new(options);
-    QUEUE.lock().unwrap_or_else(|e| e.into_inner()).push(request);
+    QUEUE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(request);
     notify().notify_one();
     reply.await.ok().flatten()
 }
@@ -571,15 +595,23 @@ impl Dialog {
             );
         }
         if self.entries.is_empty() {
-            list = list.push(container(text(tr!("No matches")).size(13).style(super::dim_text)).padding([3, 8]));
+            list = list.push(
+                container(text(tr!("No matches")).size(13).style(super::dim_text)).padding([3, 8]),
+            );
         }
 
         let status: Element<'_, Message> = if let Some(path) = &self.confirm {
-            let name = path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default();
-            text(tr!("A file named “{name}” already exists. Replace it?", name = name))
-                .size(13)
-                .font(super::bold())
-                .into()
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_default();
+            text(tr!(
+                "A file named “{name}” already exists. Replace it?",
+                name = name
+            ))
+            .size(13)
+            .font(super::bold())
+            .into()
         } else if let Some(error) = &self.error {
             text(error.as_str())
                 .size(13)
@@ -588,7 +620,10 @@ impl Dialog {
                 })
                 .into()
         } else {
-            text(tr!("Tab completes the name; Enter opens folders")).size(12).style(super::dim_text).into()
+            text(tr!("Tab completes the name; Enter opens folders"))
+                .size(12)
+                .style(super::dim_text)
+                .into()
         };
 
         let body = column![
@@ -598,7 +633,9 @@ impl Dialog {
                 .padding([4, 8])
                 .on_input(Message::Input)
                 .on_submit(Message::Accept),
-            container(scrollable(list).height(280)).width(Length::Fill).style(listing_box),
+            container(scrollable(list).height(280))
+                .width(Length::Fill)
+                .style(listing_box),
             status,
         ]
         .spacing(8);
@@ -618,8 +655,14 @@ impl Dialog {
             self.request.options.title.as_str(),
             body,
             vec![
-                button(text(tr!("Cancel"))).style(button::secondary).on_press(Message::Cancel).into(),
-                button(text(accept_label)).style(accept_style).on_press(Message::Accept).into(),
+                button(text(tr!("Cancel")))
+                    .style(button::secondary)
+                    .on_press(Message::Cancel)
+                    .into(),
+                button(text(accept_label))
+                    .style(accept_style)
+                    .on_press(Message::Accept)
+                    .into(),
             ],
         )
     }
@@ -628,7 +671,10 @@ impl Dialog {
 fn listing_box(theme: &iced::Theme) -> container::Style {
     let palette = theme.extended_palette();
     container::Style {
-        border: iced::Border::default().rounded(4).width(1).color(palette.background.strong.color),
+        border: iced::Border::default()
+            .rounded(4)
+            .width(1)
+            .color(palette.background.strong.color),
         ..container::Style::default()
     }
 }
@@ -694,10 +740,17 @@ fn list_dir(dir: &Path, prefix: &str, folders_only: bool) -> Vec<Entry> {
 /// for folders), or to the longest prefix the matches share. `None` when
 /// that adds nothing.
 fn complete(prefix: &str, entries: &[Entry]) -> Option<String> {
-    let matches: Vec<&Entry> = entries.iter().filter(|e| e.name.starts_with(prefix)).collect();
+    let matches: Vec<&Entry> = entries
+        .iter()
+        .filter(|e| e.name.starts_with(prefix))
+        .collect();
     match matches.as_slice() {
         [] => None,
-        [only] => Some(format!("{}{}", only.name, if only.is_dir { "/" } else { "" })),
+        [only] => Some(format!(
+            "{}{}",
+            only.name,
+            if only.is_dir { "/" } else { "" }
+        )),
         [first, rest @ ..] => {
             let mut common = first.name.as_str();
             for e in rest {
@@ -727,7 +780,11 @@ mod tests {
         }
     }
 
-    fn dialog(mode: Mode, dir: &Path, name: Option<&str>) -> (Dialog, oneshot::Receiver<Option<PathBuf>>) {
+    fn dialog(
+        mode: Mode,
+        dir: &Path,
+        name: Option<&str>,
+    ) -> (Dialog, oneshot::Receiver<Option<PathBuf>>) {
         let (request, rx) = Request::new(options(mode, Some(dir), name));
         (Dialog::new(request).0, rx)
     }
@@ -758,21 +815,50 @@ mod tests {
     #[test]
     fn external_programs_get_title_mode_and_start() {
         let o = options(Mode::Save, Some(Path::new("/srv/x")), Some("a b.txt"));
-        let args: Vec<String> = zenity_args(&o).iter().map(|a| a.to_string_lossy().into_owned()).collect();
+        let args: Vec<String> = zenity_args(&o)
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
         assert_eq!(
             args,
-            ["--file-selection", "--title=Pick", "--save", "--confirm-overwrite", "--filename=/srv/x/a b.txt"]
+            [
+                "--file-selection",
+                "--title=Pick",
+                "--save",
+                "--confirm-overwrite",
+                "--filename=/srv/x/a b.txt"
+            ]
         );
         let o = options(Mode::OpenFolder, Some(Path::new("/srv/x/")), None);
-        let args: Vec<String> = zenity_args(&o).iter().map(|a| a.to_string_lossy().into_owned()).collect();
-        assert_eq!(args, ["--file-selection", "--title=Pick", "--directory", "--filename=/srv/x/"]);
-        let args: Vec<String> = kdialog_args(&o).iter().map(|a| a.to_string_lossy().into_owned()).collect();
-        assert_eq!(args, ["--title", "Pick", "--getexistingdirectory", "/srv/x/"]);
+        let args: Vec<String> = zenity_args(&o)
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            [
+                "--file-selection",
+                "--title=Pick",
+                "--directory",
+                "--filename=/srv/x/"
+            ]
+        );
+        let args: Vec<String> = kdialog_args(&o)
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            ["--title", "Pick", "--getexistingdirectory", "/srv/x/"]
+        );
     }
 
     #[test]
     fn external_results_tell_cancel_from_failure() {
-        assert_eq!(external_result(Some(0), b"/a b/c\n", b""), Ok(Some(PathBuf::from("/a b/c"))));
+        assert_eq!(
+            external_result(Some(0), b"/a b/c\n", b""),
+            Ok(Some(PathBuf::from("/a b/c")))
+        );
         assert_eq!(external_result(Some(1), b"", b""), Ok(None));
         assert!(external_result(Some(1), b"", b"Gtk-WARNING: cannot open display: :9").is_err());
         assert!(external_result(Some(255), b"", b"").is_err());
@@ -824,11 +910,17 @@ mod tests {
     fn tab_completes_and_folders_open() {
         let tmp = tree();
         let (mut d, _rx) = dialog(Mode::OpenFile, tmp.path(), None);
-        send(&mut d, Message::Input(format!("{}/alph", tmp.path().display())));
+        send(
+            &mut d,
+            Message::Input(format!("{}/alph", tmp.path().display())),
+        );
         send(&mut d, Message::Complete);
         assert_eq!(d.input, format!("{}/alpha/", tmp.path().display()));
         // Enter on a folder opens it instead of answering.
-        send(&mut d, Message::Input(format!("{}/alps", tmp.path().display())));
+        send(
+            &mut d,
+            Message::Input(format!("{}/alps", tmp.path().display())),
+        );
         let closed = send(&mut d, Message::Accept);
         assert!(!closed);
         assert_eq!(d.input, format!("{}/alps/", tmp.path().display()));
@@ -870,9 +962,15 @@ mod tests {
         assert!(!closed);
         assert_eq!(d.confirm, Some(tmp.path().join("apple.txt")));
         // Editing the path drops the confirmation.
-        send(&mut d, Message::Input(format!("{}/apple.tx", tmp.path().display())));
+        send(
+            &mut d,
+            Message::Input(format!("{}/apple.tx", tmp.path().display())),
+        );
         assert_eq!(d.confirm, None);
-        send(&mut d, Message::Input(format!("{}/apple.txt", tmp.path().display())));
+        send(
+            &mut d,
+            Message::Input(format!("{}/apple.txt", tmp.path().display())),
+        );
         send(&mut d, Message::Accept);
         let closed = send(&mut d, Message::Accept);
         assert!(closed);
@@ -883,7 +981,10 @@ mod tests {
     fn save_needs_an_existing_folder() {
         let tmp = tree();
         let (mut d, mut rx) = dialog(Mode::Save, tmp.path(), None);
-        send(&mut d, Message::Input(format!("{}/nope/new.txt", tmp.path().display())));
+        send(
+            &mut d,
+            Message::Input(format!("{}/nope/new.txt", tmp.path().display())),
+        );
         let closed = send(&mut d, Message::Accept);
         assert!(!closed && d.error.is_some());
         send(&mut d, Message::Input("new.txt".into()));

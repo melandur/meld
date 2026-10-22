@@ -41,7 +41,11 @@ pub fn is_writable(path: &Path) -> bool {
     }
 }
 
-pub fn load(path: PathBuf, target: Option<PathBuf>, options: LoadOptions) -> Result<Loaded, LoadFailure> {
+pub fn load(
+    path: PathBuf,
+    target: Option<PathBuf>,
+    options: LoadOptions,
+) -> Result<Loaded, LoadFailure> {
     let text = meld_files::load_text_file(&path, &options).map_err(|err| match err {
         LoadError::LineTooLong { line, length } => LoadFailure::LineTooLong(tr!(
             "Line {line_number} exceeded maximum line length ({line_length} > {LINE_LENGTH_LIMIT}).\n\nLoading files with very long lines may make Meld slow or unresponsive.",
@@ -53,7 +57,11 @@ pub fn load(path: PathBuf, target: Option<PathBuf>, options: LoadOptions) -> Res
     })?;
     let mtime = meld_files::file_mtime(&path);
     let writable = is_writable(target.as_deref().unwrap_or(&path));
-    Ok(Loaded { text, mtime, writable })
+    Ok(Loaded {
+        text,
+        mtime,
+        writable,
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -142,7 +150,11 @@ pub fn run_diff(job: DiffJob, cancel: Arc<AtomicBool>) -> Result<DiffDone, DiffE
         let file_langs: Vec<Option<&'static str>> = job
             .paths
             .iter()
-            .map(|p| p.as_deref().and_then(meld_files::language_from_path).map(|l| l.id))
+            .map(|p| {
+                p.as_deref()
+                    .and_then(meld_files::language_from_path)
+                    .map(|l| l.id)
+            })
             .collect();
         let texts: Vec<String> = cmp.buffers().iter().map(TextBuffer::text).collect();
         meld_files::choose_pane_languages(&file_langs, |pane| {
@@ -173,7 +185,11 @@ pub fn run_diff(job: DiffJob, cancel: Arc<AtomicBool>) -> Result<DiffDone, DiffE
 
 /// Opens the version control comparison of a single file (`run_diff` of
 /// the VC view for one file).
-pub fn prepare_vc_file(path: PathBuf, left_is_local: bool, merge_order_key: &str) -> Result<super::Options, String> {
+pub fn prepare_vc_file(
+    path: PathBuf,
+    left_is_local: bool,
+    merge_order_key: &str,
+) -> Result<super::Options, String> {
     use meld_vc::{DiffOptions, DiffRequest, MergeFileOrder};
     let location = path.parent().map(Path::to_path_buf).unwrap_or_default();
     let candidate = meld_vc::get_vcs(&location)

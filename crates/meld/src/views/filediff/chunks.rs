@@ -311,7 +311,15 @@ pub fn corresponding_line(
 ) -> usize {
     if (pane == 0 && new_pane == 2) || (pane == 2 && new_pane == 0) {
         let proxy = corresponding_line(differ, line_counts, chunk, line, pane, 1, new_cursor_line);
-        return corresponding_line(differ, line_counts, chunk, proxy, 1, new_pane, new_cursor_line);
+        return corresponding_line(
+            differ,
+            line_counts,
+            chunk,
+            proxy,
+            1,
+            new_pane,
+            new_cursor_line,
+        );
     }
     let cur = chunk.and_then(|c| differ.get_chunk(c, pane, Some(new_pane)));
     let (cur_start, cur_end, new_start, new_end) = match cur {

@@ -174,10 +174,22 @@ mod tests {
     #[test]
     fn admin_dirs_map_to_work_tree() {
         assert_eq!(outside_admin_dir(Path::new("/r/.git")), PathBuf::from("/r"));
-        assert_eq!(outside_admin_dir(Path::new("/r/.git/refs/heads")), PathBuf::from("/r"));
-        assert_eq!(outside_admin_dir(Path::new("/r/sub/.hg")), PathBuf::from("/r/sub"));
-        assert_eq!(outside_admin_dir(Path::new("/r/src")), PathBuf::from("/r/src"));
-        assert_eq!(outside_admin_dir(Path::new("/r/.github")), PathBuf::from("/r/.github"));
+        assert_eq!(
+            outside_admin_dir(Path::new("/r/.git/refs/heads")),
+            PathBuf::from("/r")
+        );
+        assert_eq!(
+            outside_admin_dir(Path::new("/r/sub/.hg")),
+            PathBuf::from("/r/sub")
+        );
+        assert_eq!(
+            outside_admin_dir(Path::new("/r/src")),
+            PathBuf::from("/r/src")
+        );
+        assert_eq!(
+            outside_admin_dir(Path::new("/r/.github")),
+            PathBuf::from("/r/.github")
+        );
     }
 
     #[test]

@@ -22,15 +22,17 @@ use std::sync::{Arc, Mutex};
 use iced::keyboard::{Key, Modifiers, key::Named};
 use iced::widget::operation::{self, AbsoluteOffset};
 use iced::widget::{
-    button, checkbox, column, container, mouse_area, pick_list, rich_text, row, scrollable, space, span, text,
-    text_editor,
+    button, checkbox, column, container, mouse_area, pick_list, rich_text, row, scrollable, space,
+    span, text, text_editor,
 };
-use iced::{Background, Border, Color, Element, Font, Length, Point, Subscription, Task, Theme, mouse, task};
+use iced::{
+    Background, Border, Color, Element, Font, Length, Point, Subscription, Task, Theme, mouse, task,
+};
 use meld_config::StatusColors;
 use meld_vc::view::{remove_needs_confirmation, tab_labels};
 use meld_vc::{
-    Action, ActionSensitivity, CommitSettings, DiffOptions, DiffRequest, Entry, MergeFileOrder, State,
-    StatusFilters, Vc, VcChoices, VcKind,
+    Action, ActionSensitivity, CommitSettings, DiffOptions, DiffRequest, Entry, MergeFileOrder,
+    State, StatusFilters, Vc, VcChoices, VcKind,
 };
 
 use crate::command::Command;
@@ -75,7 +77,12 @@ pub enum Filter {
 }
 
 impl Filter {
-    const STATES: [Filter; 4] = [Filter::Modified, Filter::Normal, Filter::Unknown, Filter::Ignored];
+    const STATES: [Filter; 4] = [
+        Filter::Modified,
+        Filter::Normal,
+        Filter::Unknown,
+        Filter::Ignored,
+    ];
 
     fn label(self) -> &'static str {
         match self {
@@ -327,7 +334,11 @@ pub enum Message {
 }
 
 impl VcView {
-    pub fn new(location: PathBuf, auto_compare: bool, shared: &mut Shared) -> (Self, Task<Message>) {
+    pub fn new(
+        location: PathBuf,
+        auto_compare: bool,
+        shared: &mut Shared,
+    ) -> (Self, Task<Message>) {
         // A repository's own folder (`.git`) opens as its work tree
         let location = meld_vc::paths::outside_admin_dir(&meld_vc::paths::abspath(&location));
         let title = location
@@ -387,9 +398,12 @@ impl VcView {
         self.progress = tr!("Opening archive").into();
         self.update_sensitivity();
         let path = self.location.clone();
-        Task::perform(jobs::blocking(move || meld_files::open_archive(&path)), move |result| {
-            Message::ArchiveOpened(generation, OpenedArchive::new(result.and_then(|r| r)))
-        })
+        Task::perform(
+            jobs::blocking(move || meld_files::open_archive(&path)),
+            move |result| {
+                Message::ArchiveOpened(generation, OpenedArchive::new(result.and_then(|r| r)))
+            },
+        )
     }
 
     pub fn title(&self) -> String {
@@ -415,9 +429,10 @@ impl VcView {
         self.phase = Phase::Loading;
         self.progress = tr!("Looking for version control systems").into();
         self.update_sensitivity();
-        Task::perform(jobs::load(self.location.clone(), self.kind), move |result| {
-            Message::Loaded(generation, result)
-        })
+        Task::perform(
+            jobs::load(self.location.clone(), self.kind),
+            move |result| Message::Loaded(generation, result),
+        )
     }
 
     fn install(&mut self, opened: jobs::OpenedVc) {
@@ -431,7 +446,13 @@ impl VcView {
             tr!("{vc} comparison:", vc = labels::vc_name(ui.kind())),
             location.display()
         );
-        if self.tree.root().and_then(|r| r.entry()).map(|e| e.path.as_path()) != Some(location.as_path()) {
+        if self
+            .tree
+            .root()
+            .and_then(|r| r.entry())
+            .map(|e| e.path.as_path())
+            != Some(location.as_path())
+        {
             self.tree = TreeModel::root_only(&location);
         }
         self.location = location;
@@ -481,7 +502,9 @@ impl VcView {
                 Refresh::Full => self.scan(true),
                 Refresh::Folder(folder) => self.scan_scope(ScanScope::Folder(folder)),
                 Refresh::Entry(path) => match self.vc.clone() {
-                    Some(vc) => Task::perform(jobs::refresh_entry(vc, path), Message::EntryRefreshed),
+                    Some(vc) => {
+                        Task::perform(jobs::refresh_entry(vc, path), Message::EntryRefreshed)
+                    }
                     None => Task::none(),
                 },
             },
@@ -505,9 +528,10 @@ impl VcView {
         self.phase = Phase::Scanning;
         self.progress = tr!("Scanning repository").into();
         let cancel = Arc::new(AtomicBool::new(false));
-        let (task, handle) = Task::run(jobs::scan(vc, self.filters, scope, cancel.clone()), move |event| {
-            Message::Scan(generation, event)
-        })
+        let (task, handle) = Task::run(
+            jobs::scan(vc, self.filters, scope, cancel.clone()),
+            move |event| Message::Scan(generation, event),
+        )
         .abortable();
         self.scan_handle = Some(handle);
         self.scan_cancel = Some(cancel);
@@ -555,15 +579,26 @@ impl VcView {
         if paths.is_empty() {
             return Task::none();
         }
-        Task::perform(jobs::prepare_diffs(vc, paths, Self::diff_options(shared)), Message::DiffsReady)
+        Task::perform(
+            jobs::prepare_diffs(vc, paths, Self::diff_options(shared)),
+            Message::DiffsReady,
+        )
     }
 
-    fn run_action(&mut self, action: Action, files: Vec<PathBuf>, message: String) -> Task<Message> {
+    fn run_action(
+        &mut self,
+        action: Action,
+        files: Vec<PathBuf>,
+        message: String,
+    ) -> Task<Message> {
         let Some(vc) = self.vc.clone() else {
             return Task::none();
         };
         self.running += 1;
-        Task::run(jobs::run_action(vc, action, files, message), Message::Command)
+        Task::run(
+            jobs::run_action(vc, action, files, message),
+            Message::Command,
+        )
     }
 
     fn action(&mut self, act: Act, shared: &mut Shared) -> Task<Message> {
@@ -577,7 +612,9 @@ impl VcView {
                 let Some(vc) = self.vc.clone() else {
                     return Task::none();
                 };
-                self.dialog = Some(Dialog::Commit(Box::new(CommitDialog::new(selected.clone()))));
+                self.dialog = Some(Dialog::Commit(Box::new(CommitDialog::new(
+                    selected.clone(),
+                ))));
                 Task::batch([
                     Task::perform(jobs::commit_info(vc, selected), Message::CommitInfo),
                     operation::focus(dialogs::COMMIT_EDITOR),
@@ -620,17 +657,21 @@ impl VcView {
                 let errors: Vec<String> = selected
                     .iter()
                     .filter_map(|path| {
-                        let argv = match meld_files::open_external_command(path, 0, &settings, false) {
-                            Ok(argv) => argv,
-                            Err(e) => return Some(e.to_string()),
-                        };
+                        let argv =
+                            match meld_files::open_external_command(path, 0, &settings, false) {
+                                Ok(argv) => argv,
+                                Err(e) => return Some(e.to_string()),
+                            };
                         meld_files::external::spawn_detached(&argv)
                             .err()
                             .map(|e| tr!("Failed to launch {}: {}", argv.join(" "), e))
                     })
                     .collect();
                 if !errors.is_empty() {
-                    self.report(tr!("Could not open the file externally"), Some(errors.join("\n")));
+                    self.report(
+                        tr!("Could not open the file externally"),
+                        Some(errors.join("\n")),
+                    );
                 }
                 Task::none()
             }
@@ -653,9 +694,16 @@ impl VcView {
                 let mut tasks = Vec::new();
                 if !message.trim().is_empty() {
                     commit.history.prepend(&message);
-                    tasks.push(Task::perform(jobs::save_history(commit.history.clone()), |_| Message::Done));
+                    tasks.push(Task::perform(
+                        jobs::save_history(commit.history.clone()),
+                        |_| Message::Done,
+                    ));
                 }
-                tasks.push(self.run_action(Action::Commit, std::mem::take(&mut commit.selected), message));
+                tasks.push(self.run_action(
+                    Action::Commit,
+                    std::mem::take(&mut commit.selected),
+                    message,
+                ));
                 Task::batch(tasks)
             }
             Dialog::Push(_) => self.run_action(Action::Push, Vec::new(), String::new()),
@@ -693,7 +741,10 @@ impl VcView {
                     };
                     events.push(Event::Open(Comparison::Files {
                         paths: paths.into_iter().map(Some).collect(),
-                        labels: labels.iter().map(|l| l.as_deref().map(labels::diff_label).unwrap_or_default()).collect(),
+                        labels: labels
+                            .iter()
+                            .map(|l| l.as_deref().map(labels::diff_label).unwrap_or_default())
+                            .collect(),
                         merge_output,
                         auto_merge,
                         extras: FileExtras {
@@ -708,7 +759,10 @@ impl VcView {
             }
         }
         if !errors.is_empty() {
-            self.report(tr!("Could not open the comparison"), Some(errors.join("\n")));
+            self.report(
+                tr!("Could not open the comparison"),
+                Some(errors.join("\n")),
+            );
         }
     }
 
@@ -736,7 +790,11 @@ impl VcView {
             return Task::none();
         };
         let top = row as f32 * ROW_HEIGHT;
-        let height = if self.viewport_height > 0.0 { self.viewport_height } else { return Task::none() };
+        let height = if self.viewport_height > 0.0 {
+            self.viewport_height
+        } else {
+            return Task::none();
+        };
         let target = if top < self.scroll_y {
             top
         } else if top + ROW_HEIGHT > self.scroll_y + height {
@@ -789,7 +847,12 @@ impl VcView {
 
     // ----- Update -----
 
-    pub fn update(&mut self, message: Message, shared: &mut Shared, events: &mut Vec<Event>) -> Task<Message> {
+    pub fn update(
+        &mut self,
+        message: Message,
+        shared: &mut Shared,
+        events: &mut Vec<Event>,
+    ) -> Task<Message> {
         match message {
             Message::Loaded(generation, result) => {
                 if generation != self.load_gen {
@@ -812,7 +875,9 @@ impl VcView {
                         return self.scan(true);
                     }
                     Ok(None) => {}
-                    Err(e) => self.report(tr!("Could not open the version control system"), Some(e)),
+                    Err(e) => {
+                        self.report(tr!("Could not open the version control system"), Some(e))
+                    }
                 }
                 self.update_sensitivity();
             }
@@ -848,14 +913,17 @@ impl VcView {
                         return self.scan(true);
                     }
                     Ok(None) => {}
-                    Err(e) => self.report(tr!("Could not open the version control system"), Some(e)),
+                    Err(e) => {
+                        self.report(tr!("Could not open the version control system"), Some(e))
+                    }
                 }
                 self.update_sensitivity();
             }
             Message::ChooseLocation => {
                 // Starts next to the current folder, like `set_file()` did.
                 let start = self.location.parent().map(std::path::Path::to_path_buf);
-                return ui::chooser::pick_folder(tr!("Select Folder"), start).map(Message::LocationChosen);
+                return ui::chooser::pick_folder(tr!("Select Folder"), start)
+                    .map(Message::LocationChosen);
             }
             Message::LocationChosen(path) => {
                 if let Some(path) = path {
@@ -953,7 +1021,11 @@ impl VcView {
                         self.console.push(ConsoleLine { kind, text });
                     }
                 }
-                CommandEvent::Finished { refresh, failed, error } => {
+                CommandEvent::Finished {
+                    refresh,
+                    failed,
+                    error,
+                } => {
                     self.running = self.running.saturating_sub(1);
                     if failed && !shared.settings.vc_console_visible {
                         shared.settings.vc_console_visible = true;
@@ -963,7 +1035,9 @@ impl VcView {
                         self.report(tr!("Error running command"), Some(error));
                     }
                     self.update_sensitivity();
-                    if let Some(refresh) = tree::plan_command_refresh(&self.tree, self.filters.flatten, &refresh) {
+                    if let Some(refresh) =
+                        tree::plan_command_refresh(&self.tree, self.filters.flatten, &refresh)
+                    {
                         return self.request_refresh(refresh);
                     }
                 }
@@ -1018,14 +1092,22 @@ impl VcView {
 
             Message::ToggleConsole => Self::toggle_console(shared, events),
             Message::ClearConsole => self.console.clear(),
-            Message::DragStart(available) => {                self.drag = Some(Drag { start: None, available });
+            Message::DragStart(available) => {
+                self.drag = Some(Drag {
+                    start: None,
+                    available,
+                });
             }
             Message::DragMove(y) => {
                 if let Some(drag) = &mut self.drag {
                     match drag.start {
-                        None => drag.start = Some((y, clamp_tree_height(self.pane_position, drag.available))),
+                        None => {
+                            drag.start =
+                                Some((y, clamp_tree_height(self.pane_position, drag.available)))
+                        }
                         Some((start_y, start_height)) => {
-                            self.pane_position = clamp_tree_height(start_height + y - start_y, drag.available);
+                            self.pane_position =
+                                clamp_tree_height(start_height + y - start_y, drag.available);
                         }
                     }
                 }
@@ -1117,9 +1199,9 @@ impl VcView {
                 }
                 return Task::perform(
                     jobs::blocking(move || {
-                        meld_files::external::spawn_detached(&meld_files::external::open_containing_folder_command(
-                            &path,
-                        ))
+                        meld_files::external::spawn_detached(
+                            &meld_files::external::open_containing_folder_command(&path),
+                        )
                         .err()
                         .map(|e| e.to_string())
                     }),
@@ -1155,14 +1237,22 @@ impl VcView {
         }
         self.popup = None;
         self.search = Some(TreeSearch::new(text));
-        Task::batch([operation::focus(search::INPUT_ID), self.search_step(Step::First)])
+        Task::batch([
+            operation::focus(search::INPUT_ID),
+            self.search_step(Step::First),
+        ])
     }
 
     fn search_step(&mut self, step: Step) -> Task<Message> {
         let Some(search) = &self.search else {
             return Task::none();
         };
-        match search::find_row(&self.tree.visible_names(), &search.text, self.tree.cursor_row(), step) {
+        match search::find_row(
+            &self.tree.visible_names(),
+            &search.text,
+            self.tree.cursor_row(),
+            step,
+        ) {
             Some(row) => {
                 self.tree.move_to_row(row, false);
                 self.update_sensitivity();
@@ -1172,7 +1262,11 @@ impl VcView {
         }
     }
 
-    fn scan_done(&mut self, result: &Result<jobs::ScanOutput, String>, shared: &Shared) -> Task<Message> {
+    fn scan_done(
+        &mut self,
+        result: &Result<jobs::ScanOutput, String>,
+        shared: &Shared,
+    ) -> Task<Message> {
         self.phase = Phase::Idle;
         self.progress.clear();
         self.scan_handle = None;
@@ -1229,7 +1323,12 @@ impl VcView {
         }
     }
 
-    pub fn command(&mut self, command: Command, shared: &mut Shared, events: &mut Vec<Event>) -> Task<Message> {
+    pub fn command(
+        &mut self,
+        command: Command,
+        shared: &mut Shared,
+        events: &mut Vec<Event>,
+    ) -> Task<Message> {
         if command == Command::Stop {
             if self.popup.take().is_some() || self.search.take().is_some() {
                 return Task::none();
@@ -1260,7 +1359,11 @@ impl VcView {
         }
     }
 
-    pub fn request_close(&mut self, _shared: &mut Shared, events: &mut Vec<Event>) -> Task<Message> {
+    pub fn request_close(
+        &mut self,
+        _shared: &mut Shared,
+        events: &mut Vec<Event>,
+    ) -> Task<Message> {
         self.cancel_scan();
         events.push(Event::Close { status: 0 });
         Task::none()
@@ -1281,14 +1384,23 @@ impl VcView {
     pub fn subscription(&self) -> Subscription<Message> {
         let mut subs = Vec::new();
         if self.drag.is_some() {
-            subs.push(iced::event::listen_with(|event, _status, _window| match event {
-                iced::Event::Mouse(mouse::Event::CursorMoved { position }) => Some(Message::DragMove(position.y)),
-                iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => Some(Message::DragEnd),
-                _ => None,
-            }));
+            subs.push(iced::event::listen_with(
+                |event, _status, _window| match event {
+                    iced::Event::Mouse(mouse::Event::CursorMoved { position }) => {
+                        Some(Message::DragMove(position.y))
+                    }
+                    iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+                        Some(Message::DragEnd)
+                    }
+                    _ => None,
+                },
+            ));
         }
         if self.search.is_some() {
-            subs.push(iced::time::every(std::time::Duration::from_millis(500)).map(|_| Message::SearchTick));
+            subs.push(
+                iced::time::every(std::time::Duration::from_millis(500))
+                    .map(|_| Message::SearchTick),
+            );
         }
         Subscription::batch(subs)
     }
@@ -1298,9 +1410,17 @@ impl VcView {
     pub fn toolbar<'a>(&'a self, shared: &'a Shared) -> Element<'a, Message> {
         let scanning = self.phase != Phase::Idle;
         let refresh = if scanning {
-            ui::tool_button(icon::STOP, ui::with_shortcut(tr!("Stop the scan"), "Escape"), Some(Message::Stop))
+            ui::tool_button(
+                icon::STOP,
+                ui::with_shortcut(tr!("Stop the scan"), "Escape"),
+                Some(Message::Stop),
+            )
         } else {
-            ui::tool_button(icon::REFRESH, ui::with_shortcut(tr!("Refresh Comparison"), "Ctrl+R"), Some(Message::Refresh))
+            ui::tool_button(
+                icon::REFRESH,
+                ui::with_shortcut(tr!("Refresh Comparison"), "Ctrl+R"),
+                Some(Message::Refresh),
+            )
         };
         let console_tip = if shared.settings.vc_console_visible {
             ui::with_shortcut(tr!("Hide the console output"), "F9")
@@ -1312,7 +1432,9 @@ impl VcView {
             ui::tool_button(
                 icon::UP,
                 ui::with_shortcut(tr!("Go to the previous change"), "Alt+Up"),
-                self.tree.find_change(false).map(|_| Message::PreviousChange)
+                self.tree
+                    .find_change(false)
+                    .map(|_| Message::PreviousChange)
             ),
             ui::tool_button(
                 icon::DOWN,
@@ -1328,14 +1450,15 @@ impl VcView {
     }
 
     pub fn menu_items(&self, shared: &Shared) -> Vec<menu::Item<Message>> {
-        let action = |label: &str, shortcut: Option<&'static str>, act: Act| match self.act_message(act) {
-            Some(message) => menu::Item::action(label, shortcut, message),
-            None => menu::Item::Action {
-                label: label.to_string(),
-                shortcut,
-                message: None,
-            },
-        };
+        let action =
+            |label: &str, shortcut: Option<&'static str>, act: Act| match self.act_message(act) {
+                Some(message) => menu::Item::action(label, shortcut, message),
+                None => menu::Item::Action {
+                    label: label.to_string(),
+                    shortcut,
+                    message: None,
+                },
+            };
         let mut items = vec![
             menu::Item::Heading(tr!("Version control").into()),
             action(tr!("Compare"), Some("Return"), Act::Compare),
@@ -1349,14 +1472,22 @@ impl VcView {
             action(tr!("Revert…"), None, Act::Revert),
             action(tr!("Resolve Conflict"), None, Act::Resolve),
             action(tr!("Delete"), Some("Delete"), Act::Delete),
-            action(tr!("Open Externally"), Some("Ctrl+Shift+O"), Act::OpenExternal),
+            action(
+                tr!("Open Externally"),
+                Some("Ctrl+Shift+O"),
+                Act::OpenExternal,
+            ),
             menu::Item::Separator,
             menu::Item::action(tr!("Refresh Comparison"), Some("Ctrl+R"), Message::Refresh),
             menu::Item::Separator,
             menu::Item::Heading(tr!("Version Filters").into()),
         ];
         for filter in Filter::STATES {
-            items.push(menu::Item::toggle(filter.label(), filter.get(&self.filters), Message::ToggleFilter(filter)));
+            items.push(menu::Item::toggle(
+                filter.label(),
+                filter.get(&self.filters),
+                Message::ToggleFilter(filter),
+            ));
         }
         items.push(menu::Item::toggle(
             Filter::Flatten.label(),
@@ -1369,7 +1500,11 @@ impl VcView {
             shared.settings.vc_console_visible,
             Message::ToggleConsole,
         ));
-        items.push(menu::Item::action(tr!("Clear Console"), None, Message::ClearConsole));
+        items.push(menu::Item::action(
+            tr!("Clear Console"),
+            None,
+            Message::ClearConsole,
+        ));
         items
     }
 
@@ -1405,14 +1540,22 @@ impl VcView {
         };
         content = content.push(lower);
         // Right clicks on rows open the context menu where they happened.
-        let mut base: Element<'a, Message> = keys::key_handler(content.height(Length::Fill), |_, _| None, Message::Modifiers)
-            .on_right_click(Message::ContextMenu)
-            .into();
+        let mut base: Element<'a, Message> = keys::key_handler(
+            content.height(Length::Fill),
+            |_, _| None,
+            Message::Modifiers,
+        )
+        .on_right_click(Message::ContextMenu)
+        .into();
         if let Some(Popup::Context(point)) = self.popup {
             base = menu::context(base, self.context_items(), point, Message::ClosePopup);
         }
         match &self.dialog {
-            Some(dialog) => ui::modal::modal(base, dialogs::view(dialog, shared, &self.location), Message::CloseDialog),
+            Some(dialog) => ui::modal::modal(
+                base,
+                dialogs::view(dialog, shared, &self.location),
+                Message::CloseDialog,
+            ),
             None => base,
         }
     }
@@ -1421,7 +1564,11 @@ impl VcView {
     fn tree_area<'a>(&'a self, shared: &'a Shared) -> Element<'a, Message> {
         let searching = self.search.is_some();
         keys::key_handler(
-            search::overlay(self.tree_view(shared), self.search.as_ref(), Message::SearchInput),
+            search::overlay(
+                self.tree_view(shared),
+                self.search.as_ref(),
+                Message::SearchInput,
+            ),
             move |key, modifiers| {
                 nav_key(key, modifiers).or_else(|| {
                     if searching {
@@ -1465,7 +1612,11 @@ impl VcView {
     }
 
     /// The location label's drop-down, below the action bar.
-    fn path_popover<'a>(&'a self, base: impl Into<Element<'a, Message>>, picked: Option<usize>) -> Element<'a, Message> {
+    fn path_popover<'a>(
+        &'a self,
+        base: impl Into<Element<'a, Message>>,
+        picked: Option<usize>,
+    ) -> Element<'a, Message> {
         let popover = pathlabel::popover(
             &self.location,
             picked,
@@ -1490,30 +1641,74 @@ impl VcView {
     }
 
     fn action_bar(&self) -> Element<'_, Message> {
-        let tool = |glyph: &'static str, tip: String, act: Act| ui::tool_button(glyph, tip, self.act_message(act));
+        let tool = |glyph: &'static str, tip: String, act: Act| {
+            ui::tool_button(glyph, tip, self.act_message(act))
+        };
         let commit = ui::text_button(tr!("Commit…"), self.act_message(Act::Commit));
         let commit = iced::widget::tooltip(
             commit,
-            container(text(ui::with_shortcut(tr!("Commit changes to version control"), "Ctrl+M")).size(13))
-                .padding([4, 8])
-                .style(ui::tooltip_box),
+            container(
+                text(ui::with_shortcut(
+                    tr!("Commit changes to version control"),
+                    "Ctrl+M",
+                ))
+                .size(13),
+            )
+            .padding([4, 8])
+            .style(ui::tooltip_box),
             iced::widget::tooltip::Position::Bottom,
         );
         let actions = row![
             commit,
             ui::separator(true),
-            tool("⇣", tr!("Pull remote changes to the local repository").to_string(), Act::Update),
-            tool("⇡", tr!("Push local changes to remote").to_string(), Act::Push),
+            tool(
+                "⇣",
+                tr!("Pull remote changes to the local repository").to_string(),
+                Act::Update
+            ),
+            tool(
+                "⇡",
+                tr!("Push local changes to remote").to_string(),
+                Act::Push
+            ),
             ui::separator(true),
             tool("+", tr!("Add to version control").to_string(), Act::Add),
-            tool(icon::UNDO, tr!("Remove staged changes").to_string(), Act::Unstage),
-            tool("−", tr!("Remove from version control").to_string(), Act::Remove),
-            tool("⟲", tr!("Revert working copy to original state").to_string(), Act::Revert),
-            tool("✓", tr!("Mark as resolved in version control").to_string(), Act::Resolve),
+            tool(
+                icon::UNDO,
+                tr!("Remove staged changes").to_string(),
+                Act::Unstage
+            ),
+            tool(
+                "−",
+                tr!("Remove from version control").to_string(),
+                Act::Remove
+            ),
+            tool(
+                "⟲",
+                tr!("Revert working copy to original state").to_string(),
+                Act::Revert
+            ),
+            tool(
+                "✓",
+                tr!("Mark as resolved in version control").to_string(),
+                Act::Resolve
+            ),
             ui::separator(true),
-            tool("⇄", ui::with_shortcut(tr!("Compare selected files"), "Return"), Act::Compare),
-            tool("↗", ui::with_shortcut(tr!("Open in an external editor"), "Ctrl+Shift+O"), Act::OpenExternal),
-            tool("🗑", tr!("Delete the selected files from the working copy").to_string(), Act::Delete),
+            tool(
+                "⇄",
+                ui::with_shortcut(tr!("Compare selected files"), "Return"),
+                Act::Compare
+            ),
+            tool(
+                "↗",
+                ui::with_shortcut(tr!("Open in an external editor"), "Ctrl+Shift+O"),
+                Act::OpenExternal
+            ),
+            tool(
+                "🗑",
+                tr!("Delete the selected files from the working copy").to_string(),
+                Act::Delete
+            ),
         ]
         .spacing(2)
         .height(28)
@@ -1522,10 +1717,16 @@ impl VcView {
         let open = matches!(self.popup, Some(Popup::Path(_)));
         let label = button(
             row![
-                container(text(display_path(&self.location)).size(14).wrapping(text::Wrapping::None))
-                    .width(Length::Fill)
-                    .clip(true),
-                text(if open { "▴" } else { "▾" }).size(12).style(ui::dim_text),
+                container(
+                    text(display_path(&self.location))
+                        .size(14)
+                        .wrapping(text::Wrapping::None)
+                )
+                .width(Length::Fill)
+                .clip(true),
+                text(if open { "▴" } else { "▾" })
+                    .size(12)
+                    .style(ui::dim_text),
             ]
             .spacing(4)
             .align_y(iced::Center),
@@ -1535,7 +1736,11 @@ impl VcView {
         .style(ui::tab_button(open))
         .on_press(Message::PathLabel);
         let location = row![
-            ui::tool_button(icon::FOLDER, tr!("Open version controlled folder"), Some(Message::ChooseLocation)),
+            ui::tool_button(
+                icon::FOLDER,
+                tr!("Open version controlled folder"),
+                Some(Message::ChooseLocation)
+            ),
             label,
         ]
         .spacing(4)
@@ -1558,15 +1763,23 @@ impl VcView {
                         .text_size(13)
                         .padding([4, 8])
                         .width(Length::Shrink),
-                    container(text(labels::choices_tooltip(choices)).size(13)).padding([4, 8]).style(ui::tooltip_box),
+                    container(text(labels::choices_tooltip(choices)).size(13))
+                        .padding([4, 8])
+                        .style(ui::tooltip_box),
                     // Not below: the tooltip would cover the open menu.
                     iced::widget::tooltip::Position::Left,
                 )
                 .into()
             }
-            Some(choices) => text(choices.choices.first().map(labels::choice_label).unwrap_or_default())
-                .size(13)
-                .into(),
+            Some(choices) => text(
+                choices
+                    .choices
+                    .first()
+                    .map(labels::choice_label)
+                    .unwrap_or_default(),
+            )
+            .size(13)
+            .into(),
             None => text("…").size(13).style(ui::dim_text).into(),
         };
 
@@ -1574,7 +1787,10 @@ impl VcView {
             row![
                 actions,
                 space::horizontal().width(Length::FillPortion(1)),
-                container(location).clip(true).width(Length::FillPortion(4)).center_x(Length::FillPortion(4)),
+                container(location)
+                    .clip(true)
+                    .width(Length::FillPortion(4))
+                    .center_x(Length::FillPortion(4)),
                 space::horizontal().width(Length::FillPortion(1)),
                 chooser,
             ]
@@ -1587,7 +1803,9 @@ impl VcView {
     }
 
     fn filter_bar(&self) -> Element<'_, Message> {
-        let mut filters = row![text(tr!("Show:")).size(13).style(ui::dim_text)].spacing(14).align_y(iced::Center);
+        let mut filters = row![text(tr!("Show:")).size(13).style(ui::dim_text)]
+            .spacing(14)
+            .align_y(iced::Center);
         for filter in Filter::STATES {
             filters = filters.push(
                 checkbox(filter.get(&self.filters))
@@ -1620,7 +1838,10 @@ impl VcView {
             row![
                 filters.height(20),
                 space::horizontal(),
-                text(status).size(13).style(ui::dim_text).wrapping(text::Wrapping::None),
+                text(status)
+                    .size(13)
+                    .style(ui::dim_text)
+                    .wrapping(text::Wrapping::None),
             ]
             .spacing(8)
             .align_y(iced::Center),
@@ -1646,12 +1867,17 @@ impl VcView {
         .style(ui::header_bar);
 
         let visible = self.tree.visible();
-        let height = if self.viewport_height > 0.0 { self.viewport_height } else { 1200.0 };
+        let height = if self.viewport_height > 0.0 {
+            self.viewport_height
+        } else {
+            1200.0
+        };
         let first = ((self.scroll_y / ROW_HEIGHT).floor().max(0.0) as usize).min(visible.len());
         let last = (first + (height / ROW_HEIGHT).ceil() as usize + 2).min(visible.len());
         let colors = shared.style.status_colors();
 
-        let mut rows = column![space::vertical().height(first as f32 * ROW_HEIGHT)].width(Length::Fill);
+        let mut rows =
+            column![space::vertical().height(first as f32 * ROW_HEIGHT)].width(Length::Fill);
         for (row, &id) in visible.iter().enumerate().take(last).skip(first) {
             rows = rows.push(self.row_view(row, id, &colors));
         }
@@ -1662,21 +1888,36 @@ impl VcView {
             .on_scroll(Message::Scrolled)
             .width(Length::Fill)
             .height(Length::Fill);
-        column![header, ui::separator(false), body].height(Length::Fill).into()
+        column![header, ui::separator(false), body]
+            .height(Length::Fill)
+            .into()
     }
 
-    fn row_view<'a>(&'a self, row: usize, id: NodeId, colors: &StatusColors) -> Element<'a, Message> {
+    fn row_view<'a>(
+        &'a self,
+        row: usize,
+        id: NodeId,
+        colors: &StatusColors,
+    ) -> Element<'a, Message> {
         let node = self.tree.node(id);
         let state = node.state();
         let look = StateLook::of(state, colors);
 
         let expander: Element<'a, Message> = if self.tree.has_children(id) {
-            button(text(if self.tree.is_expanded(id) { "▾" } else { "▸" }).size(13).center())
-                .padding(0)
-                .width(16)
-                .style(ui::flat_button)
-                .on_press(Message::ToggleRow(id))
-                .into()
+            button(
+                text(if self.tree.is_expanded(id) {
+                    "▾"
+                } else {
+                    "▸"
+                })
+                .size(13)
+                .center(),
+            )
+            .padding(0)
+            .width(16)
+            .style(ui::flat_button)
+            .on_press(Message::ToggleRow(id))
+            .into()
         } else {
             space::horizontal().width(16).into()
         };
@@ -1702,12 +1943,20 @@ impl VcView {
                 )
             }
             NodeKind::Empty(label) => {
-                let label = if label == meld_vc::view::EMPTY_LABEL { tr!("(Empty)").to_string() } else { label.clone() };
+                let label = if label == meld_vc::view::EMPTY_LABEL {
+                    tr!("(Empty)").to_string()
+                } else {
+                    label.clone()
+                };
                 ("", label, String::new(), "", String::new())
             }
-            NodeKind::Error(label) => {
-                ("⚠", label.clone(), String::new(), crate::i18n::gettext(state.label()), String::new())
-            }
+            NodeKind::Error(label) => (
+                "⚠",
+                label.clone(),
+                String::new(),
+                crate::i18n::gettext(state.label()),
+                String::new(),
+            ),
         };
 
         let mut font = Font::DEFAULT;
@@ -1734,16 +1983,26 @@ impl VcView {
         .spacing(4)
         .align_y(iced::Center);
 
-        let cell = |content: Element<'a, Message>, width: Length| container(content).width(width).clip(true);
-        let status = text(status).size(13).wrapping(text::Wrapping::None).font(if state.is_emphasized() {
-            ui::bold()
-        } else {
-            Font::DEFAULT
-        });
+        let cell = |content: Element<'a, Message>, width: Length| {
+            container(content).width(width).clip(true)
+        };
+        let status =
+            text(status)
+                .size(13)
+                .wrapping(text::Wrapping::None)
+                .font(if state.is_emphasized() {
+                    ui::bold()
+                } else {
+                    Font::DEFAULT
+                });
         let line = row![
             cell(name_cell.into(), Length::FillPortion(5)),
             cell(
-                text(location).size(13).style(ui::dim_text).wrapping(text::Wrapping::None).into(),
+                text(location)
+                    .size(13)
+                    .style(ui::dim_text)
+                    .wrapping(text::Wrapping::None)
+                    .into(),
                 Length::FillPortion(3)
             ),
             cell(status.into(), Length::Fixed(STATUS_WIDTH)),
@@ -1792,8 +2051,10 @@ impl VcView {
             }
             let text = line.text.strip_suffix('\n').unwrap_or(&line.text);
             lines = lines.push(
-                rich_text::<(), Message, Theme, iced::Renderer>([span(text).font(span_font).color_maybe(color)])
-                    .size(13),
+                rich_text::<(), Message, Theme, iced::Renderer>([span(text)
+                    .font(span_font)
+                    .color_maybe(color)])
+                .size(13),
             );
         }
         let output = scrollable(container(lines).padding([4, 8]))
@@ -1806,7 +2067,10 @@ impl VcView {
             row![
                 text(tr!("Console output")).size(13).font(ui::bold()),
                 space::horizontal(),
-                ui::text_button(tr!("Clear"), (!self.console.is_empty()).then_some(Message::ClearConsole)),
+                ui::text_button(
+                    tr!("Clear"),
+                    (!self.console.is_empty()).then_some(Message::ClearConsole)
+                ),
             ]
             .padding([0, 8])
             .align_y(iced::Center),
@@ -1829,7 +2093,9 @@ impl VcView {
 /// The tree's height for a pane position, leaving room for the console
 /// in `available`.
 fn clamp_tree_height(position: f32, available: f32) -> f32 {
-    position.min(available - MIN_CONSOLE_HEIGHT).max(MIN_TREE_HEIGHT)
+    position
+        .min(available - MIN_CONSOLE_HEIGHT)
+        .max(MIN_TREE_HEIGHT)
 }
 
 /// Maps unconsumed key presses over the tree to navigation.
@@ -1900,9 +2166,12 @@ impl StateLook {
 
 fn row_style(theme: &Theme, selected: bool, cursor: bool) -> container::Style {
     let palette = theme.extended_palette();
-    let background = selected.then(|| Background::Color(palette.primary.weak.color.scale_alpha(0.45)));
+    let background =
+        selected.then(|| Background::Color(palette.primary.weak.color.scale_alpha(0.45)));
     let border = if cursor {
-        Border::default().width(1).color(palette.primary.base.color.scale_alpha(0.6))
+        Border::default()
+            .width(1)
+            .color(palette.primary.base.color.scale_alpha(0.6))
     } else {
         Border::default()
     };
@@ -1916,8 +2185,13 @@ fn row_style(theme: &Theme, selected: bool, cursor: bool) -> container::Style {
 fn console_style(theme: &Theme) -> container::Style {
     let palette = theme.extended_palette();
     container::Style {
-        background: Some(Background::Color(palette.background.weak.color.scale_alpha(0.4))),
-        border: Border::default().rounded(4).width(1).color(palette.background.strong.color),
+        background: Some(Background::Color(
+            palette.background.weak.color.scale_alpha(0.4),
+        )),
+        border: Border::default()
+            .rounded(4)
+            .width(1)
+            .color(palette.background.strong.color),
         ..container::Style::default()
     }
 }
@@ -1955,11 +2229,20 @@ mod tests {
             Some(Message::Nav(nav, extend)) => Some((nav, extend)),
             _ => None,
         };
-        assert_eq!(nav(Key::Named(Named::ArrowDown), Modifiers::empty()), Some((Nav::Down, false)));
-        assert_eq!(nav(Key::Named(Named::ArrowUp), Modifiers::SHIFT), Some((Nav::Up, true)));
+        assert_eq!(
+            nav(Key::Named(Named::ArrowDown), Modifiers::empty()),
+            Some((Nav::Down, false))
+        );
+        assert_eq!(
+            nav(Key::Named(Named::ArrowUp), Modifiers::SHIFT),
+            Some((Nav::Up, true))
+        );
         // Alt+Up is "previous change", handled by the window.
         assert_eq!(nav(Key::Named(Named::ArrowUp), Modifiers::ALT), None);
-        assert_eq!(nav(Key::Character("a".into()), Modifiers::CTRL), Some((Nav::SelectAll, false)));
+        assert_eq!(
+            nav(Key::Character("a".into()), Modifiers::CTRL),
+            Some((Nav::SelectAll, false))
+        );
         assert_eq!(nav(Key::Character("a".into()), Modifiers::empty()), None);
         assert_eq!(nav(Key::Named(Named::PageDown), Modifiers::CTRL), None);
     }
@@ -1990,7 +2273,10 @@ mod tests {
         if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
             assert_eq!(display_path(&home.join("src/x")), "~/src/x");
         }
-        assert_eq!(display_path(Path::new("/nonexistent-root/x")), "/nonexistent-root/x");
+        assert_eq!(
+            display_path(Path::new("/nonexistent-root/x")),
+            "/nonexistent-root/x"
+        );
     }
 
     /// End to end against a real Git repository, when git is installed:
@@ -2025,8 +2311,13 @@ mod tests {
         std::fs::write(root.join("a.txt"), "changed\n").unwrap();
         std::fs::write(root.join("new.txt"), "new\n").unwrap();
 
-        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        let loaded = runtime.block_on(jobs::load(root.to_path_buf(), None)).unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let loaded = runtime
+            .block_on(jobs::load(root.to_path_buf(), None))
+            .unwrap();
         let opened = loaded.vc.unwrap().take().unwrap();
         assert_eq!(opened.worker.kind(), VcKind::Git);
         let vc: SharedVc = Arc::new(Mutex::new(opened.worker));
@@ -2034,9 +2325,14 @@ mod tests {
         let filters = StatusFilters::from_keys(&["flatten", "modified", "unknown"]);
         let events: Vec<ScanEvent> = runtime.block_on(async {
             use iced::futures::StreamExt;
-            jobs::scan(vc.clone(), filters, ScanScope::Full { refresh: true }, Arc::new(AtomicBool::new(false)))
-                .collect()
-                .await
+            jobs::scan(
+                vc.clone(),
+                filters,
+                ScanScope::Full { refresh: true },
+                Arc::new(AtomicBool::new(false)),
+            )
+            .collect()
+            .await
         });
         let Some(ScanEvent::Done(result)) = events.last() else {
             panic!("scan did not finish");
@@ -2048,7 +2344,13 @@ mod tests {
             .iter()
             .filter_map(|&id| model.node(id).entry().map(|e| (e.name.clone(), e.state)))
             .collect();
-        assert_eq!(rows[1..], [("a.txt".to_string(), State::Modified), ("new.txt".to_string(), State::Unversioned)]);
+        assert_eq!(
+            rows[1..],
+            [
+                ("a.txt".to_string(), State::Modified),
+                ("new.txt".to_string(), State::Unversioned)
+            ]
+        );
 
         // Partial refreshes: a file edited back to its committed text, and
         // a folder with a new file.
@@ -2061,9 +2363,14 @@ mod tests {
         let filters = StatusFilters::from_keys(&["modified", "unknown"]);
         let events: Vec<ScanEvent> = runtime.block_on(async {
             use iced::futures::StreamExt;
-            jobs::scan(vc.clone(), filters, ScanScope::Folder(root.join("sub")), Arc::new(AtomicBool::new(false)))
-                .collect()
-                .await
+            jobs::scan(
+                vc.clone(),
+                filters,
+                ScanScope::Folder(root.join("sub")),
+                Arc::new(AtomicBool::new(false)),
+            )
+            .collect()
+            .await
         });
         let Some(ScanEvent::Done(result)) = events.last() else {
             panic!("scan did not finish");
@@ -2082,14 +2389,27 @@ mod tests {
         let cancel = Arc::new(AtomicBool::new(true));
         let events: Vec<ScanEvent> = runtime.block_on(async {
             use iced::futures::StreamExt;
-            jobs::scan(vc.clone(), filters, ScanScope::Full { refresh: true }, cancel).collect().await
+            jobs::scan(
+                vc.clone(),
+                filters,
+                ScanScope::Full { refresh: true },
+                cancel,
+            )
+            .collect()
+            .await
         });
         assert!(events.iter().all(|e| !matches!(e, ScanEvent::Done(_))));
 
         std::fs::write(root.join("a.txt"), "changed\n").unwrap();
-        let diffs = runtime.block_on(jobs::prepare_diffs(vc, vec![root.join("a.txt")], DiffOptions::default()));
+        let diffs = runtime.block_on(jobs::prepare_diffs(
+            vc,
+            vec![root.join("a.txt")],
+            DiffOptions::default(),
+        ));
         match &diffs[0] {
-            Ok(DiffRequest::Files { paths, temp_files, .. }) => {
+            Ok(DiffRequest::Files {
+                paths, temp_files, ..
+            }) => {
                 assert_eq!(std::fs::read_to_string(&paths[0]).unwrap(), "one\n");
                 for t in temp_files {
                     let mut perms = std::fs::metadata(t).unwrap().permissions();

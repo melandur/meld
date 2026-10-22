@@ -29,7 +29,13 @@ pub fn to_text_edits(edit: &Edit, line_count: usize, newline: &str) -> Vec<TextE
     let start = edit.start_line;
     let removed = &edit.removed_lines;
     let inserted = &edit.inserted_lines;
-    let nl = |s: String| -> String { if newline == "\n" { s } else { s.replace('\n', newline) } };
+    let nl = |s: String| -> String {
+        if newline == "\n" {
+            s
+        } else {
+            s.replace('\n', newline)
+        }
+    };
 
     match (removed.is_empty(), inserted.is_empty()) {
         (true, true) => Vec::new(),
@@ -152,15 +158,29 @@ pub fn widget_replacement(edit: &TextEdit, lines: &[String]) -> (Range<usize>, V
             let text = text.replace("\r\n", "\n").replace('\r', "\n");
             let joined = format!("{}{}{}", &l[..col], text, &l[col..]);
             let start = at.line.min(lines.len());
-            (start..range_end(start), joined.split('\n').map(str::to_owned).collect())
+            (
+                start..range_end(start),
+                joined.split('\n').map(str::to_owned).collect(),
+            )
         }
         TextEdit::Delete { start, end } => {
-            let (start, end) = if start <= end { (start, end) } else { (end, start) };
+            let (start, end) = if start <= end {
+                (start, end)
+            } else {
+                (end, start)
+            };
             let first = line(start.line);
             let last = line(end.line);
-            let joined = format!("{}{}", &first[..clamp(first, start.col)], &last[clamp(last, end.col)..]);
+            let joined = format!(
+                "{}{}",
+                &first[..clamp(first, start.col)],
+                &last[clamp(last, end.col)..]
+            );
             let s = start.line.min(lines.len());
-            (s..range_end(end.line.max(s)).min(lines.len()).max(s), vec![joined])
+            (
+                s..range_end(end.line.max(s)).min(lines.len()).max(s),
+                vec![joined],
+            )
         }
     }
 }
@@ -210,11 +230,36 @@ mod tests {
         let ins = |c| Action::Edit(EditAction::Insert(c));
         apply(&mut widget, &mut diff, Action::Click(WPos::new(0, 2)), "\n");
         apply(&mut widget, &mut diff, ins('ü'), "\n");
-        apply(&mut widget, &mut diff, Action::Edit(EditAction::Enter), "\n");
-        apply(&mut widget, &mut diff, Action::Edit(EditAction::Backspace), "\n");
-        apply(&mut widget, &mut diff, Action::Edit(EditAction::Backspace), "\n");
-        apply(&mut widget, &mut diff, Action::Move(Motion::DocumentEnd), "\n");
-        apply(&mut widget, &mut diff, Action::Edit(EditAction::Enter), "\n");
+        apply(
+            &mut widget,
+            &mut diff,
+            Action::Edit(EditAction::Enter),
+            "\n",
+        );
+        apply(
+            &mut widget,
+            &mut diff,
+            Action::Edit(EditAction::Backspace),
+            "\n",
+        );
+        apply(
+            &mut widget,
+            &mut diff,
+            Action::Edit(EditAction::Backspace),
+            "\n",
+        );
+        apply(
+            &mut widget,
+            &mut diff,
+            Action::Move(Motion::DocumentEnd),
+            "\n",
+        );
+        apply(
+            &mut widget,
+            &mut diff,
+            Action::Edit(EditAction::Enter),
+            "\n",
+        );
         apply(&mut widget, &mut diff, ins('z'), "\n");
         apply(&mut widget, &mut diff, Action::SelectAll, "\n");
         apply(
@@ -224,7 +269,12 @@ mod tests {
             "\n",
         );
         apply(&mut widget, &mut diff, Action::SelectAll, "\n");
-        apply(&mut widget, &mut diff, Action::Edit(EditAction::Delete), "\n");
+        apply(
+            &mut widget,
+            &mut diff,
+            Action::Edit(EditAction::Delete),
+            "\n",
+        );
         assert_eq!(diff.text(), "");
     }
 
@@ -232,8 +282,18 @@ mod tests {
     fn crlf_newlines_are_used_for_new_breaks() {
         let mut diff = TextBuffer::from_text("a\r\nb");
         let mut widget = Buffer::new(diff.lines().to_vec());
-        apply(&mut widget, &mut diff, Action::Click(WPos::new(0, 1)), "\r\n");
-        apply(&mut widget, &mut diff, Action::Edit(EditAction::Enter), "\r\n");
+        apply(
+            &mut widget,
+            &mut diff,
+            Action::Click(WPos::new(0, 1)),
+            "\r\n",
+        );
+        apply(
+            &mut widget,
+            &mut diff,
+            Action::Edit(EditAction::Enter),
+            "\r\n",
+        );
         assert_eq!(diff.text(), "a\r\n\r\nb");
     }
 

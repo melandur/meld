@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 use iced::Task;
 use meld_diff::{Chunk, EditOutcome, SyncpointAction};
 use meld_widgets::{
-    Action, ChunkAction, EditAction, InlineHighlight, LineFlash, Motion, Position as WPos, ScrollGeometry, WrapLayout,
-    sync_scroll,
+    Action, ChunkAction, EditAction, InlineHighlight, LineFlash, Motion, Position as WPos,
+    ScrollGeometry, WrapLayout, sync_scroll,
 };
 
 use super::chunks::{self, CursorDetails, Derived};
@@ -16,8 +16,8 @@ use super::edits::{char_column, to_text_edits, widget_replacement};
 use super::find::{self, FindMessage};
 use super::io;
 use super::{
-    Act, Banner, BannerAction, CloseState, Dialog, DialogMessage, FileDiff, Flash, Message, MsgId, OVERSCROLL_LINES,
-    PaneEdit, Pending, Popup, PopupKind, wrap_mode,
+    Act, Banner, BannerAction, CloseState, Dialog, DialogMessage, FileDiff, Flash, Message, MsgId,
+    OVERSCROLL_LINES, PaneEdit, Pending, Popup, PopupKind, wrap_mode,
 };
 use crate::shared::Shared;
 use crate::ui::BannerKind;
@@ -65,7 +65,9 @@ impl FileDiff {
                 // Like GtkTextView, a secondary click outside the selection
                 // moves the cursor.
                 let buffer = &mut self.panes[pane].buffer;
-                let in_selection = buffer.selection().is_some_and(|(s, e)| s <= position && position <= e);
+                let in_selection = buffer
+                    .selection()
+                    .is_some_and(|(s, e)| s <= position && position <= e);
                 if !in_selection {
                     buffer.set_cursor(position, false);
                 }
@@ -85,7 +87,10 @@ impl FileDiff {
                 }
                 self.popup = None;
                 let buffer = &mut self.panes[pane].buffer;
-                if self.overwrite && matches!(edit, EditAction::Insert(_)) && buffer.selection().is_none() {
+                if self.overwrite
+                    && matches!(edit, EditAction::Insert(_))
+                    && buffer.selection().is_none()
+                {
                     let c = buffer.cursor();
                     if c.column < buffer.line(c.line).chars().count() {
                         buffer.perform(Action::Select(Motion::Right));
@@ -136,8 +141,11 @@ impl FileDiff {
             match cmp.edit(pane, &te) {
                 Ok(outcome) => {
                     for applied in &outcome.edits {
-                        self.syncpoints
-                            .adjust_for_edit(pane, applied.change.start_line, applied.change.size_change);
+                        self.syncpoints.adjust_for_edit(
+                            pane,
+                            applied.change.start_line,
+                            applied.change.size_change,
+                        );
                     }
                 }
                 Err(err) => log::error!("edit failed: {err}"),
@@ -187,8 +195,11 @@ impl FileDiff {
             let edit = p.buffer.replace_lines(range, lines);
             p.highlighter.edit(&edit);
             self.undo.add_action(PaneEdit { pane, edit });
-            self.syncpoints
-                .adjust_for_edit(pane, applied.change.start_line, applied.change.size_change);
+            self.syncpoints.adjust_for_edit(
+                pane,
+                applied.change.start_line,
+                applied.change.size_change,
+            );
         }
         self.undo.end_group();
         self.check_sync(pane);
@@ -251,7 +262,10 @@ impl FileDiff {
     fn visible_chunks(&self) -> Vec<usize> {
         let mut out = Vec::new();
         for i in 0..self.panes.len() {
-            let (Some(hl), Some(merged)) = (self.derived.highlights.get(i), self.derived.pane_merged.get(i)) else {
+            let (Some(hl), Some(merged)) = (
+                self.derived.highlights.get(i),
+                self.derived.pane_merged.get(i),
+            ) else {
                 continue;
             };
             let vis = self.lines_around_view(i);
@@ -300,10 +314,17 @@ impl FileDiff {
                         break;
                     };
                     let start = if line == r.start.line { r.start.col } else { 0 };
-                    let end = if line == r.end.line { r.end.col } else { text.len() };
+                    let end = if line == r.end.line {
+                        r.end.col
+                    } else {
+                        text.len()
+                    };
                     let (s, e) = (char_column(text, start), char_column(text, end));
                     if s < e {
-                        target.push(meld_widgets::InlineHighlight { line, columns: s..e });
+                        target.push(meld_widgets::InlineHighlight {
+                            line,
+                            columns: s..e,
+                        });
                     }
                 }
             }
@@ -311,10 +332,11 @@ impl FileDiff {
         self.inline_cache.clean(cmp.differ().diff_count());
         if too_long
             && !self.force_highlight
-            && !self
-                .panes
-                .iter()
-                .any(|p| p.banner.as_ref().is_some_and(|b| b.id == MsgId::SlowHighlight))
+            && !self.panes.iter().any(|p| {
+                p.banner
+                    .as_ref()
+                    .is_some_and(|b| b.id == MsgId::SlowHighlight)
+            })
         {
             // `_prompt_long_highlighting`
             for (i, pane) in self.panes.iter_mut().enumerate() {
@@ -382,7 +404,10 @@ impl FileDiff {
                         tr!("Text filters are being used, and may be masking differences between files. Would you like to compare the unfiltered files?")
                             .to_string(),
                     );
-                    actions.push((tr!("Show without filters").into(), BannerAction::ShowUnfiltered));
+                    actions.push((
+                        tr!("Show without filters").into(),
+                        BannerAction::ShowUnfiltered,
+                    ));
                 } else if different_newlines {
                     primary = tr!("Files differ in line endings only").into();
                     secondary = Some(tr!(
@@ -391,8 +416,15 @@ impl FileDiff {
                             .iter()
                             .zip(&newlines)
                             .map(|(label, nl)| {
-                                let types = if nl.types.is_empty() { vec![nl.primary()] } else { nl.types.clone() };
-                                let names: Vec<&str> = types.iter().map(|t| crate::i18n::gettext(t.label())).collect();
+                                let types = if nl.types.is_empty() {
+                                    vec![nl.primary()]
+                                } else {
+                                    nl.types.clone()
+                                };
+                                let names: Vec<&str> = types
+                                    .iter()
+                                    .map(|t| crate::i18n::gettext(t.label()))
+                                    .collect();
                                 format!("\t{label}: {}", names.join(", "))
                             })
                             .collect::<Vec<_>>()
@@ -439,7 +471,11 @@ impl FileDiff {
         if self.cmp.is_none() || self.job.is_some() {
             return;
         }
-        let actions = if redo { self.undo.redo() } else { self.undo.undo() };
+        let actions = if redo {
+            self.undo.redo()
+        } else {
+            self.undo.undo()
+        };
         let Some(actions) = actions else {
             return;
         };
@@ -461,8 +497,19 @@ impl FileDiff {
 
     // ----- Chunk actions -----
 
-    pub(super) fn gutter_action(&mut self, from: usize, to: usize, index: usize, action: ChunkAction) {
-        let Some(chunk) = self.derived.pair(from, to).and_then(|p| p.raw.get(index)).copied() else {
+    pub(super) fn gutter_action(
+        &mut self,
+        from: usize,
+        to: usize,
+        index: usize,
+        action: ChunkAction,
+    ) {
+        let Some(chunk) = self
+            .derived
+            .pair(from, to)
+            .and_then(|p| p.raw.get(index))
+            .copied()
+        else {
             return;
         };
         let action = match action {
@@ -474,7 +521,13 @@ impl FileDiff {
         self.chunk_action(action, from, to, chunk);
     }
 
-    fn chunk_action(&mut self, action: meld_diff::ChunkAction, src: usize, dst: usize, chunk: Chunk) {
+    fn chunk_action(
+        &mut self,
+        action: meld_diff::ChunkAction,
+        src: usize,
+        dst: usize,
+        chunk: Chunk,
+    ) {
         use meld_diff::ChunkAction as CA;
         let edited = if action == CA::Delete { src } else { dst };
         if !self.editable_now(edited) {
@@ -487,7 +540,9 @@ impl FileDiff {
             Ok(outcome) => {
                 self.apply_outcome(outcome);
                 if action == CA::Replace {
-                    self.panes[dst].buffer.set_cursor(WPos::new(chunk.start_b, 0), false);
+                    self.panes[dst]
+                        .buffer
+                        .set_cursor(WPos::new(chunk.start_b, 0), false);
                 }
                 self.after_change();
                 // `copy_chunk`, `replace_chunk`, `delete_chunk`: briefly
@@ -504,7 +559,11 @@ impl FileDiff {
                     CA::Replace => (chunk.start_b, insert),
                     CA::Delete => (chunk.start_a, conflict),
                 };
-                let end = if action == CA::Delete { start } else { start + len };
+                let end = if action == CA::Delete {
+                    start
+                } else {
+                    start + len
+                };
                 self.add_flash(edited, start, end, color, 1.0, 500, false);
             }
             Err(err) => log::error!("chunk action failed: {err}"),
@@ -534,9 +593,17 @@ impl FileDiff {
         let Some(cmp) = self.cmp.as_ref() else {
             return Default::default();
         };
-        let editable: Vec<bool> = (0..self.panes.len()).map(|i| self.editable_now(i)).collect();
+        let editable: Vec<bool> = (0..self.panes.len())
+            .map(|i| self.editable_now(i))
+            .collect();
         let pane = self.cursor.pane.filter(|_| self.focus_pane().is_some());
-        chunks::sensitivity(cmp.differ(), self.panes.len(), pane, self.cursor.chunk, &editable)
+        chunks::sensitivity(
+            cmp.differ(),
+            self.panes.len(),
+            pane,
+            self.cursor.chunk,
+            &editable,
+        )
     }
 
     pub(super) fn current_sensitivity(&self) -> chunks::Sensitivity {
@@ -567,11 +634,27 @@ impl FileDiff {
                 CA::Replace,
             ),
             Act::PullLeft => (s.pull_left, self.action_panes(PANE_LEFT, true), CA::Replace),
-            Act::PullRight => (s.pull_right, self.action_panes(PANE_RIGHT, true), CA::Replace),
+            Act::PullRight => (
+                s.pull_right,
+                self.action_panes(PANE_RIGHT, true),
+                CA::Replace,
+            ),
             Act::CopyLeftUp => (s.copy_left, self.action_panes(PANE_LEFT, false), CA::CopyUp),
-            Act::CopyRightUp => (s.copy_right, self.action_panes(PANE_RIGHT, false), CA::CopyUp),
-            Act::CopyLeftDown => (s.copy_left, self.action_panes(PANE_LEFT, false), CA::CopyDown),
-            Act::CopyRightDown => (s.copy_right, self.action_panes(PANE_RIGHT, false), CA::CopyDown),
+            Act::CopyRightUp => (
+                s.copy_right,
+                self.action_panes(PANE_RIGHT, false),
+                CA::CopyUp,
+            ),
+            Act::CopyLeftDown => (
+                s.copy_left,
+                self.action_panes(PANE_LEFT, false),
+                CA::CopyDown,
+            ),
+            Act::CopyRightDown => (
+                s.copy_right,
+                self.action_panes(PANE_RIGHT, false),
+                CA::CopyDown,
+            ),
             _ => return,
         };
         if !enabled {
@@ -625,13 +708,24 @@ impl FileDiff {
     fn merge_all(&mut self, act: Act) {
         let (left, right, all) = self.merge_sensitivity();
         let result = match act {
-            Act::MergeAll if all => self.cmp.as_mut().map(|c| (c.merge_all_non_conflicting(), 0)),
-            Act::MergeAllLeft if left => self
-                .action_panes(PANE_LEFT, true)
-                .and_then(|(src, dst)| self.cmp.as_mut().map(|c| (c.pull_all_non_conflicting(src, dst), src))),
-            Act::MergeAllRight if right => self
-                .action_panes(PANE_RIGHT, true)
-                .and_then(|(src, dst)| self.cmp.as_mut().map(|c| (c.pull_all_non_conflicting(src, dst), src))),
+            Act::MergeAll if all => self
+                .cmp
+                .as_mut()
+                .map(|c| (c.merge_all_non_conflicting(), 0)),
+            Act::MergeAllLeft if left => {
+                self.action_panes(PANE_LEFT, true).and_then(|(src, dst)| {
+                    self.cmp
+                        .as_mut()
+                        .map(|c| (c.pull_all_non_conflicting(src, dst), src))
+                })
+            }
+            Act::MergeAllRight if right => {
+                self.action_panes(PANE_RIGHT, true).and_then(|(src, dst)| {
+                    self.cmp
+                        .as_mut()
+                        .map(|c| (c.pull_all_non_conflicting(src, dst), src))
+                })
+            }
             _ => None,
         };
         if let Some((Ok(outcome), resync)) = result {
@@ -714,7 +808,14 @@ impl FileDiff {
             let vis = self.lines_around_view(pane);
             let p = &self.panes[pane];
             let mut h = std::collections::hash_map::DefaultHasher::new();
-            (base, vis.start, vis.end, p.buffer.revision(), p.buffer.line_count()).hash(&mut h);
+            (
+                base,
+                vis.start,
+                vis.end,
+                p.buffer.revision(),
+                p.buffer.line_count(),
+            )
+                .hash(&mut h);
             (p.buffer.lines().as_ptr() as usize).hash(&mut h);
             let key = h.finish();
             if p.decorations_key == Some(key) {
@@ -783,13 +884,17 @@ impl FileDiff {
             p.flashes.clear();
         }
         for f in &self.flashes {
-            let t = now.saturating_duration_since(f.started).as_secs_f32() / f.duration.as_secs_f32().max(1e-3);
+            let t = now.saturating_duration_since(f.started).as_secs_f32()
+                / f.duration.as_secs_f32().max(1e-3);
             let alpha = f.color.a * (1.0 - t.clamp(0.0, 1.0));
             if let Some(p) = self.panes.get_mut(f.pane) {
                 p.flashes.push(LineFlash {
                     start: f.start,
                     end: f.end,
-                    color: iced::Color { a: alpha, ..f.color },
+                    color: iced::Color {
+                        a: alpha,
+                        ..f.color
+                    },
                     stroke: f.stroke,
                 });
             }
@@ -812,7 +917,11 @@ impl FileDiff {
         const INFLUENCE: [[usize; 2]; 3] = [[1, 2], [0, 2], [1, 0]];
         let mut m = master;
         for &i in &INFLUENCE[master][..n - 1] {
-            let chunks = self.derived.pair(m, i).map(|p| p.chunks.as_slice()).unwrap_or(&[]);
+            let chunks = self
+                .derived
+                .pair(m, i)
+                .map(|p| p.chunks.as_slice())
+                .unwrap_or(&[]);
             let y = sync_scroll(&self.geometry(m), &self.geometry(i), chunks);
             self.panes[i].scroll.y = y;
             if i == 1 {
@@ -840,13 +949,24 @@ impl FileDiff {
     }
 
     /// `go_to_chunk`
-    pub(super) fn go_to_chunk(&mut self, target: Option<usize>, pane: Option<usize>, _centered: bool) {
+    pub(super) fn go_to_chunk(
+        &mut self,
+        target: Option<usize>,
+        pane: Option<usize>,
+        _centered: bool,
+    ) {
         let Some(target) = target else {
             return;
         };
         let n = self.panes.len();
-        let pane = pane.or(self.focus_pane()).unwrap_or(if n > 1 { 1 } else { 0 });
-        let Some(chunk) = self.cmp.as_ref().and_then(|c| c.differ().get_chunk(target, pane, None)) else {
+        let pane = pane
+            .or(self.focus_pane())
+            .unwrap_or(if n > 1 { 1 } else { 0 });
+        let Some(chunk) = self
+            .cmp
+            .as_ref()
+            .and_then(|c| c.differ().get_chunk(target, pane, None))
+        else {
             return;
         };
         let buffer = &mut self.panes[pane].buffer;
@@ -869,12 +989,20 @@ impl FileDiff {
         }
         self.update_cursor(pane, true);
         // Briefly outline the chunk for orientation.
-        let color = self.focus_colors.get(pane).copied().unwrap_or(iced::Color::BLACK);
+        let color = self
+            .focus_colors
+            .get(pane)
+            .copied()
+            .unwrap_or(iced::Color::BLACK);
         self.add_flash(pane, chunk.start_a, chunk.end_a, color, 0.3, 400, true);
     }
 
     fn next_diff(&mut self, down: bool) {
-        let target = if down { self.cursor.next } else { self.cursor.prev };
+        let target = if down {
+            self.cursor.next
+        } else {
+            self.cursor.prev
+        };
         self.go_to_chunk(target, None, false);
     }
 
@@ -892,7 +1020,11 @@ impl FileDiff {
             .or(self.focus_pane())
             .unwrap_or(if n > 1 { 1 } else { 0 })
             .min(n - 1);
-        let mut target = if down { self.cursor.next } else { self.cursor.prev };
+        let mut target = if down {
+            self.cursor.next
+        } else {
+            self.cursor.prev
+        };
         let g = self.geometry(pane);
         let wrap = &self.panes[pane].wrap;
         let in_view = target
@@ -914,7 +1046,9 @@ impl FileDiff {
     /// `move_cursor`
     fn move_cursor(&mut self, pane: usize, line: usize, focus: bool) -> Task<Message> {
         let line = line.min(self.panes[pane].buffer.line_count().saturating_sub(1));
-        self.panes[pane].buffer.set_cursor(WPos::new(line, 0), false);
+        self.panes[pane]
+            .buffer
+            .set_cursor(WPos::new(line, 0), false);
         if !self.line_visible(pane, line) {
             self.center_line(pane, line);
             self.sync_scroll(pane);
@@ -937,7 +1071,11 @@ impl FileDiff {
         let line = self.panes[pane].buffer.cursor().line;
         let new_line = match self.cmp.as_ref() {
             Some(cmp) => {
-                let counts: Vec<usize> = self.panes.iter().map(|p| p.buffer.line_count().max(1)).collect();
+                let counts: Vec<usize> = self
+                    .panes
+                    .iter()
+                    .map(|p| p.buffer.line_count().max(1))
+                    .collect();
                 let new_cursor = self.panes[new_pane].buffer.cursor().line;
                 chunks::corresponding_line(
                     cmp.differ(),
@@ -957,7 +1095,10 @@ impl FileDiff {
     // ----- Find and go to line -----
 
     fn selected_text(&self, pane: usize) -> Option<String> {
-        self.panes[pane].buffer.selected_text().filter(|t| !t.contains('\n'))
+        self.panes[pane]
+            .buffer
+            .selected_text()
+            .filter(|t| !t.contains('\n'))
     }
 
     fn start_find(&mut self, replace: bool) -> Task<Message> {
@@ -1076,7 +1217,8 @@ impl FileDiff {
             && (s, e) == newsel
         {
             let matched = self.panes[pane].buffer.text_range(s, e);
-            let replacement = find::expand_replacement(&re, &matched, &self.find.replacement, self.find.regex);
+            let replacement =
+                find::expand_replacement(&re, &matched, &self.find.replacement, self.find.regex);
             let before = self.panes[pane].buffer.line_count().max(1);
             let edit = self.panes[pane].buffer.replace_range(s, e, &replacement);
             self.record_user_edit(pane, edit, before);
@@ -1120,7 +1262,9 @@ impl FileDiff {
         self.undo.begin_group();
         for (line, text) in changes {
             let before = self.panes[pane].buffer.line_count().max(1);
-            let edit = self.panes[pane].buffer.replace_lines(line..line + 1, vec![text]);
+            let edit = self.panes[pane]
+                .buffer
+                .replace_lines(line..line + 1, vec![text]);
             self.undo.add_action(PaneEdit {
                 pane,
                 edit: edit.clone(),
@@ -1172,7 +1316,11 @@ impl FileDiff {
                     ),
                     actions: vec![],
                 });
-            } else if pane.banner.as_ref().is_some_and(|b| b.id == MsgId::Syncpoints) {
+            } else if pane
+                .banner
+                .as_ref()
+                .is_some_and(|b| b.id == MsgId::Syncpoints)
+            {
                 pane.banner = None;
             }
         }
@@ -1184,7 +1332,12 @@ impl FileDiff {
 
     // ----- Actions -----
 
-    pub(super) fn act(&mut self, act: Act, shared: &mut Shared, events: &mut Vec<Event>) -> Task<Message> {
+    pub(super) fn act(
+        &mut self,
+        act: Act,
+        shared: &mut Shared,
+        events: &mut Vec<Event>,
+    ) -> Task<Message> {
         if !matches!(act, Act::Popup(_)) {
             self.popup = None;
         }
@@ -1272,15 +1425,19 @@ impl FileDiff {
                 let parent = act == Act::OpenFolder;
                 return Task::perform(
                     io::blocking(move || {
-                        let argv = meld_files::open_external_command(&path, line, &settings, parent)
-                            .map_err(|e| e.to_string())?;
+                        let argv =
+                            meld_files::open_external_command(&path, line, &settings, parent)
+                                .map_err(|e| e.to_string())?;
                         meld_files::spawn_detached(&argv).map_err(|e| e.to_string())
                     }),
                     Message::Done,
                 );
             }
             Act::CopyFullPath => {
-                if let Some(path) = self.focus_pane().and_then(|p| self.panes[p].file.path.clone()) {
+                if let Some(path) = self
+                    .focus_pane()
+                    .and_then(|p| self.panes[p].file.path.clone())
+                {
                     return iced::clipboard::write(path.display().to_string());
                 }
             }
@@ -1341,7 +1498,9 @@ impl FileDiff {
                 if let Some((pane, action)) = self.syncpoint_action() {
                     let line = self.panes[pane].buffer.cursor().line;
                     match action {
-                        SyncpointAction::Add | SyncpointAction::Match => self.syncpoints.add(pane, line),
+                        SyncpointAction::Add | SyncpointAction::Match => {
+                            self.syncpoints.add(pane, line)
+                        }
                         SyncpointAction::Move => {
                             self.syncpoints.move_unmatched(pane, line);
                         }
@@ -1357,8 +1516,12 @@ impl FileDiff {
                 self.syncpoints.clear();
                 return self.refresh_sync_points();
             }
-            Act::ToggleLineNumbers => self.view_options.show_line_numbers = !self.view_options.show_line_numbers,
-            Act::ToggleWhitespace => self.view_options.show_whitespace = !self.view_options.show_whitespace,
+            Act::ToggleLineNumbers => {
+                self.view_options.show_line_numbers = !self.view_options.show_line_numbers
+            }
+            Act::ToggleWhitespace => {
+                self.view_options.show_whitespace = !self.view_options.show_whitespace
+            }
             Act::ToggleCurrentLine => {
                 self.view_options.highlight_current_line = !self.view_options.highlight_current_line
             }
@@ -1400,8 +1563,14 @@ impl FileDiff {
                     1 if self.panes.len() == 3 => tr!("Open Middle File"),
                     _ => tr!("Open Right File"),
                 };
-                let dir = self.panes[pane].file.path.as_ref().and_then(|p| p.parent()).map(std::path::PathBuf::from);
-                return crate::ui::chooser::pick_file(title, dir).map(move |path| Message::OpenChosen(pane, path));
+                let dir = self.panes[pane]
+                    .file
+                    .path
+                    .as_ref()
+                    .and_then(|p| p.parent())
+                    .map(std::path::PathBuf::from);
+                return crate::ui::chooser::pick_file(title, dir)
+                    .map(move |path| Message::OpenChosen(pane, path));
             }
             Act::Display(pane) => self.dialog = Some(Dialog::Display { pane }),
             Act::ToggleOverwrite => self.overwrite = !self.overwrite,
@@ -1456,7 +1625,11 @@ impl FileDiff {
     }
 
     pub(super) fn make_patch(&self, left: bool, reverse: bool) -> String {
-        let texts: Vec<String> = self.panes.iter().map(|p| p.buffer.lines().join("\n")).collect();
+        let texts: Vec<String> = self
+            .panes
+            .iter()
+            .map(|p| p.buffer.lines().join("\n"))
+            .collect();
         let mut labels: Vec<String> = self.panes.iter().map(|p| p.file.label()).collect();
         while labels.len() < 3 {
             labels.push(tr!("<unnamed>").into());
@@ -1527,20 +1700,31 @@ impl FileDiff {
                 self.dialog = None;
                 let path = self.panes.get(1).and_then(|p| p.file.target().cloned());
                 if let Some(path) = path {
-                    return Task::perform(io::blocking(move || io::resolve(path)), Message::Resolved);
+                    return Task::perform(
+                        io::blocking(move || io::resolve(path)),
+                        Message::Resolved,
+                    );
                 }
                 return self.finish_close(events);
             }
             DialogMessage::PatchLeft(left) => {
                 if let Some(Dialog::Patch { reverse, .. }) = self.dialog {
                     let text = self.make_patch(left, reverse);
-                    self.dialog = Some(Dialog::Patch { left, reverse, text });
+                    self.dialog = Some(Dialog::Patch {
+                        left,
+                        reverse,
+                        text,
+                    });
                 }
             }
             DialogMessage::PatchReverse(reverse) => {
                 if let Some(Dialog::Patch { left, .. }) = self.dialog {
                     let text = self.make_patch(left, reverse);
-                    self.dialog = Some(Dialog::Patch { left, reverse, text });
+                    self.dialog = Some(Dialog::Patch {
+                        left,
+                        reverse,
+                        text,
+                    });
                 }
             }
             DialogMessage::PatchCopy => {
@@ -1551,11 +1735,17 @@ impl FileDiff {
             DialogMessage::PatchSave => {
                 // Next to the compared files rather than in the chooser's
                 // working folder.
-                let dir = self.panes.iter().find_map(|p| p.file.target()?.parent().map(std::path::PathBuf::from));
-                return crate::ui::chooser::save_file(tr!("Save Patch"), dir, None).map(Message::PatchSaveChosen);
+                let dir = self
+                    .panes
+                    .iter()
+                    .find_map(|p| p.file.target()?.parent().map(std::path::PathBuf::from));
+                return crate::ui::chooser::save_file(tr!("Save Patch"), dir, None)
+                    .map(Message::PatchSaveChosen);
             }
             DialogMessage::Filter(text) => {
-                if let Some(Dialog::Encoding { filter, .. } | Dialog::Language { filter, .. }) = &mut self.dialog {
+                if let Some(Dialog::Encoding { filter, .. } | Dialog::Language { filter, .. }) =
+                    &mut self.dialog
+                {
                     *filter = text;
                 }
             }
@@ -1564,7 +1754,10 @@ impl FileDiff {
                     && let Some(enc) = meld_files::TextEncoding::for_label(label)
                 {
                     // `reload_with_encoding`
-                    return self.confirm_discard(Some(vec![pane]), Pending::ReloadPane(pane, Some(enc.encoding)));
+                    return self.confirm_discard(
+                        Some(vec![pane]),
+                        Pending::ReloadPane(pane, Some(enc.encoding)),
+                    );
                 }
             }
             DialogMessage::PickLanguage(lang) => {

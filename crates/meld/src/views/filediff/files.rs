@@ -11,7 +11,9 @@ use meld_files::{LoadOptions, SaveOptions};
 use meld_widgets::Position as WPos;
 
 use super::io::{self, DiffDone, DiffJob, DiffKind, LoadFailure, Loaded, SaveFailure, Saved};
-use super::{Banner, BannerAction, CloseState, Dialog, FileDiff, Job, LoadState, Message, MsgId, Pending};
+use super::{
+    Banner, BannerAction, CloseState, Dialog, FileDiff, Job, LoadState, Message, MsgId, Pending,
+};
 use crate::shared::Shared;
 use crate::ui::BannerKind;
 use crate::views::Event;
@@ -98,7 +100,11 @@ impl FileDiff {
         let p = &mut self.panes[pane];
         p.banner = None;
         if p.file.path.as_ref() != Some(&path) {
-            p.file.savefile = if pane == 1 { self.merge_output.clone() } else { None };
+            p.file.savefile = if pane == 1 {
+                self.merge_output.clone()
+            } else {
+                None
+            };
             if p.file.path.is_some() {
                 p.file.custom_label = None;
             }
@@ -112,9 +118,10 @@ impl FileDiff {
             check_line_length: !self.force_load,
         };
         let target = p.file.savefile.clone();
-        Task::perform(io::blocking(move || io::load(path, target, options)), move |r| {
-            Message::Loaded(generation, pane, r.map(Box::new))
-        })
+        Task::perform(
+            io::blocking(move || io::load(path, target, options)),
+            move |r| Message::Loaded(generation, pane, r.map(Box::new)),
+        )
     }
 
     pub(super) fn file_loaded(
@@ -131,7 +138,11 @@ impl FileDiff {
         let display = path.display().to_string();
         match result {
             Ok(loaded) => {
-                let Loaded { text, mtime, writable } = *loaded;
+                let Loaded {
+                    text,
+                    mtime,
+                    writable,
+                } = *loaded;
                 let p = &mut self.panes[pane];
                 p.file.encoding = text.encoding;
                 p.file.newlines = text.newlines.clone();
@@ -160,7 +171,10 @@ impl FileDiff {
                         id: MsgId::Binary,
                         kind: BannerKind::Warning,
                         primary: tr!("File {} appears to be a binary file.", display),
-                        secondary: Some(tr!("Do you want to open the file using the default application?").into()),
+                        secondary: Some(
+                            tr!("Do you want to open the file using the default application?")
+                                .into(),
+                        ),
                         actions: vec![
                             (tr!("Open").into(), BannerAction::OpenExternally),
                             (tr!("Hide").into(), BannerAction::Hide),
@@ -252,7 +266,9 @@ impl FileDiff {
             paths: self.panes.iter().map(|p| p.file.path.clone()).collect(),
         };
         let cancel = Arc::new(AtomicBool::new(false));
-        self.job = Some(Job { cancel: cancel.clone() });
+        self.job = Some(Job {
+            cancel: cancel.clone(),
+        });
         self.diff_gen += 1;
         let generation = self.diff_gen;
         self.refresh_read_only();
@@ -382,8 +398,13 @@ impl FileDiff {
                 _ => tr!("Save Right Pane As"),
             };
             let dir = p.file.target().and_then(|t| t.parent()).map(PathBuf::from);
-            let name = p.file.target().and_then(|t| t.file_name()).map(|n| n.to_string_lossy().into_owned());
-            return crate::ui::chooser::save_file(title, dir, name).map(move |path| Message::SaveAsChosen(pane, path));
+            let name = p
+                .file
+                .target()
+                .and_then(|t| t.file_name())
+                .map(|n| n.to_string_lossy().into_owned());
+            return crate::ui::chooser::save_file(title, dir, name)
+                .map(move |path| Message::SaveAsChosen(pane, path));
         }
         self.do_save(pane, force)
     }
@@ -420,18 +441,26 @@ impl FileDiff {
             encoding: p.file.encoding,
             newline: Some(p.file.newline),
             backup: false,
-            expected_mtime: if force || !same_file { None } else { p.file.mtime },
+            expected_mtime: if force || !same_file {
+                None
+            } else {
+                p.file.mtime
+            },
         };
-        Task::perform(io::blocking(move || io::save(target, text, options)), move |r| {
-            Message::Saved(pane, r)
-        })
+        Task::perform(
+            io::blocking(move || io::save(target, text, options)),
+            move |r| Message::Saved(pane, r),
+        )
     }
 
     fn save_conflict(&mut self, pane: usize, target: &std::path::Path) {
         self.panes[pane].banner = Some(Banner {
             id: MsgId::SaveConflict,
             kind: BannerKind::Warning,
-            primary: tr!("File {} has changed on disk since it was opened", target.display()),
+            primary: tr!(
+                "File {} has changed on disk since it was opened",
+                target.display()
+            ),
             secondary: Some(tr!("If you save it, any external changes will be lost.").into()),
             actions: vec![
                 (tr!("Save Anyway").into(), BannerAction::SaveAnyway),
@@ -471,7 +500,9 @@ impl FileDiff {
                 {
                     p.banner = None;
                 }
-                if self.close_state == CloseState::Closing && !self.modified_flags().iter().any(|m| *m) {
+                if self.close_state == CloseState::Closing
+                    && !self.modified_flags().iter().any(|m| *m)
+                {
                     return self.request_close(_shared, events);
                 }
                 Task::none()
@@ -540,7 +571,11 @@ impl FileDiff {
     }
 
     /// `confirm_unsaved_change_action`
-    pub(super) fn confirm_discard(&mut self, panes: Option<Vec<usize>>, then: Pending) -> Task<Message> {
+    pub(super) fn confirm_discard(
+        &mut self,
+        panes: Option<Vec<usize>>,
+        then: Pending,
+    ) -> Task<Message> {
         let panes = panes.unwrap_or_else(|| (0..self.panes.len()).collect());
         let unsaved: Vec<String> = panes
             .into_iter()
@@ -557,8 +592,13 @@ impl FileDiff {
     pub(super) fn run_pending(&mut self, pending: Pending) -> Task<Message> {
         match pending {
             Pending::Revert => {
-                let paths: Vec<Option<PathBuf>> = self.panes.iter().map(|p| p.file.path.clone()).collect();
-                let encodings = self.panes.iter().map(|p| Some(p.file.encoding.encoding)).collect();
+                let paths: Vec<Option<PathBuf>> =
+                    self.panes.iter().map(|p| p.file.path.clone()).collect();
+                let encodings = self
+                    .panes
+                    .iter()
+                    .map(|p| Some(p.file.encoding.encoding))
+                    .collect();
                 for pane in &mut self.panes {
                     pane.extra_modified = false;
                 }
@@ -580,7 +620,11 @@ impl FileDiff {
     }
 
     pub(super) fn check_disk(&mut self) -> Task<Message> {
-        if self.panes.iter().any(|p| p.file.state == LoadState::Loading) {
+        if self
+            .panes
+            .iter()
+            .any(|p| p.file.state == LoadState::Loading)
+        {
             return Task::none();
         }
         let paths: Vec<Option<PathBuf>> = self.panes.iter().map(|p| p.file.path.clone()).collect();
@@ -594,7 +638,11 @@ impl FileDiff {
     }
 
     /// File monitor: offer to reload files changed on disk.
-    pub(super) fn disk_times(&mut self, generation: u64, times: Vec<Option<std::time::SystemTime>>) {
+    pub(super) fn disk_times(
+        &mut self,
+        generation: u64,
+        times: Vec<Option<std::time::SystemTime>>,
+    ) {
         if generation != self.load_gen {
             return;
         }
@@ -632,10 +680,19 @@ impl FileDiff {
         };
         match action {
             BannerAction::Hide => {
-                let id = self.panes.get(pane).and_then(|p| p.banner.as_ref()).map(|b| b.id);
+                let id = self
+                    .panes
+                    .get(pane)
+                    .and_then(|p| p.banner.as_ref())
+                    .map(|b| b.id);
                 if matches!(
                     id,
-                    Some(MsgId::Same | MsgId::SlowHighlight | MsgId::LineTooLong | MsgId::SelfCompare)
+                    Some(
+                        MsgId::Same
+                            | MsgId::SlowHighlight
+                            | MsgId::LineTooLong
+                            | MsgId::SelfCompare
+                    )
                 ) {
                     clear_all(self);
                 } else if let Some(p) = self.panes.get_mut(pane) {
@@ -659,7 +716,11 @@ impl FileDiff {
                 clear_all(self);
                 self.force_load = true;
                 let paths = self.panes.iter().map(|p| p.file.path.clone()).collect();
-                let encodings = self.panes.iter().map(|p| Some(p.file.encoding.encoding)).collect();
+                let encodings = self
+                    .panes
+                    .iter()
+                    .map(|p| Some(p.file.encoding.encoding))
+                    .collect();
                 self.load_files(paths, encodings)
             }
             BannerAction::OpenExternally => {

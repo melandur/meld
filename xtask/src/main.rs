@@ -37,7 +37,9 @@ fn root() -> PathBuf {
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     // A copy of the tree to work on instead, for trying `update-po` out
-    let root = std::env::var_os("XTASK_ROOT").map(PathBuf::from).unwrap_or_else(root);
+    let root = std::env::var_os("XTASK_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(root);
     let result = match args.first().map(String::as_str) {
         Some("pot") => write_pot(&root).map(|n| println!("po/meld.pot: {n} messages")),
         Some("update-po") => update_po(&root),
@@ -45,7 +47,10 @@ fn main() -> ExitCode {
         Some("check-po") => check_po(&root),
         Some("stats") => stats(&root),
         Some("msgids") => msgids(&root, args.get(1).map(String::as_str).unwrap_or("de")),
-        _ => Err("usage: cargo xtask pot | update-po | check | check-po | stats | msgids [lang]".to_string()),
+        _ => Err(
+            "usage: cargo xtask pot | update-po | check | check-po | stats | msgids [lang]"
+                .to_string(),
+        ),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
@@ -63,8 +68,13 @@ fn messages(root: &Path) -> Result<Vec<Message>, String> {
     files.sort();
     let mut out = Vec::new();
     for file in files {
-        let text = std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
-        let rel = file.strip_prefix(root).unwrap_or(&file).display().to_string();
+        let text =
+            std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+        let rel = file
+            .strip_prefix(root)
+            .unwrap_or(&file)
+            .display()
+            .to_string();
         out.extend(extract::extract(&text, &rel).map_err(|e| format!("{rel}: {e}"))?);
     }
     Ok(out)
@@ -208,7 +218,11 @@ fn migrated(file: &po::PoFile) -> String {
             let _ = writeln!(out, "#, {}", h.flags.join(", "));
         }
         out.push_str("msgid \"\"\n");
-        write_field(&mut out, "msgstr", h.strs.first().map(String::as_str).unwrap_or(""));
+        write_field(
+            &mut out,
+            "msgstr",
+            h.strs.first().map(String::as_str).unwrap_or(""),
+        );
     }
     // Spellings without a mnemonic may now collide; the entry that already
     // had the spelling wins
@@ -236,11 +250,15 @@ fn migrated(file: &po::PoFile) -> String {
         match seen.get(&key) {
             Some(true) => continue,
             Some(false) if !exact => continue,
-            Some(false) => entries.retain(|e| (e.context.clone().unwrap_or_default(), e.id.clone()) != key),
+            Some(false) => {
+                entries.retain(|e| (e.context.clone().unwrap_or_default(), e.id.clone()) != key)
+            }
             None => {}
         }
         seen.insert(key, exact);
-        let ok = strs.iter().all(|s| s.is_empty() || po::placeholders_match(&id, plural.as_deref(), s));
+        let ok = strs
+            .iter()
+            .all(|s| s.is_empty() || po::placeholders_match(&id, plural.as_deref(), s));
         let mut flags: Vec<String> = entry
             .flags
             .iter()
@@ -259,7 +277,12 @@ fn migrated(file: &po::PoFile) -> String {
             id_plural: plural,
             strs,
             flags,
-            comments: entry.comments.iter().filter(|c| !c.starts_with("#:") && !c.starts_with("#|")).cloned().collect(),
+            comments: entry
+                .comments
+                .iter()
+                .filter(|c| !c.starts_with("#:") && !c.starts_with("#|"))
+                .cloned()
+                .collect(),
         };
         entries.push(converted);
     }
@@ -282,7 +305,11 @@ fn migrated(file: &po::PoFile) -> String {
                     write_field(&mut out, &format!("msgstr[{i}]"), s);
                 }
             }
-            None => write_field(&mut out, "msgstr", e.strs.first().map(String::as_str).unwrap_or("")),
+            None => write_field(
+                &mut out,
+                "msgstr",
+                e.strs.first().map(String::as_str).unwrap_or(""),
+            ),
         }
     }
     out
@@ -291,7 +318,10 @@ fn migrated(file: &po::PoFile) -> String {
 fn update_po(root: &Path) -> Result<(), String> {
     let n = write_pot(root)?;
     println!("po/meld.pot: {n} messages");
-    let msgmerge = std::process::Command::new("msgmerge").arg("--version").output().is_ok_and(|o| o.status.success());
+    let msgmerge = std::process::Command::new("msgmerge")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
     if !msgmerge {
         println!("msgmerge not found: only po/meld.pot was regenerated");
         return Ok(());
@@ -342,13 +372,17 @@ fn malformed(root: &Path) -> Result<Vec<String>, String> {
             }
             let bad = match po::convert(entry) {
                 None => true,
-                Some((id, plural, strs)) => {
-                    !strs.iter().all(|s| s.is_empty() || po::placeholders_match(&id, plural.as_deref(), s))
-                }
+                Some((id, plural, strs)) => !strs
+                    .iter()
+                    .all(|s| s.is_empty() || po::placeholders_match(&id, plural.as_deref(), s)),
             };
             if bad {
                 let strs: Vec<String> = entry.strs.iter().map(|s| po::quote(s)).collect();
-                out.push(format!("po/{lang}.po: {} → {}", po::quote(&entry.id), strs.join(" / ")));
+                out.push(format!(
+                    "po/{lang}.po: {} → {}",
+                    po::quote(&entry.id),
+                    strs.join(" / ")
+                ));
             }
         }
     }
@@ -370,8 +404,11 @@ pub fn coverage(root: &Path) -> Result<(usize, Vec<(String, usize)>), String> {
     let mut rows = Vec::new();
     for lang in linguas(root) {
         let (catalog, _) = po::catalog(&load(root, &lang)?)?;
-        let keys: std::collections::BTreeSet<(&str, &str)> =
-            catalog.messages.iter().map(|m| (m.context.as_str(), m.id.as_str())).collect();
+        let keys: std::collections::BTreeSet<(&str, &str)> = catalog
+            .messages
+            .iter()
+            .map(|m| (m.context.as_str(), m.id.as_str()))
+            .collect();
         let n = unique
             .iter()
             .filter(|(m, _, _)| keys.contains(&(m.context.as_deref().unwrap_or(""), m.id.as_str())))
@@ -385,7 +422,10 @@ fn stats(root: &Path) -> Result<(), String> {
     let (total, rows) = coverage(root)?;
     println!("{total} messages");
     for (lang, n) in rows {
-        println!("{lang:>12}: {n:>4} translated ({:.0}%)", 100.0 * n as f64 / total.max(1) as f64);
+        println!(
+            "{lang:>12}: {n:>4} translated ({:.0}%)",
+            100.0 * n as f64 / total.max(1) as f64
+        );
     }
     Ok(())
 }
@@ -473,12 +513,21 @@ msgstr "El archivo {]} se compara"
 "#;
         let file = po::parse(source).unwrap();
         let text = migrated(&file);
-        assert!(text.contains("msgid \"Save\"\nmsgstr \"Speichern\""), "{text}");
+        assert!(
+            text.contains("msgid \"Save\"\nmsgstr \"Speichern\""),
+            "{text}"
+        );
         assert!(text.contains("#, rust-format\nmsgid \"{} file\""), "{text}");
         assert!(text.contains("msgstr[1] \"{} Dateien\""), "{text}");
-        assert!(text.contains("#, fuzzy, rust-format\nmsgid \"{} and {}\""), "{text}");
+        assert!(
+            text.contains("#, fuzzy, rust-format\nmsgid \"{} and {}\""),
+            "{text}"
+        );
         // A malformed placeholder (which crashes msgmerge 1.0) is dropped
-        assert!(text.contains("msgid \"File {} is being compared to itself\"\nmsgstr \"\""), "{text}");
+        assert!(
+            text.contains("msgid \"File {} is being compared to itself\"\nmsgstr \"\""),
+            "{text}"
+        );
         // And reads back as the same catalog
         let again = po::parse(&text).unwrap();
         let original = po::catalog(&file).unwrap().0;

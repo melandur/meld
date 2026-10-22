@@ -53,7 +53,11 @@ pub struct PoFile {
 impl PoFile {
     /// The header's `msgstr`: `Key: value` lines.
     pub fn header_text(&self) -> &str {
-        self.header.as_ref().and_then(|h| h.strs.first()).map(String::as_str).unwrap_or("")
+        self.header
+            .as_ref()
+            .and_then(|h| h.strs.first())
+            .map(String::as_str)
+            .unwrap_or("")
     }
 }
 
@@ -103,7 +107,10 @@ pub fn parse(source: &str) -> Result<PoFile, ParseError> {
     for (index, raw) in source.lines().enumerate() {
         let lineno = index + 1;
         let line = raw.trim();
-        let err = |message: &str| ParseError { line: lineno, message: message.to_string() };
+        let err = |message: &str| ParseError {
+            line: lineno,
+            message: message.to_string(),
+        };
         if line.is_empty() {
             if has_str {
                 finish(&mut file, &mut current, &mut has_id, &mut has_str);
@@ -119,7 +126,12 @@ pub fn parse(source: &str) -> Result<PoFile, ParseError> {
                 finish(&mut file, &mut current, &mut has_id, &mut has_str);
             }
             if let Some(flags) = rest.strip_prefix(',') {
-                current.flags.extend(flags.split(',').map(|f| f.trim().to_string()).filter(|f| !f.is_empty()));
+                current.flags.extend(
+                    flags
+                        .split(',')
+                        .map(|f| f.trim().to_string())
+                        .filter(|f| !f.is_empty()),
+                );
             } else {
                 current.comments.push(line.to_string());
             }
@@ -130,9 +142,15 @@ pub fn parse(source: &str) -> Result<PoFile, ParseError> {
             let value = unquote(line).map_err(|m| err(&m))?;
             match field {
                 Field::None => return Err(err("string continuation without a keyword")),
-                Field::Context => current.context.get_or_insert_with(String::new).push_str(&value),
+                Field::Context => current
+                    .context
+                    .get_or_insert_with(String::new)
+                    .push_str(&value),
                 Field::Id => current.id.push_str(&value),
-                Field::IdPlural => current.id_plural.get_or_insert_with(String::new).push_str(&value),
+                Field::IdPlural => current
+                    .id_plural
+                    .get_or_insert_with(String::new)
+                    .push_str(&value),
                 Field::Str(i) => current.strs[i].push_str(&value),
             }
             continue;
@@ -177,7 +195,9 @@ pub fn parse(source: &str) -> Result<PoFile, ParseError> {
                 if !has_id {
                     return Err(err("msgstr without msgid"));
                 }
-                let i: usize = k[7..k.len() - 1].parse().map_err(|_| err("bad msgstr index"))?;
+                let i: usize = k[7..k.len() - 1]
+                    .parse()
+                    .map_err(|_| err("bad msgstr index"))?;
                 if i > 16 {
                     return Err(err("msgstr index too large"));
                 }
@@ -338,7 +358,8 @@ pub fn pieces(template: &str) -> Option<Vec<Piece<'_>>> {
 
 fn is_identifier(s: &str) -> bool {
     let mut chars = s.chars();
-    matches!(chars.next(), Some(c) if c.is_alphabetic() || c == '_') && chars.all(|c| c.is_alphanumeric() || c == '_')
+    matches!(chars.next(), Some(c) if c.is_alphabetic() || c == '_')
+        && chars.all(|c| c.is_alphanumeric() || c == '_')
 }
 
 /// The placeholders of a message: the positional argument indices it uses
@@ -405,14 +426,21 @@ impl Syntax {
 
 /// Whether all the places an entry comes from are Python files.
 fn from_python(entry: &Entry) -> bool {
-    let mut refs = entry.comments.iter().filter_map(|c| c.strip_prefix("#:")).flat_map(str::split_whitespace).peekable();
+    let mut refs = entry
+        .comments
+        .iter()
+        .filter_map(|c| c.strip_prefix("#:"))
+        .flat_map(str::split_whitespace)
+        .peekable();
     refs.peek().is_some() && refs.all(|r| r.split(':').next().is_some_and(|f| f.ends_with(".py")))
 }
 
 fn looks_like_percent(s: &str) -> bool {
     let b = s.as_bytes();
     (0..b.len()).any(|i| {
-        b[i] == b'%' && matches!(b.get(i + 1), Some(b's' | b'd' | b'i' | b'(')) && (i == 0 || b[i - 1] != b'%')
+        b[i] == b'%'
+            && matches!(b.get(i + 1), Some(b's' | b'd' | b'i' | b'('))
+            && (i == 0 || b[i - 1] != b'%')
     })
 }
 
@@ -462,7 +490,10 @@ fn percent_to_rust(s: &str) -> Option<String> {
                     }
                 }
                 // Flags, width, precision, length
-                while chars.peek().is_some_and(|&(_, c)| "#0- +.*123456789hlL".contains(c)) {
+                while chars
+                    .peek()
+                    .is_some_and(|&(_, c)| "#0- +.*123456789hlL".contains(c))
+                {
                     chars.next();
                 }
                 match chars.next() {
@@ -500,8 +531,15 @@ fn brace_to_rust(s: &str) -> Option<String> {
                 let end = i + s[i..].find('}')?;
                 let field = &s[i + 1..end];
                 // Drop `!r` conversions, `:spec` and attribute/index access
-                let field = field.split(['!', ':', '.', '[']).next().unwrap_or("").trim();
-                if !(field.is_empty() || field.bytes().all(|c| c.is_ascii_digit()) || is_identifier(field)) {
+                let field = field
+                    .split(['!', ':', '.', '['])
+                    .next()
+                    .unwrap_or("")
+                    .trim();
+                if !(field.is_empty()
+                    || field.bytes().all(|c| c.is_ascii_digit())
+                    || is_identifier(field))
+                {
                     return None;
                 }
                 out.push('{');
@@ -680,7 +718,8 @@ pub fn placeholders_match(id: &str, plural: Option<&str>, tr: &str) -> bool {
 /// Builds the catalog of `file`: fuzzy and untranslated entries are left
 /// out, so those messages show in English.
 pub fn catalog(file: &PoFile) -> Result<(Catalog, Skipped), String> {
-    let (nplurals, plural) = super::plural::from_header(file.header_text()).unwrap_or((2, "n != 1".to_string()));
+    let (nplurals, plural) =
+        super::plural::from_header(file.header_text()).unwrap_or((2, "n != 1".to_string()));
     super::plural::Expr::parse(&plural)?;
     let mut skipped = Skipped::default();
     // Exact spellings win over spellings with the mnemonic dropped
@@ -691,7 +730,11 @@ pub fn catalog(file: &PoFile) -> Result<(Catalog, Skipped), String> {
             skipped.fuzzy += 1;
             continue;
         }
-        let wanted = if entry.id_plural.is_some() { nplurals } else { 1 };
+        let wanted = if entry.id_plural.is_some() {
+            nplurals
+        } else {
+            1
+        };
         if entry.strs.len() < wanted || entry.strs.iter().take(wanted).any(String::is_empty) {
             skipped.untranslated += 1;
             continue;
@@ -701,21 +744,36 @@ pub fn catalog(file: &PoFile) -> Result<(Catalog, Skipped), String> {
             continue;
         };
         let strs: Vec<String> = strs.into_iter().take(wanted).collect();
-        if !strs.iter().all(|s| placeholders_match(&id, plural_id.as_deref(), s)) {
+        if !strs
+            .iter()
+            .all(|s| placeholders_match(&id, plural_id.as_deref(), s))
+        {
             skipped.malformed += 1;
             continue;
         }
         let context = entry.context.clone().unwrap_or_default();
         if let Some(bare) = strip_mnemonic(&id) {
-            stripped.entry((context.clone(), canonical(&bare))).or_insert_with(|| strs.clone());
+            stripped
+                .entry((context.clone(), canonical(&bare)))
+                .or_insert_with(|| strs.clone());
         }
         exact.insert((context, canonical(&id)), strs);
     }
     for (key, strs) in stripped {
         exact.entry(key).or_insert(strs);
     }
-    let messages = exact.into_iter().map(|((context, id), forms)| Message { context, id, forms }).collect();
-    Ok((Catalog { nplurals, plural, messages }, skipped))
+    let messages = exact
+        .into_iter()
+        .map(|((context, id), forms)| Message { context, id, forms })
+        .collect();
+    Ok((
+        Catalog {
+            nplurals,
+            plural,
+            messages,
+        },
+        skipped,
+    ))
 }
 
 const MAGIC: &[u8; 8] = b"MELDCAT1";
@@ -779,5 +837,9 @@ pub fn decode(bytes: &[u8]) -> Option<Decoded<'_>> {
         }
         messages.push((context, id, forms));
     }
-    Some(Decoded { nplurals, plural, messages })
+    Some(Decoded {
+        nplurals,
+        plural,
+        messages,
+    })
 }

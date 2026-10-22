@@ -45,8 +45,14 @@ pub fn tool_button<'a, M: Clone + 'a>(
         .padding([4, 8])
         .style(flat_button)
         .on_press_maybe(on_press);
-    tooltip(b, container(text(tip).size(13)).padding([4, 8]).style(tooltip_box), tooltip::Position::Bottom)
-        .into()
+    tooltip(
+        b,
+        container(text(tip).size(13))
+            .padding([4, 8])
+            .style(tooltip_box),
+        tooltip::Position::Bottom,
+    )
+    .into()
 }
 
 /// A tooltip followed by its shortcut: `Refresh (Ctrl+R)`.
@@ -55,7 +61,10 @@ pub fn with_shortcut(tip: &str, shortcut: &str) -> String {
 }
 
 /// A flat text button.
-pub fn text_button<'a, M: Clone + 'a>(label: impl text::IntoFragment<'a>, on_press: Option<M>) -> button::Button<'a, M> {
+pub fn text_button<'a, M: Clone + 'a>(
+    label: impl text::IntoFragment<'a>,
+    on_press: Option<M>,
+) -> button::Button<'a, M> {
     button(text(label).size(14))
         .padding([5, 10])
         .style(flat_button)
@@ -73,7 +82,9 @@ pub fn flat_button(theme: &Theme, status: button::Status) -> button::Style {
     match status {
         button::Status::Active => base,
         button::Status::Hovered => button::Style {
-            background: Some(Background::Color(palette.background.strong.color.scale_alpha(0.5))),
+            background: Some(Background::Color(
+                palette.background.strong.color.scale_alpha(0.5),
+            )),
             ..base
         },
         button::Status::Pressed => button::Style {
@@ -161,11 +172,12 @@ pub fn popover(theme: &Theme) -> container::Style {
 
 /// A one-pixel separator line.
 pub fn separator<'a, M: 'a>(vertical: bool) -> Element<'a, M> {
-    let c = container(iced::widget::Space::new())
-        .style(|theme: &Theme| container::Style {
-            background: Some(Background::Color(theme.extended_palette().background.strong.color)),
-            ..container::Style::default()
-        });
+    let c = container(iced::widget::Space::new()).style(|theme: &Theme| container::Style {
+        background: Some(Background::Color(
+            theme.extended_palette().background.strong.color,
+        )),
+        ..container::Style::default()
+    });
     if vertical {
         c.width(1).height(Length::Fill).into()
     } else {
@@ -186,7 +198,9 @@ pub fn banner<'a, M: Clone + 'a>(
     if let Some(s) = secondary {
         body = body.push(text(s).size(13));
     }
-    let mut r = row![body.width(Length::Fill)].spacing(8).align_y(iced::Center);
+    let mut r = row![body.width(Length::Fill)]
+        .spacing(8)
+        .align_y(iced::Center);
     for (label, msg) in actions {
         r = r.push(button(text(label).size(13)).padding([4, 10]).on_press(msg));
     }
@@ -253,6 +267,13 @@ pub fn bold() -> iced::Font {
 
 pub fn dim_text(theme: &Theme) -> text::Style {
     text::Style {
-        color: Some(theme.extended_palette().background.base.text.scale_alpha(0.6)),
+        color: Some(
+            theme
+                .extended_palette()
+                .background
+                .base
+                .text
+                .scale_alpha(0.6),
+        ),
     }
 }

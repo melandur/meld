@@ -26,7 +26,9 @@ pub fn shortcuts<'a, M: Clone + 'a>(on_close: M) -> Element<'a, M> {
     }
     dialog(
         tr!("Keyboard Shortcuts"),
-        scrollable(container(sections).padding([0, 12])).height(480).width(560),
+        scrollable(container(sections).padding([0, 12]))
+            .height(480)
+            .width(560),
         vec![button(text(tr!("Close"))).on_press(on_close).into()],
     )
 }
@@ -48,12 +50,25 @@ pub fn about<'a, M: Clone + 'a>(on_close: M) -> Element<'a, M> {
     ]
     .spacing(10)
     .max_width(460);
-    dialog(tr!("About Meld"), body, vec![button(text(tr!("Close"))).on_press(on_close).into()])
+    dialog(
+        tr!("About Meld"),
+        body,
+        vec![button(text(tr!("Close"))).on_press(on_close).into()],
+    )
 }
 
-pub fn confirm_quit<'a, M: Clone + 'a>(unsaved: &'a [String], on_cancel: M, on_quit: M) -> Element<'a, M> {
-    let mut list = column![text(tr!("If you quit without saving, changes to these documents will be lost:")).size(14)]
-        .spacing(4);
+pub fn confirm_quit<'a, M: Clone + 'a>(
+    unsaved: &'a [String],
+    on_cancel: M,
+    on_quit: M,
+) -> Element<'a, M> {
+    let mut list = column![
+        text(tr!(
+            "If you quit without saving, changes to these documents will be lost:"
+        ))
+        .size(14)
+    ]
+    .spacing(4);
     for name in unsaved {
         list = list.push(text(format!("  • {name}")).size(14));
     }
@@ -61,8 +76,14 @@ pub fn confirm_quit<'a, M: Clone + 'a>(unsaved: &'a [String], on_cancel: M, on_q
         tr!("Quit without saving?"),
         list,
         vec![
-            button(text(tr!("Cancel"))).style(button::secondary).on_press(on_cancel).into(),
-            button(text(tr!("Quit Without Saving"))).style(button::danger).on_press(on_quit).into(),
+            button(text(tr!("Cancel")))
+                .style(button::secondary)
+                .on_press(on_cancel)
+                .into(),
+            button(text(tr!("Quit Without Saving")))
+                .style(button::danger)
+                .on_press(on_quit)
+                .into(),
         ],
     )
 }

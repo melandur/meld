@@ -17,4 +17,13 @@ repos:
         args: [--no-sort-keys, --indent=2]
     -   id: trailing-whitespace
 
+-   repo: local
+    hooks:
+    -   id: cargo-fmt
+        name: cargo fmt
+        language: system
+        entry: cargo fmt --all --check
+        files: \.rs$
+        pass_filenames: false
+
 exclude: ^po/.*\.po$

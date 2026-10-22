@@ -75,7 +75,12 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Popover<'a, M> {
         self.anchor.as_widget().size_hint()
     }
 
-    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
         self.anchor
             .as_widget_mut()
             .layout(&mut tree.children[0], renderer, limits)
@@ -112,9 +117,13 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Popover<'a, M> {
         viewport: &Rectangle,
         renderer: &Renderer,
     ) -> mouse::Interaction {
-        self.anchor
-            .as_widget()
-            .mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
+        self.anchor.as_widget().mouse_interaction(
+            &tree.children[0],
+            layout,
+            cursor,
+            viewport,
+            renderer,
+        )
     }
 
     fn draw(
@@ -127,9 +136,15 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Popover<'a, M> {
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        self.anchor
-            .as_widget()
-            .draw(&tree.children[0], renderer, theme, style, layout, cursor, viewport);
+        self.anchor.as_widget().draw(
+            &tree.children[0],
+            renderer,
+            theme,
+            style,
+            layout,
+            cursor,
+            viewport,
+        );
     }
 
     fn operate(
@@ -154,10 +169,13 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Popover<'a, M> {
     ) -> Option<overlay::Element<'b, M, Theme, Renderer>> {
         let mut children = tree.children.iter_mut();
         let anchor_tree = children.next()?;
-        let anchor_overlay = self
-            .anchor
-            .as_widget_mut()
-            .overlay(anchor_tree, layout, renderer, viewport, translation);
+        let anchor_overlay = self.anchor.as_widget_mut().overlay(
+            anchor_tree,
+            layout,
+            renderer,
+            viewport,
+            translation,
+        );
         let popup = match (&mut self.popup, children.next()) {
             (Some(popup), Some(popup_tree)) => Some(overlay::Element::new(Box::new(Popup {
                 popup,
@@ -172,7 +190,10 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Popover<'a, M> {
         if anchor_overlay.is_none() && popup.is_none() {
             return None;
         }
-        Some(overlay::Group::with_children(anchor_overlay.into_iter().chain(popup).collect()).overlay())
+        Some(
+            overlay::Group::with_children(anchor_overlay.into_iter().chain(popup).collect())
+                .overlay(),
+        )
     }
 }
 
@@ -212,10 +233,11 @@ impl<'a, M: Clone + 'a> overlay::Overlay<M, Theme, Renderer> for Popup<'a, '_, M
             (bounds.width - 2.0 * MARGIN).max(0.0),
             (bounds.height - self.anchor.y - self.anchor.height - GAP - MARGIN).max(200.0),
         );
-        let node = self
-            .popup
-            .as_widget_mut()
-            .layout(self.tree, renderer, &layout::Limits::new(Size::ZERO, max));
+        let node = self.popup.as_widget_mut().layout(
+            self.tree,
+            renderer,
+            &layout::Limits::new(Size::ZERO, max),
+        );
         let position = place(self.anchor, node.size(), bounds, self.align_right);
         node.move_to(position)
     }
@@ -234,7 +256,12 @@ impl<'a, M: Clone + 'a> overlay::Overlay<M, Theme, Renderer> for Popup<'a, '_, M
             .draw(self.tree, renderer, theme, style, layout, cursor, &bounds);
     }
 
-    fn operate(&mut self, layout: Layout<'_>, renderer: &Renderer, operation: &mut dyn widget::Operation) {
+    fn operate(
+        &mut self,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn widget::Operation,
+    ) {
         self.popup
             .as_widget_mut()
             .operate(self.tree, layout, renderer, operation);
@@ -278,14 +305,23 @@ impl<'a, M: Clone + 'a> overlay::Overlay<M, Theme, Renderer> for Popup<'a, '_, M
     }
 
     /// Overlays of the popup's own widgets: tooltips of the picker's rows.
-    fn overlay<'c>(&'c mut self, layout: Layout<'c>, renderer: &Renderer) -> Option<overlay::Element<'c, M, Theme, Renderer>> {
+    fn overlay<'c>(
+        &'c mut self,
+        layout: Layout<'c>,
+        renderer: &Renderer,
+    ) -> Option<overlay::Element<'c, M, Theme, Renderer>> {
         let bounds = layout.bounds();
         self.popup
             .as_widget_mut()
             .overlay(self.tree, layout, renderer, &bounds, Vector::ZERO)
     }
 
-    fn mouse_interaction(&self, layout: Layout<'_>, cursor: mouse::Cursor, renderer: &Renderer) -> mouse::Interaction {
+    fn mouse_interaction(
+        &self,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &Renderer,
+    ) -> mouse::Interaction {
         let bounds = layout.bounds();
         let interaction = self
             .popup
@@ -309,13 +345,25 @@ mod tests {
     fn popups_open_below_and_stay_in_the_window() {
         let anchor = Rectangle::new(Point::new(100.0, 10.0), Size::new(80.0, 30.0));
         let window = Size::new(800.0, 600.0);
-        assert_eq!(place(anchor, Size::new(300.0, 200.0), window, false), Point::new(100.0, 44.0));
+        assert_eq!(
+            place(anchor, Size::new(300.0, 200.0), window, false),
+            Point::new(100.0, 44.0)
+        );
         // Too wide to the right: pushed left
-        assert_eq!(place(anchor, Size::new(750.0, 200.0), window, false).x, 44.0);
+        assert_eq!(
+            place(anchor, Size::new(750.0, 200.0), window, false).x,
+            44.0
+        );
         // Right-aligned with the anchor, but not off the left edge
         assert_eq!(place(anchor, Size::new(120.0, 50.0), window, true).x, 60.0);
-        assert_eq!(place(anchor, Size::new(300.0, 50.0), window, true).x, MARGIN);
+        assert_eq!(
+            place(anchor, Size::new(300.0, 50.0), window, true).x,
+            MARGIN
+        );
         // Too tall: moved up
-        assert_eq!(place(anchor, Size::new(100.0, 580.0), window, false).y, 14.0);
+        assert_eq!(
+            place(anchor, Size::new(100.0, 580.0), window, false).y,
+            14.0
+        );
     }
 }

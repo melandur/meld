@@ -9,7 +9,9 @@ use iced::advanced::renderer;
 use iced::advanced::widget::{self, Tree, Widget};
 use iced::advanced::{Clipboard, Shell, mouse};
 use iced::keyboard;
-use iced::widget::{button, column, container, mouse_area, opaque, row, scrollable, space, stack, text};
+use iced::widget::{
+    button, column, container, mouse_area, opaque, row, scrollable, space, stack, text,
+};
 use iced::{Element, Event, Length, Padding, Point, Rectangle, Renderer, Size, Theme, Vector};
 
 #[derive(Debug, Clone)]
@@ -117,8 +119,12 @@ pub fn overlay<'a, M: Clone + 'a>(
 
     stack![
         base.into(),
-        mouse_area(container(positioned).width(Length::Fill).height(Length::Fill))
-            .on_press(on_dismiss)
+        mouse_area(
+            container(positioned)
+                .width(Length::Fill)
+                .height(Length::Fill)
+        )
+        .on_press(on_dismiss)
     ]
     .into()
 }
@@ -237,7 +243,9 @@ const POPUP_MARGIN: f32 = 6.0;
 
 /// Where a popup of `size` opened at `at` goes in a window of `window`.
 pub fn place_at(at: Point, size: Size, window: Size) -> Point {
-    let x = at.x.min(window.width - size.width - POPUP_MARGIN).max(POPUP_MARGIN);
+    let x =
+        at.x.min(window.width - size.width - POPUP_MARGIN)
+            .max(POPUP_MARGIN);
     let y = if at.y + size.height > window.height - POPUP_MARGIN {
         (at.y - size.height).max(POPUP_MARGIN)
     } else {
@@ -270,7 +278,12 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for AtPoint<'a, M> {
         self.base.as_widget().size_hint()
     }
 
-    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
         self.base
             .as_widget_mut()
             .layout(&mut tree.children[0], renderer, limits)
@@ -307,9 +320,13 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for AtPoint<'a, M> {
         viewport: &Rectangle,
         renderer: &Renderer,
     ) -> mouse::Interaction {
-        self.base
-            .as_widget()
-            .mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
+        self.base.as_widget().mouse_interaction(
+            &tree.children[0],
+            layout,
+            cursor,
+            viewport,
+            renderer,
+        )
     }
 
     fn draw(
@@ -322,9 +339,15 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for AtPoint<'a, M> {
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        self.base
-            .as_widget()
-            .draw(&tree.children[0], renderer, theme, style, layout, cursor, viewport);
+        self.base.as_widget().draw(
+            &tree.children[0],
+            renderer,
+            theme,
+            style,
+            layout,
+            cursor,
+            viewport,
+        );
     }
 
     fn operate(
@@ -348,10 +371,13 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for AtPoint<'a, M> {
         translation: Vector,
     ) -> Option<overlay::Element<'b, M, Theme, Renderer>> {
         let (base_tree, popup_tree) = tree.children.split_at_mut(1);
-        let base = self
-            .base
-            .as_widget_mut()
-            .overlay(&mut base_tree[0], layout, renderer, viewport, translation);
+        let base = self.base.as_widget_mut().overlay(
+            &mut base_tree[0],
+            layout,
+            renderer,
+            viewport,
+            translation,
+        );
         let popup = overlay::Element::new(Box::new(PointPopup {
             popup: &mut self.popup,
             tree: &mut popup_tree[0],
@@ -375,22 +401,35 @@ impl<'a, M: Clone + 'a> overlay::Overlay<M, Theme, Renderer> for PointPopup<'a, 
             (bounds.width - 2.0 * POPUP_MARGIN).max(0.0),
             (bounds.height - 2.0 * POPUP_MARGIN).max(0.0),
         );
-        let node = self
-            .popup
-            .as_widget_mut()
-            .layout(self.tree, renderer, &layout::Limits::new(Size::ZERO, max));
+        let node = self.popup.as_widget_mut().layout(
+            self.tree,
+            renderer,
+            &layout::Limits::new(Size::ZERO, max),
+        );
         let position = place_at(self.at, node.size(), bounds);
         node.move_to(position)
     }
 
-    fn draw(&self, renderer: &mut Renderer, theme: &Theme, style: &renderer::Style, layout: Layout<'_>, cursor: mouse::Cursor) {
+    fn draw(
+        &self,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+    ) {
         let bounds = layout.bounds();
         self.popup
             .as_widget()
             .draw(self.tree, renderer, theme, style, layout, cursor, &bounds);
     }
 
-    fn operate(&mut self, layout: Layout<'_>, renderer: &Renderer, operation: &mut dyn widget::Operation) {
+    fn operate(
+        &mut self,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn widget::Operation,
+    ) {
         self.popup
             .as_widget_mut()
             .operate(self.tree, layout, renderer, operation);
@@ -415,9 +454,9 @@ impl<'a, M: Clone + 'a> overlay::Overlay<M, Theme, Renderer> for PointPopup<'a, 
             return;
         }
         let bounds = layout.bounds();
-        self.popup
-            .as_widget_mut()
-            .update(self.tree, event, layout, cursor, renderer, clipboard, shell, &bounds);
+        self.popup.as_widget_mut().update(
+            self.tree, event, layout, cursor, renderer, clipboard, shell, &bounds,
+        );
         match event {
             Event::Mouse(mouse::Event::ButtonPressed(_)) if !cursor.is_over(bounds) => {
                 shell.publish(self.on_dismiss.clone());
@@ -429,7 +468,12 @@ impl<'a, M: Clone + 'a> overlay::Overlay<M, Theme, Renderer> for PointPopup<'a, 
         }
     }
 
-    fn mouse_interaction(&self, layout: Layout<'_>, cursor: mouse::Cursor, renderer: &Renderer) -> mouse::Interaction {
+    fn mouse_interaction(
+        &self,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &Renderer,
+    ) -> mouse::Interaction {
         let bounds = layout.bounds();
         self.popup
             .as_widget()
@@ -445,12 +489,18 @@ mod tests {
     fn popups_open_at_the_point_inside_the_window() {
         let window = Size::new(800.0, 600.0);
         let size = Size::new(300.0, 200.0);
-        assert_eq!(place_at(Point::new(100.0, 50.0), size, window), Point::new(100.0, 50.0));
+        assert_eq!(
+            place_at(Point::new(100.0, 50.0), size, window),
+            Point::new(100.0, 50.0)
+        );
         // Near the right edge: pushed left.
         assert_eq!(place_at(Point::new(700.0, 50.0), size, window).x, 494.0);
         // Near the bottom: opens upwards from the point.
         assert_eq!(place_at(Point::new(100.0, 500.0), size, window).y, 300.0);
         // Taller than the space above too: kept inside.
-        assert_eq!(place_at(Point::new(100.0, 100.0), Size::new(300.0, 550.0), window).y, POPUP_MARGIN);
+        assert_eq!(
+            place_at(Point::new(100.0, 100.0), Size::new(300.0, 550.0), window).y,
+            POPUP_MARGIN
+        );
     }
 }

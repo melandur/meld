@@ -9,8 +9,8 @@
 
 use std::collections::HashSet;
 
-use meld_files::dirdiff::{DirScan, Row, RowStatus, ScanOutcome};
 use meld_files::State;
+use meld_files::dirdiff::{DirScan, Row, RowStatus, ScanOutcome};
 
 pub type NodeId = usize;
 
@@ -306,7 +306,11 @@ impl Tree {
     /// navigation; like Meld, this looks at the first pane.
     pub fn is_change(&self, id: NodeId) -> bool {
         match &self.nodes[id].kind {
-            Kind::Entry(row) => row.status.panes.first().is_some_and(|p| p.state.is_change()),
+            Kind::Entry(row) => row
+                .status
+                .panes
+                .first()
+                .is_some_and(|p| p.state.is_change()),
             Kind::Error { .. } => true,
             Kind::Empty => false,
         }
@@ -325,7 +329,11 @@ impl Tree {
                 .find(|&id| self.is_change(id))
         } else {
             let end = position.unwrap_or(order.len());
-            order[..end].iter().rev().copied().find(|&id| self.is_change(id))
+            order[..end]
+                .iter()
+                .rev()
+                .copied()
+                .find(|&id| self.is_change(id))
         }
     }
 
@@ -406,7 +414,10 @@ impl Selection {
             return;
         };
         if shift {
-            let anchor = self.anchor.and_then(|a| rows.iter().position(|&r| r == a)).unwrap_or(index);
+            let anchor = self
+                .anchor
+                .and_then(|a| rows.iter().position(|&r| r == a))
+                .unwrap_or(index);
             let (lo, hi) = (anchor.min(index), anchor.max(index));
             if !ctrl {
                 self.selected.clear();
@@ -463,7 +474,10 @@ impl Selection {
 
     /// The selected rows in display order.
     pub fn selected(&self, rows: &[NodeId]) -> Vec<NodeId> {
-        rows.iter().copied().filter(|r| self.selected.contains(r)).collect()
+        rows.iter()
+            .copied()
+            .filter(|r| self.selected.contains(r))
+            .collect()
     }
 
     /// Drops rows that are no longer shown; the cursor moves to the
@@ -506,7 +520,11 @@ mod tests {
     use std::path::PathBuf;
 
     fn status(states: &[State]) -> RowStatus {
-        let state = states.iter().copied().find(|s| *s != State::NonExist).unwrap_or(State::Normal);
+        let state = states
+            .iter()
+            .copied()
+            .find(|s| *s != State::NonExist)
+            .unwrap_or(State::Normal);
         RowStatus {
             state,
             panes: states
@@ -528,7 +546,9 @@ mod tests {
     fn row(name: &str, is_dir: bool, states: &[State]) -> Row {
         Row {
             names: vec![name.into(); states.len()],
-            paths: (0..states.len()).map(|p| PathBuf::from(format!("/{p}/{name}"))).collect(),
+            paths: (0..states.len())
+                .map(|p| PathBuf::from(format!("/{p}/{name}")))
+                .collect(),
             is_dir,
             status: status(states),
         }
@@ -568,13 +588,20 @@ mod tests {
         tree.apply_scan(
             root,
             scan(
-                vec![row("sub", true, &[N, N]), row("b", false, &[N, N]), row("c", false, &[State::New, X])],
+                vec![
+                    row("sub", true, &[N, N]),
+                    row("b", false, &[N, N]),
+                    row("c", false, &[State::New, X]),
+                ],
                 ScanOutcome::Entries,
                 true,
             ),
         );
         let sub = tree.resolve(root, &[0]).unwrap();
-        tree.apply_scan(sub, scan(vec![row("a", false, &[M, M])], ScanOutcome::Entries, true));
+        tree.apply_scan(
+            sub,
+            scan(vec![row("a", false, &[M, M])], ScanOutcome::Entries, true),
+        );
         tree
     }
 
@@ -582,7 +609,10 @@ mod tests {
     fn walk_results_build_the_tree_and_expand_differences() {
         let tree = sample();
         let rows = tree.flatten();
-        assert_eq!(names(&tree, &rows), ["root", "  sub", "    a", "  b", "  c"]);
+        assert_eq!(
+            names(&tree, &rows),
+            ["root", "  sub", "    a", "  b", "  c"]
+        );
         assert_eq!(rows[2].depth, 2);
         assert_eq!(tree.all_rows().len(), 5);
     }
@@ -592,7 +622,10 @@ mod tests {
         let mut tree = sample();
         let sub = tree.resolve(0, &[0]).unwrap();
         tree.set_expanded(sub, false);
-        assert_eq!(names(&tree, &tree.flatten()), ["root", "  sub", "  b", "  c"]);
+        assert_eq!(
+            names(&tree, &tree.flatten()),
+            ["root", "  sub", "  b", "  c"]
+        );
         tree.set_expanded_recursive(0, false);
         assert_eq!(names(&tree, &tree.flatten()), ["root"]);
         tree.set_expanded_recursive(0, true);
@@ -603,9 +636,15 @@ mod tests {
     fn identical_folders_stay_collapsed() {
         let mut tree = Tree::new();
         let root = tree.set_root(row("root", true, &[N, N]));
-        tree.apply_scan(root, scan(vec![row("sub", true, &[N, N])], ScanOutcome::Entries, false));
+        tree.apply_scan(
+            root,
+            scan(vec![row("sub", true, &[N, N])], ScanOutcome::Entries, false),
+        );
         let sub = tree.resolve(root, &[0]).unwrap();
-        tree.apply_scan(sub, scan(vec![row("a", false, &[N, N])], ScanOutcome::Entries, false));
+        tree.apply_scan(
+            sub,
+            scan(vec![row("a", false, &[N, N])], ScanOutcome::Entries, false),
+        );
         assert_eq!(names(&tree, &tree.flatten()), ["root", "  sub"]);
     }
 
@@ -622,7 +661,10 @@ mod tests {
         let sub = tree.resolve(root, &[0]).unwrap();
         tree.apply_scan(sub, scan(Vec::new(), ScanOutcome::Empty, false));
         tree.set_expanded(sub, true);
-        assert_eq!(names(&tree, &tree.flatten()), ["root", "  !Permission denied", "  sub", "    (empty)"]);
+        assert_eq!(
+            names(&tree, &tree.flatten()),
+            ["root", "  !Permission denied", "  sub", "    (empty)"]
+        );
         let error = tree.flatten()[1].id;
         assert_eq!(tree.pane_state(error, 1), Some(State::Error));
         assert_eq!(tree.pane_state(error, 0), None);
@@ -634,10 +676,21 @@ mod tests {
         let root = tree.set_root(row("root", true, &[N, N]));
         tree.apply_scan(
             root,
-            scan(vec![row("d1", true, &[N, N]), row("d2", true, &[N, N])], ScanOutcome::Entries, false),
+            scan(
+                vec![row("d1", true, &[N, N]), row("d2", true, &[N, N])],
+                ScanOutcome::Entries,
+                false,
+            ),
         );
         let d1 = tree.resolve(root, &[0]).unwrap();
-        tree.apply_scan(d1, scan(vec![row("inner", true, &[N, N])], ScanOutcome::Entries, false));
+        tree.apply_scan(
+            d1,
+            scan(
+                vec![row("inner", true, &[N, N])],
+                ScanOutcome::Entries,
+                false,
+            ),
+        );
         let inner = tree.resolve(root, &[0, 0]).unwrap();
         tree.apply_scan(inner, scan(Vec::new(), ScanOutcome::Prune, false));
         // inner and then d1 are pruned; d2 is still addressable as [1]
@@ -654,9 +707,16 @@ mod tests {
         let sub = tree.resolve(0, &[0]).unwrap();
         tree.apply_scan(
             sub,
-            scan(vec![row("x", false, &[N, N]), row("y", false, &[N, N])], ScanOutcome::Entries, false),
+            scan(
+                vec![row("x", false, &[N, N]), row("y", false, &[N, N])],
+                ScanOutcome::Entries,
+                false,
+            ),
         );
-        assert_eq!(names(&tree, &tree.flatten()), ["root", "  sub", "    x", "    y", "  b", "  c"]);
+        assert_eq!(
+            names(&tree, &tree.flatten()),
+            ["root", "  sub", "    x", "    y", "  b", "  c"]
+        );
     }
 
     #[test]

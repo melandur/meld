@@ -19,7 +19,10 @@ pub struct Divider<'a, M> {
 }
 
 /// A divider; `on_press` gets the pointer's x in window coordinates.
-pub fn divider<'a, M: Clone + 'a>(on_press: impl Fn(f32) -> M + 'a, on_double_click: Option<M>) -> Divider<'a, M> {
+pub fn divider<'a, M: Clone + 'a>(
+    on_press: impl Fn(f32) -> M + 'a,
+    on_double_click: Option<M>,
+) -> Divider<'a, M> {
     Divider {
         content: container(ui::separator(true))
             .width(5)
@@ -57,7 +60,12 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Divider<'a, M> {
         self.content.as_widget().size()
     }
 
-    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
         self.content
             .as_widget_mut()
             .layout(&mut tree.children[0], renderer, limits)
@@ -115,9 +123,15 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Divider<'a, M> {
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        self.content
-            .as_widget()
-            .draw(&tree.children[0], renderer, theme, style, layout, cursor, viewport);
+        self.content.as_widget().draw(
+            &tree.children[0],
+            renderer,
+            theme,
+            style,
+            layout,
+            cursor,
+            viewport,
+        );
     }
 
     fn operate(

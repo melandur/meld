@@ -72,19 +72,26 @@ impl Comparison {
         match paths.as_slice() {
             [] => Err(tr!("no paths given").into()),
             [Some(path)] if !path.exists() => Err(tr!("Cannot compare a non-existent file").into()),
-            [Some(path)] if path.is_dir() || meld_files::is_archive(path) => Ok(Comparison::VersionControl {
-                location: path.clone(),
-                auto_compare,
-            }),
+            [Some(path)] if path.is_dir() || meld_files::is_archive(path) => {
+                Ok(Comparison::VersionControl {
+                    location: path.clone(),
+                    auto_compare,
+                })
+            }
             [Some(path)] => Ok(Comparison::VersionControlFile(path.clone())),
             [None] => Err(tr!("a blank pane needs a second file to compare").into()),
-            _ if paths.len() > 3 => Err(tr!("too many arguments (wanted 0-3, got {})", paths.len())),
+            _ if paths.len() > 3 => {
+                Err(tr!("too many arguments (wanted 0-3, got {})", paths.len()))
+            }
             _ => {
                 // Archives are compared as folders (`open_paths` mounts
                 // them first).
                 let dirs = paths
                     .iter()
-                    .filter(|p| p.as_ref().is_some_and(|p| p.is_dir() || meld_files::is_archive(p)))
+                    .filter(|p| {
+                        p.as_ref()
+                            .is_some_and(|p| p.is_dir() || meld_files::is_archive(p))
+                    })
                     .count();
                 if dirs == paths.len() {
                     Ok(Comparison::Folders {

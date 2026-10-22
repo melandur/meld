@@ -12,12 +12,16 @@ mod plural;
 mod po;
 
 fn main() {
-    let manifest = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let manifest =
+        PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR"));
     let po_dir = manifest.join("../../po");
     println!("cargo:rerun-if-changed=src/i18n/po.rs");
     println!("cargo:rerun-if-changed=src/i18n/plural.rs");
-    println!("cargo:rerun-if-changed={}", po_dir.join("LINGUAS").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        po_dir.join("LINGUAS").display()
+    );
 
     let mut table = String::from("/// Embedded catalogs: (language, encoded catalog).\n");
     table.push_str("pub static CATALOGS: &[(&str, &[u8])] = &[\n");
@@ -38,7 +42,10 @@ fn main() {
         };
         let name = format!("{}.cat", lang.replace('@', "-"));
         std::fs::write(out_dir.join(&name), po::encode(&catalog)).expect("write catalog");
-        let _ = writeln!(table, "    ({lang:?}, include_bytes!(concat!(env!(\"OUT_DIR\"), \"/{name}\"))),");
+        let _ = writeln!(
+            table,
+            "    ({lang:?}, include_bytes!(concat!(env!(\"OUT_DIR\"), \"/{name}\"))),"
+        );
     }
     table.push_str("];\n");
     std::fs::write(out_dir.join("catalogs.rs"), table).expect("write catalogs.rs");

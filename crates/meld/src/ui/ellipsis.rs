@@ -201,7 +201,12 @@ impl<'a, M> Widget<M, Theme, Renderer> for Ellipsized<'a> {
         Size::new(self.width, Length::Shrink)
     }
 
-    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
         use iced::advanced::text::Renderer as _;
         let state = tree.state.downcast_mut::<State>();
         let size = self.size.unwrap_or_else(|| renderer.default_size());
@@ -237,10 +242,13 @@ impl<'a, M> Widget<M, Theme, Renderer> for Ellipsized<'a> {
                     }
                 },
             };
-            state.shown = paragraph::Plain::new(one_line(&shown, size, font).with_content(shown.clone()));
+            state.shown =
+                paragraph::Plain::new(one_line(&shown, size, font).with_content(shown.clone()));
         }
         let text_size = state.shown.min_bounds();
-        let height = text_size.height.max(core_text::LineHeight::default().to_absolute(size).0);
+        let height = text_size
+            .height
+            .max(core_text::LineHeight::default().to_absolute(size).0);
         let width = if self.width == Length::Shrink || !max.is_finite() {
             text_size.width.min(max)
         } else {
@@ -267,7 +275,12 @@ impl<'a, M> Widget<M, Theme, Renderer> for Ellipsized<'a> {
             .unwrap_or(style.text_color);
         let bounds = layout.bounds();
         let top = bounds.y + (bounds.height - state.shown.min_bounds().height) / 2.0;
-        renderer.fill_paragraph(state.shown.raw(), Point::new(bounds.x, top), color, *viewport);
+        renderer.fill_paragraph(
+            state.shown.raw(),
+            Point::new(bounds.x, top),
+            color,
+            *viewport,
+        );
     }
 
     fn operate(

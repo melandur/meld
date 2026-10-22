@@ -54,8 +54,17 @@ impl Language {
         let (code, bytes) = CATALOGS.iter().find(|(c, _)| *c == code)?;
         let decoded = po::decode(bytes)?;
         let plural = plural::Expr::parse(decoded.plural).ok()?;
-        let messages = decoded.messages.into_iter().map(|(ctx, id, forms)| ((ctx, id), forms)).collect();
-        Some(Language { code, nplurals: decoded.nplurals, plural, messages })
+        let messages = decoded
+            .messages
+            .into_iter()
+            .map(|(ctx, id, forms)| ((ctx, id), forms))
+            .collect();
+        Some(Language {
+            code,
+            nplurals: decoded.nplurals,
+            plural,
+            messages,
+        })
     }
 
     fn get<'k>(&'k self, context: &'k str, id: &'k str) -> Option<&'k [&'static str]> {
@@ -78,7 +87,9 @@ impl Translator {
     /// English only.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn english() -> Translator {
-        Translator { languages: Vec::new() }
+        Translator {
+            languages: Vec::new(),
+        }
     }
 
     /// The catalogs for `wanted` (see [`wanted_languages`]); stops at
@@ -111,7 +122,11 @@ impl Translator {
 
     /// The translation of `id` (in `context`, `""` for none), or `id`.
     pub fn lookup<'a>(&self, context: &str, id: &'a str) -> &'a str {
-        self.languages.iter().find_map(|l| l.get(context, id)).and_then(|f| f.first().copied()).unwrap_or(id)
+        self.languages
+            .iter()
+            .find_map(|l| l.get(context, id))
+            .and_then(|f| f.first().copied())
+            .unwrap_or(id)
     }
 
     /// The translation of `one`/`many` for count `n`.
@@ -151,7 +166,10 @@ pub fn wanted_languages(var: impl Fn(&str) -> Option<String>) -> Vec<String> {
             expand_locale(item, &mut out);
         }
     }
-    if let Some(locale) = set("LC_ALL").or_else(|| set("LC_MESSAGES")).or_else(|| set("LANG")) {
+    if let Some(locale) = set("LC_ALL")
+        .or_else(|| set("LC_MESSAGES"))
+        .or_else(|| set("LANG"))
+    {
         expand_locale(&locale, &mut out);
     }
     out
@@ -223,14 +241,23 @@ pub fn template(context: &str, id: &'static str) -> &'static str {
 }
 
 /// The plural translation as a template for [`format`].
-pub fn template_plural(context: &str, one: &'static str, many: &'static str, n: u64) -> &'static str {
+pub fn template_plural(
+    context: &str,
+    one: &'static str,
+    many: &'static str,
+    n: u64,
+) -> &'static str {
     active().lookup_plural(context, one, many, n)
 }
 
 /// Fills `template`'s placeholders: `{}` takes the next of `positional`,
 /// `{2}` the third, `{name}` the `named` value. Placeholders without a
 /// value stay as written.
-pub fn format(template: &str, positional: &[&dyn Display], named: &[(&str, &dyn Display)]) -> String {
+pub fn format(
+    template: &str,
+    positional: &[&dyn Display],
+    named: &[(&str, &dyn Display)],
+) -> String {
     let Some(pieces) = po::pieces(template) else {
         return template.to_string();
     };

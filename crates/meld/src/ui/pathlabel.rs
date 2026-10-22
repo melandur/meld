@@ -12,7 +12,11 @@ use iced::{Background, Border, Element, Length, Theme};
 /// The path and its ancestors, outermost first: `/a/b` gives `/`, `/a`,
 /// `/a/b`.
 pub fn segments(path: &Path) -> Vec<PathBuf> {
-    let mut out: Vec<PathBuf> = path.ancestors().filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf).collect();
+    let mut out: Vec<PathBuf> = path
+        .ancestors()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .collect();
     out.reverse();
     out
 }
@@ -37,10 +41,19 @@ pub struct Actions<M> {
 
 /// The popover for `path`, with segment `picked` (an index into
 /// [`segments`]) chosen; `None` picks the full path.
-pub fn popover<'a, M: Clone + 'a>(path: &Path, picked: Option<usize>, actions: Actions<M>) -> Element<'a, M> {
+pub fn popover<'a, M: Clone + 'a>(
+    path: &Path,
+    picked: Option<usize>,
+    actions: Actions<M>,
+) -> Element<'a, M> {
     let all = segments(path);
-    let picked = picked.filter(|&i| i < all.len()).unwrap_or(all.len().saturating_sub(1));
-    let shown = all.get(picked).cloned().unwrap_or_else(|| path.to_path_buf());
+    let picked = picked
+        .filter(|&i| i < all.len())
+        .unwrap_or(all.len().saturating_sub(1));
+    let shown = all
+        .get(picked)
+        .cloned()
+        .unwrap_or_else(|| path.to_path_buf());
 
     let mut crumbs = row![].spacing(2).align_y(iced::Center);
     for (i, segment) in all.iter().enumerate() {
@@ -65,16 +78,23 @@ pub fn popover<'a, M: Clone + 'a>(path: &Path, picked: Option<usize>, actions: A
         // Scrolled to the end, so the innermost folders show first.
         scrollable(crumbs)
             .direction(scrollable::Direction::Horizontal(
-                scrollable::Scrollbar::new().width(4).scroller_width(4).spacing(4),
+                scrollable::Scrollbar::new()
+                    .width(4)
+                    .scroller_width(4)
+                    .spacing(4),
             ))
             .anchor_right()
             .width(Length::Fill),
         row![
             text(tr!("Path")).size(13).style(super::dim_text),
-            container(text(shown_text).size(13).wrapping(text::Wrapping::WordOrGlyph))
-                .padding([4, 8])
-                .width(Length::Fill)
-                .style(field),
+            container(
+                text(shown_text)
+                    .size(13)
+                    .wrapping(text::Wrapping::WordOrGlyph)
+            )
+            .padding([4, 8])
+            .width(Length::Fill)
+            .style(field),
         ]
         .spacing(12)
         .align_y(iced::Center),
@@ -92,14 +112,21 @@ pub fn popover<'a, M: Clone + 'a>(path: &Path, picked: Option<usize>, actions: A
         .spacing(6),
     ]
     .spacing(8);
-    container(body).padding(10).max_width(560).style(super::popover).into()
+    container(body)
+        .padding(10)
+        .max_width(560)
+        .style(super::popover)
+        .into()
 }
 
 fn field(theme: &Theme) -> container::Style {
     let palette = theme.extended_palette();
     container::Style {
         background: Some(Background::Color(palette.background.weak.color)),
-        border: Border::default().rounded(4).width(1).color(palette.background.strong.color),
+        border: Border::default()
+            .rounded(4)
+            .width(1)
+            .color(palette.background.strong.color),
         ..container::Style::default()
     }
 }
@@ -112,7 +139,12 @@ mod tests {
     fn path_segments() {
         assert_eq!(
             segments(Path::new("/home/me/src")),
-            [PathBuf::from("/"), PathBuf::from("/home"), PathBuf::from("/home/me"), PathBuf::from("/home/me/src")]
+            [
+                PathBuf::from("/"),
+                PathBuf::from("/home"),
+                PathBuf::from("/home/me"),
+                PathBuf::from("/home/me/src")
+            ]
         );
         assert_eq!(segment_label(Path::new("/")), "/");
         assert_eq!(segment_label(Path::new("/home/me")), "me");

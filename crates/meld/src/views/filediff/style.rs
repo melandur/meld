@@ -59,11 +59,12 @@ pub fn pane_style(shared: &Shared, colors: &DiffColors) -> PaneStyle {
     if let Some(c) = look("line-numbers", StyleAttr::Background) {
         style.gutter_background = c;
     }
-    style.line_number_current = look("current-line-number", StyleAttr::Foreground).unwrap_or(style.line_number);
+    style.line_number_current =
+        look("current-line-number", StyleAttr::Foreground).unwrap_or(style.line_number);
     if let Some(c) = look("selection", StyleAttr::Background) {
         style.selection = c;
-        style.selection_unfocused =
-            look("selection-unfocused", StyleAttr::Background).unwrap_or(Color { a: c.a * 0.6, ..c });
+        style.selection_unfocused = look("selection-unfocused", StyleAttr::Background)
+            .unwrap_or(Color { a: c.a * 0.6, ..c });
     }
     if let Some(c) = look("cursor", StyleAttr::Foreground) {
         style.cursor = c;
@@ -106,7 +107,12 @@ pub fn pane_style(shared: &Shared, colors: &DiffColors) -> PaneStyle {
 /// The `focus-highlight` colour of a pane on `side` (the outline flashed
 /// after jumping to a chunk).
 pub fn focus_color(shared: &Shared, side: Option<DiffSide>) -> Color {
-    color(shared.style.diff_colors(shared.settings.diff_colors, side).focus_highlight)
+    color(
+        shared
+            .style
+            .diff_colors(shared.settings.diff_colors, side)
+            .focus_highlight,
+    )
 }
 
 /// Syntax styles (`def:*` and language styles) from the scheme.

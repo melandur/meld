@@ -5,7 +5,8 @@
 use std::fmt;
 
 use iced::widget::{
-    Space, button, checkbox, column, container, pick_list, row, space, stack, text, text_input, tooltip,
+    Space, button, checkbox, column, container, pick_list, row, space, stack, text, text_input,
+    tooltip,
 };
 use iced::{Alignment, Background, Element, Length, Theme};
 use meld_files::NewlineType;
@@ -90,9 +91,11 @@ pub(super) fn language_label(p: &super::Pane) -> &'static str {
 }
 
 pub(super) fn newline_picker<'a>(pane: usize, newline: NewlineType) -> Element<'a, Message> {
-    pick_list(NEWLINES, Some(NewlineChoice(newline)), move |c: NewlineChoice| {
-        act(Act::SetNewline(pane, c.0))
-    })
+    pick_list(
+        NEWLINES,
+        Some(NewlineChoice(newline)),
+        move |c: NewlineChoice| act(Act::SetNewline(pane, c.0)),
+    )
     .text_size(12)
     .padding([2, 6])
     .style(|theme: &Theme, status| {
@@ -104,7 +107,10 @@ pub(super) fn newline_picker<'a>(pane: usize, newline: NewlineType) -> Element<'
     .into()
 }
 
-fn small_button<'a>(label: impl text::IntoFragment<'a>, message: Option<Message>) -> button::Button<'a, Message> {
+fn small_button<'a>(
+    label: impl text::IntoFragment<'a>,
+    message: Option<Message>,
+) -> button::Button<'a, Message> {
     button(text(label).size(12).wrapping(text::Wrapping::None))
         .padding([2, 6])
         .style(ui::flat_button)
@@ -118,7 +124,9 @@ fn icon_button<'a>(glyph: &'a str, tip: &'a str, message: Option<Message>) -> El
         .on_press_maybe(message);
     tooltip(
         b,
-        container(text(tip).size(13)).padding([4, 8]).style(ui::tooltip_box),
+        container(text(tip).size(13))
+            .padding([4, 8])
+            .style(ui::tooltip_box),
         tooltip::Position::Bottom,
     )
     .into()
@@ -215,7 +223,11 @@ impl FileDiff {
         }
 
         let body: Element<'a, Message> = if self.cmp.is_none() && self.is_loading() {
-            let label = if self.panes.iter().any(|p| p.file.state == LoadState::Loading) {
+            let label = if self
+                .panes
+                .iter()
+                .any(|p| p.file.state == LoadState::Loading)
+            {
                 tr!("Loading files…")
             } else {
                 tr!("Computing differences… (Escape to stop)")
@@ -261,7 +273,8 @@ impl FileDiff {
         let Some(path) = file.target() else {
             return (tr!("Unnamed file").into(), String::new());
         };
-        let targets: Vec<Option<&std::path::PathBuf>> = self.panes.iter().map(|p| p.file.target()).collect();
+        let targets: Vec<Option<&std::path::PathBuf>> =
+            self.panes.iter().map(|p| p.file.target()).collect();
         let parent = meld_files::find_shared_parent_path(&targets);
         let shown = parent
             .and_then(|parent| meld_files::format_parent_relative_path(&parent, path).ok())
@@ -276,13 +289,25 @@ impl FileDiff {
         let mut r = row![].spacing(2).align_y(Alignment::Center).padding([0, 4]);
         if !p.file.writable && p.file.path.is_some() {
             let (glyph, tip) = if p.editable {
-                ("🔓", tr!("Changes will not be saved to this file; click to prevent editing"))
+                (
+                    "🔓",
+                    tr!("Changes will not be saved to this file; click to prevent editing"),
+                )
             } else {
-                ("🔒", tr!("This file can not be written to. You may click here to unlock this file and make changes anyway, but these changes must be saved to a new file."))
+                (
+                    "🔒",
+                    tr!(
+                        "This file can not be written to. You may click here to unlock this file and make changes anyway, but these changes must be saved to a new file."
+                    ),
+                )
             };
             r = r.push(icon_button(glyph, tip, Some(act(Act::ToggleReadOnly(i)))));
         }
-        let save_tip = if p.file.writable { tr!("Save") } else { tr!("Save As…") };
+        let save_tip = if p.file.writable {
+            tr!("Save")
+        } else {
+            tr!("Save As…")
+        };
         r = r.push(icon_button(
             icon::SAVE,
             save_tip,
@@ -299,7 +324,9 @@ impl FileDiff {
         } else {
             tooltip(
                 label_text,
-                container(text(full).size(13)).padding([4, 8]).style(ui::tooltip_box),
+                container(text(full).size(13))
+                    .padding([4, 8])
+                    .style(ui::tooltip_box),
                 tooltip::Position::Bottom,
             )
             .into()
@@ -314,7 +341,11 @@ impl FileDiff {
     fn pane_view(&self, i: usize) -> Element<'_, Message> {
         let p = &self.panes[i];
         let highlights = if p.hover.is_empty() {
-            self.derived.highlights.get(i).map(Vec::as_slice).unwrap_or(&[])
+            self.derived
+                .highlights
+                .get(i)
+                .map(Vec::as_slice)
+                .unwrap_or(&[])
         } else {
             p.hover.as_slice()
         };
@@ -367,7 +398,10 @@ impl FileDiff {
             Some(pair) => link_map(&pair.chunks, &self.link_style)
                 .scroll(self.panes[left].scroll.y, self.panes[right].scroll.y)
                 .wrap(Some(&self.panes[left].wrap), Some(&self.panes[right].wrap))
-                .pane_heights(self.panes[left].viewport.height, self.panes[right].viewport.height)
+                .pane_heights(
+                    self.panes[left].viewport.height,
+                    self.panes[right].viewport.height,
+                )
                 .on_scroll(Message::LinkScroll)
                 .line_height(lh)
                 .line_counts(
@@ -405,8 +439,16 @@ impl FileDiff {
             });
         let mut first = row![
             entry,
-            icon_button(icon::UP, tr!("Previous Result"), Some(Message::Find(FindMessage::Previous))),
-            icon_button(icon::DOWN, tr!("Next Result"), Some(Message::Find(FindMessage::Next))),
+            icon_button(
+                icon::UP,
+                tr!("Previous Result"),
+                Some(Message::Find(FindMessage::Previous))
+            ),
+            icon_button(
+                icon::DOWN,
+                tr!("Next Result"),
+                Some(Message::Find(FindMessage::Next))
+            ),
             checkbox(f.match_case)
                 .label(tr!("Match case"))
                 .text_size(13)
@@ -423,7 +465,11 @@ impl FileDiff {
         .spacing(10)
         .align_y(Alignment::Center);
         if f.wrapped {
-            first = first.push(text(format!("↻ {}", tr!("Wrapped"))).size(13).style(ui::dim_text));
+            first = first.push(
+                text(format!("↻ {}", tr!("Wrapped")))
+                    .size(13)
+                    .style(ui::dim_text),
+            );
         }
         first = first.push(space::horizontal());
         first = first.push(icon_button(
@@ -468,10 +514,12 @@ impl FileDiff {
                 r = r.push(Space::new().width(BETWEEN));
             }
             r = r.push(
-                container(iced::widget::responsive(move |size| self.status_bar(i, size.width)))
-                    .height(24)
-                    .width(Length::FillPortion(1))
-                    .clip(true),
+                container(iced::widget::responsive(move |size| {
+                    self.status_bar(i, size.width)
+                }))
+                .height(24)
+                .width(Length::FillPortion(1))
+                .clip(true),
             );
         }
         if maps_width > 0.0 {
@@ -492,17 +540,27 @@ impl FileDiff {
             .align_y(Alignment::Center)
             .padding([0, 6]);
         r = r.push(small_button(
-            if shown.display_label { format!("{} ▾", tr!("Display")) } else { "☰".to_string() },
+            if shown.display_label {
+                format!("{} ▾", tr!("Display"))
+            } else {
+                "☰".to_string()
+            },
             Some(act(Act::Display(i))),
         ));
         if shown.encoding {
-            r = r.push(small_button(encoding_label(p), Some(act(Act::ChooseEncoding(i)))));
+            r = r.push(small_button(
+                encoding_label(p),
+                Some(act(Act::ChooseEncoding(i))),
+            ));
         }
         if shown.newline {
             r = r.push(newline_picker(i, p.file.newline));
         }
         if shown.language {
-            r = r.push(small_button(language_label(p), Some(act(Act::ChooseLanguage(i)))));
+            r = r.push(small_button(
+                language_label(p),
+                Some(act(Act::ChooseLanguage(i))),
+            ));
         }
         if let Some((pane, line)) = &self.go_to
             && *pane == i
@@ -518,18 +576,29 @@ impl FileDiff {
             );
         } else {
             let label = if shown.long_position {
-                tr!("Ln {line}, Col {column}", line = cursor.line + 1, column = column + 1)
+                tr!(
+                    "Ln {line}, Col {column}",
+                    line = cursor.line + 1,
+                    column = column + 1
+                )
             } else {
                 format!("{}:{}", cursor.line + 1, column + 1)
             };
-            r = r.push(small_button(label, (self.focus_pane() == Some(i)).then(|| act(Act::GoToLine))));
+            r = r.push(small_button(
+                label,
+                (self.focus_pane() == Some(i)).then(|| act(Act::GoToLine)),
+            ));
         }
         if shown.overwrite {
             r = r.push(
-                text(if self.overwrite { tr!("OVR") } else { tr!("INS") })
-                    .size(12)
-                    .wrapping(text::Wrapping::None)
-                    .style(ui::dim_text),
+                text(if self.overwrite {
+                    tr!("OVR")
+                } else {
+                    tr!("INS")
+                })
+                .size(12)
+                .wrapping(text::Wrapping::None)
+                .style(ui::dim_text),
             );
         }
         r.into()
@@ -598,11 +667,12 @@ impl FileDiff {
 
     pub(super) fn menu(&self, _shared: &Shared) -> Vec<menu::Item<Message>> {
         use menu::Item;
-        let action = |label: &str, shortcut: Option<&'static str>, enabled: bool, a: Act| Item::Action {
-            label: label.to_string(),
-            shortcut,
-            message: enabled.then_some(act(a)),
-        };
+        let action =
+            |label: &str, shortcut: Option<&'static str>, enabled: bool, a: Act| Item::Action {
+                label: label.to_string(),
+                shortcut,
+                message: enabled.then_some(act(a)),
+            };
         let n = self.panes.len();
         let focus = self.focus_pane();
         let modified_focus = focus.is_some_and(|p| self.is_modified(p));
@@ -610,8 +680,18 @@ impl FileDiff {
         let (merge_left, merge_right, merge_all) = self.merge_sensitivity();
         let _ = modified_focus;
         let mut items = vec![
-            action(tr!("Save As…"), Some("Ctrl+Shift+S"), focus.is_some(), Act::SaveAs),
-            action(tr!("Save All"), Some("Ctrl+Shift+L"), any_modified, Act::SaveAll),
+            action(
+                tr!("Save As…"),
+                Some("Ctrl+Shift+S"),
+                focus.is_some(),
+                Act::SaveAs,
+            ),
+            action(
+                tr!("Save All"),
+                Some("Ctrl+Shift+L"),
+                any_modified,
+                Act::SaveAll,
+            ),
             action(tr!("Revert Files…"), None, true, Act::Revert),
             action(
                 tr!("Open Externally"),
@@ -620,23 +700,56 @@ impl FileDiff {
                 Act::OpenExternal,
             ),
             Item::Separator,
-            action(tr!("Refresh Comparison"), Some("Ctrl+R"), self.cmp.is_some(), Act::Refresh),
+            action(
+                tr!("Refresh Comparison"),
+                Some("Ctrl+R"),
+                self.cmp.is_some(),
+                Act::Refresh,
+            ),
             action(tr!("Find…"), Some("Ctrl+F"), true, Act::Find),
             Item::Separator,
-            Item::toggle(tr!("Overview Map"), self.show_overview_map, act(Act::ToggleOverview)),
-            Item::toggle(tr!("Lock Scrolling"), self.lock_scrolling, act(Act::ToggleLockScrolling)),
+            Item::toggle(
+                tr!("Overview Map"),
+                self.show_overview_map,
+                act(Act::ToggleOverview),
+            ),
+            Item::toggle(
+                tr!("Lock Scrolling"),
+                self.lock_scrolling,
+                act(Act::ToggleLockScrolling),
+            ),
         ];
         if n == 2 {
-            items.push(action(tr!("Swap Left and Right Panes"), Some("Alt+\\"), true, Act::Swap));
+            items.push(action(
+                tr!("Swap Left and Right Panes"),
+                Some("Alt+\\"),
+                true,
+                Act::Swap,
+            ));
         }
         if n > 1 {
             items.push(Item::Separator);
-            items.push(action(tr!("Merge All from Left"), None, merge_left, Act::MergeAllLeft));
-            items.push(action(tr!("Merge All from Right"), None, merge_right, Act::MergeAllRight));
+            items.push(action(
+                tr!("Merge All from Left"),
+                None,
+                merge_left,
+                Act::MergeAllLeft,
+            ));
+            items.push(action(
+                tr!("Merge All from Right"),
+                None,
+                merge_right,
+                Act::MergeAllRight,
+            ));
             if n == 3 {
                 items.push(action(tr!("Merge All"), None, merge_all, Act::MergeAll));
             }
-            items.push(action(tr!("Format as Patch…"), None, true, Act::FormatPatch));
+            items.push(action(
+                tr!("Format as Patch…"),
+                None,
+                true,
+                Act::FormatPatch,
+            ));
         }
         items
     }

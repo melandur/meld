@@ -37,8 +37,12 @@ impl Kind {
         match self {
             Kind::File => tr!("Compare two or three files, and merge changes between them"),
             Kind::Folder => tr!("Compare two or three folders, and copy files between them"),
-            Kind::VersionControl => tr!("Browse a version controlled folder's changes and commit them"),
-            Kind::Git => tr!("Compare two revisions of a Git repository, with why each change was made"),
+            Kind::VersionControl => {
+                tr!("Browse a version controlled folder's changes and commit them")
+            }
+            Kind::Git => {
+                tr!("Compare two revisions of a Git repository, with why each change was made")
+            }
         }
     }
 
@@ -53,7 +57,11 @@ impl Kind {
     fn chooser_labels(self) -> [&'static str; 3] {
         match self {
             Kind::File => [tr!("First file"), tr!("Second file"), tr!("Third file")],
-            Kind::Folder => [tr!("First folder"), tr!("Second folder"), tr!("Third folder")],
+            Kind::Folder => [
+                tr!("First folder"),
+                tr!("Second folder"),
+                tr!("Third folder"),
+            ],
             Kind::VersionControl => [tr!("Version control folder"), "", ""],
             Kind::Git => [tr!("Git repository"), "", ""],
         }
@@ -62,8 +70,16 @@ impl Kind {
     /// The title of the file chooser for a pane (`new-diff-tab.ui`).
     fn chooser_titles(self) -> [&'static str; 3] {
         match self {
-            Kind::File => [tr!("Select First File"), tr!("Select Second File"), tr!("Select Third File")],
-            Kind::Folder => [tr!("Select First Folder"), tr!("Select Second Folder"), tr!("Select Third Folder")],
+            Kind::File => [
+                tr!("Select First File"),
+                tr!("Select Second File"),
+                tr!("Select Third File"),
+            ],
+            Kind::Folder => [
+                tr!("Select First Folder"),
+                tr!("Select Second Folder"),
+                tr!("Select Third Folder"),
+            ],
             Kind::VersionControl => [tr!("Select A Version-Controlled Folder"), "", ""],
             Kind::Git => [tr!("Select Folder"), "", ""],
         }
@@ -144,7 +160,12 @@ impl NewTab {
         self.kind.is_some() && (0..self.pane_count()).all(|i| self.chosen(i).is_some())
     }
 
-    pub fn update(&mut self, message: Message, _shared: &mut Shared, events: &mut Vec<Event>) -> Task<Message> {
+    pub fn update(
+        &mut self,
+        message: Message,
+        _shared: &mut Shared,
+        events: &mut Vec<Event>,
+    ) -> Task<Message> {
         match message {
             Message::SelectKind(kind) => {
                 self.kind = Some(kind);
@@ -163,7 +184,11 @@ impl NewTab {
                     .and_then(|p| p.parent().map(PathBuf::from))
                     .or_else(|| self.last_folder.clone())
                     .or_else(dirs_home);
-                let pick = if kind.picks_folders() { ui::chooser::pick_folder } else { ui::chooser::pick_file };
+                let pick = if kind.picks_folders() {
+                    ui::chooser::pick_folder
+                } else {
+                    ui::chooser::pick_file
+                };
                 return pick(title, start).map(move |path| Message::Chosen(pane, path));
             }
             Message::Chosen(pane, path) => {
@@ -188,9 +213,7 @@ impl NewTab {
                 }
                 let n = self.pane_count();
                 let comparison = match self.kind {
-                    Some(Kind::File) => {
-                        Comparison::files(self.files[..n].to_vec())
-                    }
+                    Some(Kind::File) => Comparison::files(self.files[..n].to_vec()),
                     Some(Kind::Folder) => Comparison::Folders {
                         paths: self.folders[..n].iter().flatten().cloned().collect(),
                         labels: Vec::new(),
@@ -240,14 +263,23 @@ impl NewTab {
         Task::none()
     }
 
-    pub fn command(&mut self, command: Command, shared: &mut Shared, events: &mut Vec<Event>) -> Task<Message> {
+    pub fn command(
+        &mut self,
+        command: Command,
+        shared: &mut Shared,
+        events: &mut Vec<Event>,
+    ) -> Task<Message> {
         match command {
             Command::Activate => self.update(Message::Compare, shared, events),
             _ => Task::none(),
         }
     }
 
-    pub fn request_close(&mut self, _shared: &mut Shared, events: &mut Vec<Event>) -> Task<Message> {
+    pub fn request_close(
+        &mut self,
+        _shared: &mut Shared,
+        events: &mut Vec<Event>,
+    ) -> Task<Message> {
         events.push(Event::Close { status: 0 });
         Task::none()
     }
@@ -298,16 +330,24 @@ impl NewTab {
                     let chosen = self.chosen(pane).map(|p| p.display().to_string());
                     // Long paths keep their end, the full path is in the
                     // tooltip
-                    let current = chosen.clone().unwrap_or_else(|| format!("({})", tr!("None")));
-                    let choose: Element<'_, Message> = button(ellipsized(current, Mode::Start).size(14).width(Length::Fill))
-                        .width(Length::Fill)
-                        .style(button::secondary)
-                        .on_press(Message::Choose(pane))
-                        .into();
+                    let current = chosen
+                        .clone()
+                        .unwrap_or_else(|| format!("({})", tr!("None")));
+                    let choose: Element<'_, Message> = button(
+                        ellipsized(current, Mode::Start)
+                            .size(14)
+                            .width(Length::Fill),
+                    )
+                    .width(Length::Fill)
+                    .style(button::secondary)
+                    .on_press(Message::Choose(pane))
+                    .into();
                     let choose = match chosen {
                         Some(full) => tooltip(
                             choose,
-                            container(text(full).size(13)).padding([4, 8]).style(ui::tooltip_box),
+                            container(text(full).size(13))
+                                .padding([4, 8])
+                                .style(ui::tooltip_box),
                             tooltip::Position::Bottom,
                         )
                         .into(),
@@ -315,16 +355,22 @@ impl NewTab {
                     };
                     col = col.push(
                         row![text(*label).size(14).width(170), choose]
-                        .spacing(10)
-                        .align_y(iced::Center),
+                            .spacing(10)
+                            .align_y(iced::Center),
                     );
                 }
                 if matches!(kind, Kind::File | Kind::Folder) {
-                    col = col.push(checkbox(self.three_way).label(tr!("3-way comparison")).on_toggle(Message::ThreeWay));
+                    col = col.push(
+                        checkbox(self.three_way)
+                            .label(tr!("3-way comparison"))
+                            .on_toggle(Message::ThreeWay),
+                    );
                 }
                 if kind == Kind::Git {
                     if self.git.is_some() {
-                        col = col.push(container(self.prs.view().map(Message::Prs)).height(Length::Fill));
+                        col = col.push(
+                            container(self.prs.view().map(Message::Prs)).height(Length::Fill),
+                        );
                     } else {
                         col = col.push(
                             text(tr!("Choose a repository to compare two of its revisions, or to review one of its pull requests"))
@@ -344,13 +390,21 @@ impl NewTab {
                             .on_press(Message::Blank),
                     );
                 }
-                buttons = buttons.push(button(text(tr!("Compare"))).on_press_maybe(self.ready().then_some(Message::Compare)));
+                buttons = buttons.push(
+                    button(text(tr!("Compare")))
+                        .on_press_maybe(self.ready().then_some(Message::Compare)),
+                );
                 col.push(buttons).into()
             }
         };
 
         container(
-            container(row![kinds, ui::separator(true), choosers].spacing(20).height(480)).max_width(1000),
+            container(
+                row![kinds, ui::separator(true), choosers]
+                    .spacing(20)
+                    .height(480),
+            )
+            .max_width(1000),
         )
         .padding(30)
         .center(Length::Fill)

@@ -11,14 +11,37 @@ fn usage_epilog() -> String {
     let (file, folder) = (tr!("file"), tr!("folder"));
     let rows = [
         ("meld".to_string(), tr!("Start with an empty window")),
-        (format!("meld <{file}|{folder}>"), tr!("Start a version control comparison")),
-        (format!("meld <{file}> <{file}> [<{file}>]"), tr!("Start a 2- or 3-way file comparison")),
-        (format!("meld <{folder}> <{folder}> [<{folder}>]"), tr!("Start a 2- or 3-way folder comparison")),
-        ("meld --git [<path>]".to_string(), tr!("Compare two revisions of a Git repository")),
-        ("meld --git --pr <number> [<path>]".to_string(), tr!("Review a pull or merge request")),
+        (
+            format!("meld <{file}|{folder}>"),
+            tr!("Start a version control comparison"),
+        ),
+        (
+            format!("meld <{file}> <{file}> [<{file}>]"),
+            tr!("Start a 2- or 3-way file comparison"),
+        ),
+        (
+            format!("meld <{folder}> <{folder}> [<{folder}>]"),
+            tr!("Start a 2- or 3-way folder comparison"),
+        ),
+        (
+            "meld --git [<path>]".to_string(),
+            tr!("Compare two revisions of a Git repository"),
+        ),
+        (
+            "meld --git --pr <number> [<path>]".to_string(),
+            tr!("Review a pull or merge request"),
+        ),
     ];
-    let width = rows.iter().map(|(u, _)| u.chars().count()).max().unwrap_or(0);
-    let mut out = format!("{}\n\n{}\n", tr!("Meld is a file and directory comparison tool."), tr!("Usage:"));
+    let width = rows
+        .iter()
+        .map(|(u, _)| u.chars().count())
+        .max()
+        .unwrap_or(0);
+    let mut out = format!(
+        "{}\n\n{}\n",
+        tr!("Meld is a file and directory comparison tool."),
+        tr!("Usage:")
+    );
     for (usage, what) in rows {
         out.push_str(&format!("  {usage:width$} {what}\n"));
     }
@@ -121,7 +144,9 @@ pub fn parse(args: impl IntoIterator<Item = String>) -> Result<Args, clap::Error
             continue;
         }
         let mut group = Vec::new();
-        while let Some(next) = args.next_if(|a| !(a.starts_with("--") || (a.starts_with('-') && a.len() > 1))) {
+        while let Some(next) =
+            args.next_if(|a| !(a.starts_with("--") || (a.starts_with('-') && a.len() > 1)))
+        {
             group.push(next);
         }
         if !(1..=3).contains(&group.len()) {
@@ -155,7 +180,10 @@ pub fn launch_from_args(args: Args, cwd: &Path) -> Result<Launch, String> {
     };
 
     if args.paths.len() > 3 {
-        return Err(tr!("too many arguments (wanted 0-3, got {})", args.paths.len()));
+        return Err(tr!(
+            "too many arguments (wanted 0-3, got {})",
+            args.paths.len()
+        ));
     }
     if args.auto_merge && args.paths.len() < 3 {
         return Err(tr!("can’t auto-merge less than 3 files").into());
@@ -170,7 +198,9 @@ pub fn launch_from_args(args: Args, cwd: &Path) -> Result<Launch, String> {
     });
     if let Some(path) = comparison_file {
         let path = expand_user(&path);
-        launch.comparisons.push(Comparison::SavedFile(resolve_path(cwd, &path)));
+        launch
+            .comparisons
+            .push(Comparison::SavedFile(resolve_path(cwd, &path)));
         return Ok(launch);
     }
 
@@ -182,7 +212,10 @@ pub fn launch_from_args(args: Args, cwd: &Path) -> Result<Launch, String> {
             return Err(tr!("--git takes at most one path").into());
         }
         if args.pr.is_some() && (args.base.is_some() || args.target.is_some()) {
-            return Err(tr!("--pr compares the pull request’s own base and head; leave out --base and --target").into());
+            return Err(tr!(
+                "--pr compares the pull request’s own base and head; leave out --base and --target"
+            )
+            .into());
         }
         let location = match args.paths.first() {
             Some(p) => resolve(cwd, p),

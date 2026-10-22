@@ -164,8 +164,12 @@ impl TreeModel {
             .iter()
             .filter_map(|&id| self.path(id).map(Path::to_path_buf))
             .collect();
-        let cursor = self.cursor.and_then(|id| self.path(id).map(Path::to_path_buf));
-        let anchor = self.anchor.and_then(|id| self.path(id).map(Path::to_path_buf));
+        let cursor = self
+            .cursor
+            .and_then(|id| self.path(id).map(Path::to_path_buf));
+        let anchor = self
+            .anchor
+            .and_then(|id| self.path(id).map(Path::to_path_buf));
 
         let mut model = TreeModel::new(root);
         let index = model.path_index();
@@ -176,7 +180,10 @@ impl TreeModel {
                 model.expanded.insert(id);
             }
         }
-        let selected: BTreeSet<NodeId> = selected.iter().filter_map(|p| index.get(p).copied()).collect();
+        let selected: BTreeSet<NodeId> = selected
+            .iter()
+            .filter_map(|p| index.get(p).copied())
+            .collect();
         if !selected.is_empty() {
             for &id in &selected {
                 model.expand_to(id);
@@ -201,7 +208,11 @@ impl TreeModel {
 
     fn rebuild_visible(&mut self) {
         let mut visible = Vec::with_capacity(self.nodes.len());
-        let mut stack: Vec<NodeId> = if self.nodes.is_empty() { Vec::new() } else { vec![0] };
+        let mut stack: Vec<NodeId> = if self.nodes.is_empty() {
+            Vec::new()
+        } else {
+            vec![0]
+        };
         while let Some(id) = stack.pop() {
             visible.push(id);
             if self.expanded.contains(&id) {
@@ -256,7 +267,10 @@ impl TreeModel {
 
     /// Selected entries in tree order (placeholders carry no path).
     pub fn selected_entries(&self) -> Vec<&Entry> {
-        self.selected.iter().filter_map(|&id| self.nodes[id].entry()).collect()
+        self.selected
+            .iter()
+            .filter_map(|&id| self.nodes[id].entry())
+            .collect()
     }
 
     /// Selected paths without trailing slashes (`_get_selected_files`).
@@ -324,11 +338,16 @@ impl TreeModel {
         for id in hidden {
             self.selected.remove(&id);
         }
-        let cursor_hidden = self.cursor.is_some_and(|c| self.is_descendant(c, collapsed));
+        let cursor_hidden = self
+            .cursor
+            .is_some_and(|c| self.is_descendant(c, collapsed));
         if cursor_hidden {
             self.cursor = Some(collapsed);
         }
-        if self.anchor.is_some_and(|a| self.is_descendant(a, collapsed)) {
+        if self
+            .anchor
+            .is_some_and(|a| self.is_descendant(a, collapsed))
+        {
             self.anchor = self.cursor;
         }
         if (cursor_hidden || before != self.selected.len()) && self.selected.is_empty() {
@@ -390,7 +409,13 @@ impl TreeModel {
         }
         let row = row.min(self.visible.len() - 1);
         if extend {
-            self.click(row, Mods { ctrl: false, shift: true });
+            self.click(
+                row,
+                Mods {
+                    ctrl: false,
+                    shift: true,
+                },
+            );
         } else {
             self.select_only(self.visible[row]);
         }
@@ -444,7 +469,10 @@ impl TreeModel {
     /// Whether a row counts as a change for previous/next change
     /// (`_find_next_prev_diff`).
     fn is_change(&self, id: NodeId) -> bool {
-        !matches!(self.nodes[id].state(), State::Normal | State::NoChange | State::Empty)
+        !matches!(
+            self.nodes[id].state(),
+            State::Normal | State::NoChange | State::Empty
+        )
     }
 
     /// The nearest changed row before (`forward == false`) or after the
@@ -474,7 +502,11 @@ impl TreeModel {
 
     /// Number of entry rows below the root (for the status line).
     pub fn entry_count(&self) -> usize {
-        self.nodes.iter().skip(1).filter(|n| n.entry().is_some()).count()
+        self.nodes
+            .iter()
+            .skip(1)
+            .filter(|n| n.entry().is_some())
+            .count()
     }
 
     /// The name shown for each visible row, top to bottom (for
@@ -532,7 +564,14 @@ impl TreeModel {
             && target == id
         {
             return match (new, node.entry()) {
-                (VcRow::Entry { entry, children, expanded }, Some(old)) => {
+                (
+                    VcRow::Entry {
+                        entry,
+                        children,
+                        expanded,
+                    },
+                    Some(old),
+                ) => {
                     // The root keeps its own entry; other folders keep
                     // their name (which differs in flattened trees).
                     let entry = if id == 0 {
@@ -555,7 +594,11 @@ impl TreeModel {
         match &node.kind {
             NodeKind::Entry(entry) => VcRow::Entry {
                 entry: entry.clone(),
-                children: node.children.iter().map(|&c| self.to_row(c, splice)).collect(),
+                children: node
+                    .children
+                    .iter()
+                    .map(|&c| self.to_row(c, splice))
+                    .collect(),
                 expanded: id == 0,
             },
             NodeKind::Empty(text) => VcRow::Empty(text.clone()),
@@ -663,7 +706,11 @@ mod tests {
     use super::*;
 
     fn file(path: &str, state: State) -> VcRow {
-        let name = Path::new(path).file_name().unwrap().to_string_lossy().into_owned();
+        let name = Path::new(path)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         VcRow::Entry {
             entry: Entry::new(path, name, state, false, ""),
             children: Vec::new(),
@@ -672,7 +719,11 @@ mod tests {
     }
 
     fn dir(path: &str, state: State, expanded: bool, children: Vec<VcRow>) -> VcRow {
-        let name = Path::new(path).file_name().unwrap().to_string_lossy().into_owned();
+        let name = Path::new(path)
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
         VcRow::Entry {
             entry: Entry::new(path, name, state, true, ""),
             children,
@@ -695,14 +746,24 @@ mod tests {
             State::Normal,
             true,
             vec![
-                dir("/r/a", State::Normal, false, vec![file("/r/a/a1", State::Modified)]),
+                dir(
+                    "/r/a",
+                    State::Normal,
+                    false,
+                    vec![file("/r/a/a1", State::Modified)],
+                ),
                 dir(
                     "/r/b",
                     State::Normal,
                     false,
                     vec![
                         file("/r/b/b1", State::Normal),
-                        dir("/r/b/c", State::Normal, true, vec![file("/r/b/c/c1", State::New)]),
+                        dir(
+                            "/r/b/c",
+                            State::Normal,
+                            true,
+                            vec![file("/r/b/c/c1", State::New)],
+                        ),
                     ],
                 ),
                 file("/r/x", State::Conflict),
@@ -723,7 +784,11 @@ mod tests {
     }
 
     fn selected_names(model: &TreeModel) -> Vec<String> {
-        model.selected_entries().iter().map(|e| e.name.clone()).collect()
+        model
+            .selected_entries()
+            .iter()
+            .map(|e| e.name.clone())
+            .collect()
     }
 
     #[test]
@@ -734,7 +799,10 @@ mod tests {
         assert_eq!(model.node(6).depth, 3);
         // c is expanded by its hint, which also expands its ancestor b;
         // a stays collapsed.
-        assert_eq!(names(&model), ["r", "a", "b", "b1", "c", "c1", "x", "(Empty)"]);
+        assert_eq!(
+            names(&model),
+            ["r", "a", "b", "b1", "c", "c1", "x", "(Empty)"]
+        );
         assert_eq!(selected_names(&model), ["r"]);
         assert_eq!(model.entry_count(), 7);
     }
@@ -759,19 +827,52 @@ mod tests {
     fn click_selection_modes() {
         let mut model = TreeModel::new(&sample());
         model.click(1, Mods::NONE);
-        model.click(3, Mods { ctrl: true, shift: false });
+        model.click(
+            3,
+            Mods {
+                ctrl: true,
+                shift: false,
+            },
+        );
         assert_eq!(selected_names(&model), ["a", "b1"]);
-        model.click(1, Mods { ctrl: true, shift: false });
+        model.click(
+            1,
+            Mods {
+                ctrl: true,
+                shift: false,
+            },
+        );
         assert_eq!(selected_names(&model), ["b1"]);
         // Shift selects from the anchor (the last ctrl-clicked row).
-        model.click(6, Mods { ctrl: false, shift: true });
+        model.click(
+            6,
+            Mods {
+                ctrl: false,
+                shift: true,
+            },
+        );
         assert_eq!(selected_names(&model), ["a", "b", "b1", "c", "c1", "x"]);
         model.click(4, Mods::NONE);
-        model.click(6, Mods { ctrl: false, shift: true });
+        model.click(
+            6,
+            Mods {
+                ctrl: false,
+                shift: true,
+            },
+        );
         assert_eq!(selected_names(&model), ["c", "c1", "x"]);
         // Ctrl+Shift adds the range to the selection.
-        model.click(0, Mods { ctrl: true, shift: true });
-        assert_eq!(selected_names(&model), ["r", "a", "b", "b1", "c", "c1", "x"]);
+        model.click(
+            0,
+            Mods {
+                ctrl: true,
+                shift: true,
+            },
+        );
+        assert_eq!(
+            selected_names(&model),
+            ["r", "a", "b", "b1", "c", "c1", "x"]
+        );
         // Placeholders can be selected but carry no path.
         model.click(7, Mods::NONE);
         assert!(model.selected_paths().is_empty());
@@ -833,7 +934,12 @@ mod tests {
         assert_eq!(model.activation(7), Activation::Diff(PathBuf::from("/r/x")));
         assert_eq!(model.activation(8), Activation::Nothing);
         // A folder row without children (flattened changed folder).
-        let row = dir("/r", State::Normal, true, vec![dir("/r/d", State::New, false, vec![])]);
+        let row = dir(
+            "/r",
+            State::Normal,
+            true,
+            vec![dir("/r/d", State::New, false, vec![])],
+        );
         assert_eq!(TreeModel::new(&row).activation(1), Activation::Nothing);
     }
 
@@ -842,7 +948,13 @@ mod tests {
         let mut model = TreeModel::new(&sample());
         model.toggle_expanded(1);
         model.click(2, Mods::NONE);
-        model.click(4, Mods { ctrl: true, shift: false });
+        model.click(
+            4,
+            Mods {
+                ctrl: true,
+                shift: false,
+            },
+        );
         assert_eq!(selected_names(&model), ["a1", "b1"]);
 
         // The rescan drops b1 and collapses everything by default.
@@ -851,14 +963,27 @@ mod tests {
             State::Normal,
             true,
             vec![
-                dir("/r/a", State::Normal, false, vec![file("/r/a/a1", State::Modified)]),
-                dir("/r/b", State::Normal, false, vec![file("/r/b/b2", State::New)]),
+                dir(
+                    "/r/a",
+                    State::Normal,
+                    false,
+                    vec![file("/r/a/a1", State::Modified)],
+                ),
+                dir(
+                    "/r/b",
+                    State::Normal,
+                    false,
+                    vec![file("/r/b/b2", State::New)],
+                ),
             ],
         );
         model.replace(&rescanned);
         assert_eq!(selected_names(&model), ["a1"]);
         assert_eq!(names(&model), ["r", "a", "a1", "b", "b2"]);
-        assert_eq!(model.node(model.cursor().unwrap()).entry().unwrap().name, "a1");
+        assert_eq!(
+            model.node(model.cursor().unwrap()).entry().unwrap().name,
+            "a1"
+        );
 
         // Nothing selected survives: the root is selected.
         let mut model = TreeModel::new(&sample());
@@ -882,8 +1007,15 @@ mod tests {
             vec![file("/r/b/b1", State::Modified), file("/r/b/d", State::New)],
         );
         assert!(model.replace_subtree(Path::new("/r/b"), &rescanned));
-        assert_eq!(names(&model), ["r", "a", "a1", "b", "b1", "d", "x", "(Empty)"]);
-        assert_eq!(selected_names(&model), ["a1"], "the selection elsewhere stays");
+        assert_eq!(
+            names(&model),
+            ["r", "a", "a1", "b", "b1", "d", "x", "(Empty)"]
+        );
+        assert_eq!(
+            selected_names(&model),
+            ["a1"],
+            "the selection elsewhere stays"
+        );
         let b1 = model.find(Path::new("/r/b/b1")).unwrap();
         assert_eq!(model.node(b1).state(), State::Modified);
         assert_eq!(model.node(b1).depth, 2);
@@ -891,7 +1023,12 @@ mod tests {
         assert!(!model.replace_subtree(Path::new("/r/zzz"), &rescanned));
 
         // The root keeps its own row
-        let root = dir("/r", State::Modified, true, vec![file("/r/only", State::New)]);
+        let root = dir(
+            "/r",
+            State::Modified,
+            true,
+            vec![file("/r/only", State::New)],
+        );
         assert!(model.replace_subtree(Path::new("/r"), &root));
         assert_eq!(names(&model), ["r", "only"]);
         assert_eq!(model.node(0).state(), State::Normal);
@@ -912,30 +1049,57 @@ mod tests {
     #[test]
     fn refresh_planning() {
         let model = TreeModel::new(&sample());
-        assert_eq!(model.folder_for(Path::new("/r/b/c")), Some(PathBuf::from("/r/b/c")));
-        assert_eq!(model.folder_for(Path::new("/r/b/c/new/deeper")), Some(PathBuf::from("/r/b/c")));
+        assert_eq!(
+            model.folder_for(Path::new("/r/b/c")),
+            Some(PathBuf::from("/r/b/c"))
+        );
+        assert_eq!(
+            model.folder_for(Path::new("/r/b/c/new/deeper")),
+            Some(PathBuf::from("/r/b/c"))
+        );
         assert_eq!(model.folder_for(Path::new("/r")), Some(PathBuf::from("/r")));
         // A repository root above the location refreshes the location
         assert_eq!(model.folder_for(Path::new("/")), Some(PathBuf::from("/r")));
-        assert_eq!(model.folder_for(Path::new("/elsewhere")), Some(PathBuf::from("/r")));
+        assert_eq!(
+            model.folder_for(Path::new("/elsewhere")),
+            Some(PathBuf::from("/r"))
+        );
 
         let folders = [PathBuf::from("/r/b/c"), PathBuf::from("/r/a")];
-        assert_eq!(plan_command_refresh(&model, false, &folders), Some(Refresh::Folder("/r".into())));
+        assert_eq!(
+            plan_command_refresh(&model, false, &folders),
+            Some(Refresh::Folder("/r".into()))
+        );
         assert_eq!(
             plan_command_refresh(&model, false, &folders[..1]),
             Some(Refresh::Folder("/r/b/c".into()))
         );
-        assert_eq!(plan_command_refresh(&model, true, &folders), Some(Refresh::Full));
+        assert_eq!(
+            plan_command_refresh(&model, true, &folders),
+            Some(Refresh::Full)
+        );
         assert_eq!(plan_command_refresh(&model, false, &[]), None);
 
-        assert_eq!(plan_file_refresh(&model, false, Path::new("/r/x")), Some(Refresh::Entry("/r/x".into())));
-        assert_eq!(plan_file_refresh(&model, true, Path::new("/r/x")), Some(Refresh::Entry("/r/x".into())));
+        assert_eq!(
+            plan_file_refresh(&model, false, Path::new("/r/x")),
+            Some(Refresh::Entry("/r/x".into()))
+        );
+        assert_eq!(
+            plan_file_refresh(&model, true, Path::new("/r/x")),
+            Some(Refresh::Entry("/r/x".into()))
+        );
         assert_eq!(
             plan_file_refresh(&model, false, Path::new("/r/b/c/brand-new")),
             Some(Refresh::Folder("/r/b/c".into()))
         );
-        assert_eq!(plan_file_refresh(&model, true, Path::new("/r/b/c/brand-new")), Some(Refresh::Full));
-        assert_eq!(plan_file_refresh(&model, false, Path::new("/other/file")), None);
+        assert_eq!(
+            plan_file_refresh(&model, true, Path::new("/r/b/c/brand-new")),
+            Some(Refresh::Full)
+        );
+        assert_eq!(
+            plan_file_refresh(&model, false, Path::new("/other/file")),
+            None
+        );
     }
 
     #[test]
@@ -952,7 +1116,10 @@ mod tests {
     #[test]
     fn visible_names_for_search() {
         let model = TreeModel::new(&sample());
-        assert_eq!(model.visible_names(), ["r", "a", "b", "b1", "c", "c1", "x", ""]);
+        assert_eq!(
+            model.visible_names(),
+            ["r", "a", "b", "b1", "c", "c1", "x", ""]
+        );
     }
 
     #[test]

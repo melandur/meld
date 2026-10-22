@@ -39,7 +39,10 @@ impl Expr {
         let mut parser = Parser { tokens, pos: 0 };
         let expr = parser.conditional()?;
         if parser.pos != parser.tokens.len() {
-            return Err(format!("unexpected {:?} in plural expression", parser.tokens[parser.pos]));
+            return Err(format!(
+                "unexpected {:?} in plural expression",
+                parser.tokens[parser.pos]
+            ));
         }
         Ok(expr)
     }
@@ -93,7 +96,8 @@ enum Token {
 
 fn tokenize(source: &str) -> Result<Vec<Token>, String> {
     const OPS: [&str; 18] = [
-        "&&", "||", "==", "!=", "<=", ">=", "<", ">", "!", "*", "/", "%", "+", "-", "?", ":", "(", ")",
+        "&&", "||", "==", "!=", "<=", ">=", "<", ">", "!", "*", "/", "%", "+", "-", "?", ":", "(",
+        ")",
     ];
     let bytes = source.as_bytes();
     let mut out = Vec::new();
@@ -114,7 +118,9 @@ fn tokenize(source: &str) -> Result<Vec<Token>, String> {
             while i < bytes.len() && bytes[i].is_ascii_digit() {
                 i += 1;
             }
-            let v = source[start..i].parse().map_err(|_| "number out of range".to_string())?;
+            let v = source[start..i]
+                .parse()
+                .map_err(|_| "number out of range".to_string())?;
             out.push(Token::Num(v));
             continue;
         }
@@ -125,7 +131,10 @@ fn tokenize(source: &str) -> Result<Vec<Token>, String> {
                 continue 'outer;
             }
         }
-        return Err(format!("unexpected character {:?} in plural expression", c as char));
+        return Err(format!(
+            "unexpected character {:?} in plural expression",
+            c as char
+        ));
     }
     Ok(out)
 }
@@ -178,7 +187,10 @@ impl Parser {
             return self.unary();
         }
         let mut left = self.binary(level + 1)?;
-        while let Some(op) = self.peek_op().and_then(|t| LEVELS[level].iter().find(|(s, _)| *s == t)) {
+        while let Some(op) = self
+            .peek_op()
+            .and_then(|t| LEVELS[level].iter().find(|(s, _)| *s == t))
+        {
             self.pos += 1;
             let right = self.binary(level + 1)?;
             left = Expr::Binary(op.1, Box::new(left), Box::new(right));
@@ -214,7 +226,11 @@ impl Parser {
 /// `(nplurals, plural expression source)` from a catalog header, e.g.
 /// `Plural-Forms: nplurals=2; plural=(n != 1);`.
 pub fn from_header(header: &str) -> Option<(usize, String)> {
-    let line = header.lines().find(|l| l.trim_start().to_ascii_lowercase().starts_with("plural-forms:"))?;
+    let line = header.lines().find(|l| {
+        l.trim_start()
+            .to_ascii_lowercase()
+            .starts_with("plural-forms:")
+    })?;
     let value = &line[line.find(':')? + 1..];
     let mut nplurals = None;
     let mut plural = None;

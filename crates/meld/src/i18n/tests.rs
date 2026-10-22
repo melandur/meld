@@ -3,7 +3,10 @@ use super::po::{self, Syntax};
 use super::*;
 
 fn env(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
-    let vars: Vec<(String, String)> = vars.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+    let vars: Vec<(String, String)> = vars
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
     move |name| vars.iter().find(|(k, _)| k == name).map(|(_, v)| v.clone())
 }
 
@@ -72,12 +75,20 @@ fn parses_entries() {
     assert!(file.header_text().contains("Plural-Forms"));
     assert_eq!(file.entries.len(), 9);
     let save = &file.entries[0];
-    assert_eq!((save.id.as_str(), save.strs.as_slice()), ("_Save", ["_Speichern".to_string()].as_slice()));
+    assert_eq!(
+        (save.id.as_str(), save.strs.as_slice()),
+        ("_Save", ["_Speichern".to_string()].as_slice())
+    );
     let files = &file.entries[1];
     assert_eq!(files.id_plural.as_deref(), Some("%d files"));
     assert_eq!(files.strs, ["%d Datei", "%d Dateien"]);
     assert_eq!(files.flags, ["python-format"]);
-    assert!(files.comments.iter().any(|c| c == "#. Translators: a comment"));
+    assert!(
+        files
+            .comments
+            .iter()
+            .any(|c| c == "#. Translators: a comment")
+    );
     assert_eq!(file.entries[2].context.as_deref(), Some("shortcut window"));
     assert!(file.entries[3].fuzzy());
     let escapes = &file.entries[4];
@@ -99,21 +110,44 @@ fn builds_catalog() {
     let (catalog, skipped) = po::catalog(&po::parse(SAMPLE).unwrap()).unwrap();
     assert_eq!((catalog.nplurals, catalog.plural.as_str()), (2, "(n != 1)"));
     let get = |ctx: &str, id: &str| {
-        catalog.messages.iter().find(|m| m.context == ctx && m.id == id).map(|m| m.forms.clone())
+        catalog
+            .messages
+            .iter()
+            .find(|m| m.context == ctx && m.id == id)
+            .map(|m| m.forms.clone())
     };
     // Mnemonics dropped from both sides; the original spelling still works
     assert_eq!(get("", "Save"), Some(vec!["Speichern".to_string()]));
     assert_eq!(get("", "_Save"), Some(vec!["Speichern".to_string()]));
-    assert_eq!(get("", "{} file"), Some(vec!["{} Datei".to_string(), "{} Dateien".to_string()]));
-    assert_eq!(get("shortcut window", "Quit Meld"), Some(vec!["Meld beenden".to_string()]));
+    assert_eq!(
+        get("", "{} file"),
+        Some(vec!["{} Datei".to_string(), "{} Dateien".to_string()])
+    );
+    assert_eq!(
+        get("shortcut window", "Quit Meld"),
+        Some(vec!["Meld beenden".to_string()])
+    );
     assert_eq!(get("", "Quit Meld"), None);
     assert_eq!(get("", "Fuzzy one"), None);
     assert_eq!(get("", "Untranslated"), None);
-    assert_eq!(get("", "{name} ({cmd} not installed)"), Some(vec!["{name} ({cmd} nicht installiert)".to_string()]));
-    assert_eq!(get("", "{vc} comparison:"), Some(vec!["{vc}-Vergleich:".to_string()]));
+    assert_eq!(
+        get("", "{name} ({cmd} not installed)"),
+        Some(vec!["{name} ({cmd} nicht installiert)".to_string()])
+    );
+    assert_eq!(
+        get("", "{vc} comparison:"),
+        Some(vec!["{vc}-Vergleich:".to_string()])
+    );
     // Uses an argument the message doesn't have
     assert_eq!(get("", "{} vs {}"), None);
-    assert_eq!(skipped, po::Skipped { fuzzy: 1, untranslated: 1, malformed: 1 });
+    assert_eq!(
+        skipped,
+        po::Skipped {
+            fuzzy: 1,
+            untranslated: 1,
+            malformed: 1
+        }
+    );
 }
 
 #[test]
@@ -124,9 +158,15 @@ fn converts_python_syntax() {
     assert_eq!(p("%2$s before %1$s").as_deref(), Some("{1} before {0}"));
     assert_eq!(p("100%!"), None);
     let b = |s| po::to_rust(s, Syntax::Brace);
-    assert_eq!(b("{name!r:>5} {} {0} {{lit}}").as_deref(), Some("{name} {} {0} {{lit}}"));
+    assert_eq!(
+        b("{name!r:>5} {} {0} {{lit}}").as_deref(),
+        Some("{name} {} {0} {{lit}}")
+    );
     assert_eq!(b("bad }"), None);
-    assert_eq!(po::to_rust("{a} 50%", Syntax::Literal).as_deref(), Some("{{a}} 50%"));
+    assert_eq!(
+        po::to_rust("{a} 50%", Syntax::Literal).as_deref(),
+        Some("{{a}} 50%")
+    );
     assert_eq!(po::canonical("{0} of {1}"), "{} of {}");
     assert_eq!(po::canonical("{1} of {0}"), "{1} of {0}");
 }
@@ -139,7 +179,10 @@ fn strips_mnemonics() {
     assert_eq!(po::strip_mnemonic("Ouvrir (_O)").as_deref(), Some("Ouvrir"));
     assert_eq!(po::strip_mnemonic("Plain"), None);
     // Underscores in placeholders and doubled ones aren't mnemonics
-    assert_eq!(po::strip_mnemonic("{file_name} _Open").as_deref(), Some("{file_name} Open"));
+    assert_eq!(
+        po::strip_mnemonic("{file_name} _Open").as_deref(),
+        Some("{file_name} Open")
+    );
     assert_eq!(po::strip_mnemonic("{file_name}"), None);
     assert_eq!(po::strip_mnemonic("a__b _c").as_deref(), Some("a_b c"));
     // Several single underscores: an identifier, not a mnemonic
@@ -162,12 +205,22 @@ fn encodes_and_decodes() {
 #[test]
 fn plural_expressions() {
     let eval = |src: &str, n| Expr::parse(src).unwrap().eval(n);
-    assert_eq!((eval("n != 1", 1), eval("n != 1", 0), eval("n != 1", 5)), (0, 1, 1));
-    assert_eq!((eval("(n > 1)", 0), eval("(n > 1)", 1), eval("(n > 1)", 2)), (0, 0, 1));
+    assert_eq!(
+        (eval("n != 1", 1), eval("n != 1", 0), eval("n != 1", 5)),
+        (0, 1, 1)
+    );
+    assert_eq!(
+        (eval("(n > 1)", 0), eval("(n > 1)", 1), eval("(n > 1)", 2)),
+        (0, 0, 1)
+    );
     assert_eq!(eval("0", 7), 0);
     // Russian/Ukrainian
-    let slavic = "(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2)";
-    let forms: Vec<u64> = [1, 2, 5, 11, 21, 22, 25, 111, 104].iter().map(|&n| eval(slavic, n)).collect();
+    let slavic =
+        "(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2)";
+    let forms: Vec<u64> = [1, 2, 5, 11, 21, 22, 25, 111, 104]
+        .iter()
+        .map(|&n| eval(slavic, n))
+        .collect();
     assert_eq!(forms, [0, 1, 2, 2, 0, 1, 2, 2, 1]);
     // Irish style with nested conditionals
     let ga = "n==1 ? 0 : n==2 ? 1 : n>=3 && n<=10 ? 2 : 3";
@@ -181,8 +234,14 @@ fn plural_expressions() {
 
 #[test]
 fn plural_header() {
-    assert_eq!(plural::from_header("Plural-Forms: nplurals=2; plural=(n != 1);\n"), Some((2, "(n != 1)".into())));
-    assert_eq!(plural::from_header("Language: ja\nPlural-Forms: nplurals=1; plural=0\n"), Some((1, "0".into())));
+    assert_eq!(
+        plural::from_header("Plural-Forms: nplurals=2; plural=(n != 1);\n"),
+        Some((2, "(n != 1)".into()))
+    );
+    assert_eq!(
+        plural::from_header("Language: ja\nPlural-Forms: nplurals=1; plural=0\n"),
+        Some((1, "0".into()))
+    );
     assert_eq!(plural::from_header("Language: x\n"), None);
 }
 
@@ -192,7 +251,11 @@ fn every_catalog_loads() {
     assert!(available().count() > 40);
     for code in available() {
         let lang = Language::load(code).unwrap_or_else(|| panic!("{code} doesn't load"));
-        assert!(lang.messages.len() > 10, "{code}: {} messages", lang.messages.len());
+        assert!(
+            lang.messages.len() > 10,
+            "{code}: {} messages",
+            lang.messages.len()
+        );
         for n in 0..200 {
             assert!(lang.form(n) < lang.nplurals.max(1));
         }
@@ -205,16 +268,26 @@ fn every_catalog_loads() {
 fn languages_from_environment() {
     let w = |vars: &[(&str, &str)]| wanted_languages(env(vars));
     assert_eq!(w(&[("LANG", "pt_BR.UTF-8")]), ["pt_BR", "pt"]);
-    assert_eq!(w(&[("LANGUAGE", "de:fr_CA"), ("LANG", "es_ES.UTF-8")]), ["de", "fr_CA", "fr", "es_ES", "es"]);
-    assert_eq!(w(&[("LC_ALL", "sr_RS.UTF-8@latin"), ("LANG", "de")]), ["sr_RS@latin", "sr_RS", "sr@latin", "sr"]);
-    assert_eq!(w(&[("LC_MESSAGES", "fr_FR"), ("LANG", "de_DE")]), ["fr_FR", "fr"]);
+    assert_eq!(
+        w(&[("LANGUAGE", "de:fr_CA"), ("LANG", "es_ES.UTF-8")]),
+        ["de", "fr_CA", "fr", "es_ES", "es"]
+    );
+    assert_eq!(
+        w(&[("LC_ALL", "sr_RS.UTF-8@latin"), ("LANG", "de")]),
+        ["sr_RS@latin", "sr_RS", "sr@latin", "sr"]
+    );
+    assert_eq!(
+        w(&[("LC_MESSAGES", "fr_FR"), ("LANG", "de_DE")]),
+        ["fr_FR", "fr"]
+    );
     assert_eq!(w(&[("LANGUAGE", ""), ("LANG", "C.UTF-8")]), ["C"]);
     assert_eq!(w(&[]), Vec::<String>::new());
 }
 
 #[test]
 fn picks_catalogs() {
-    let t = |vars: &[(&str, &str)]| Translator::for_languages(&wanted_languages(env(vars))).language();
+    let t =
+        |vars: &[(&str, &str)]| Translator::for_languages(&wanted_languages(env(vars))).language();
     assert_eq!(t(&[("LANG", "pt_BR.UTF-8")]), Some("pt_BR"));
     assert_eq!(t(&[("LANG", "pt_PT.UTF-8")]), Some("pt"));
     assert_eq!(t(&[("LANG", "de_AT.UTF-8")]), Some("de"));
@@ -238,9 +311,18 @@ fn falls_back_through_languages() {
     assert_eq!(t.lookup("", "Save"), "Speichern");
     let english = Translator::english();
     assert_eq!(english.lookup("", "Save"), "Save");
-    assert_eq!(english.lookup_plural("", "{} file", "{} files", 1), "{} file");
-    assert_eq!(english.lookup_plural("", "{} file", "{} files", 2), "{} files");
-    assert_eq!(t.lookup("", "Not a message of Meld"), "Not a message of Meld");
+    assert_eq!(
+        english.lookup_plural("", "{} file", "{} files", 1),
+        "{} file"
+    );
+    assert_eq!(
+        english.lookup_plural("", "{} file", "{} files", 2),
+        "{} files"
+    );
+    assert_eq!(
+        t.lookup("", "Not a message of Meld"),
+        "Not a message of Meld"
+    );
 }
 
 /// Messages from the Python version resolve with its translations.
@@ -249,10 +331,19 @@ fn python_messages_resolve() {
     let de = lang("de");
     assert_eq!(de.lookup("", "Save"), "Speichern");
     assert_eq!(de.lookup("", "Preferences"), "Einstellungen");
-    assert_eq!(de.lookup("", "Folder {} is being compared to itself"), "Der Ordner »{}« wird mit sich selbst verglichen");
+    assert_eq!(
+        de.lookup("", "Folder {} is being compared to itself"),
+        "Der Ordner »{}« wird mit sich selbst verglichen"
+    );
     assert_eq!(de.lookup("shortcut window", "Quit Meld"), "Meld beenden");
-    assert_eq!(de.lookup_plural("", "{} branch", "{} branches", 1), "{} Zweig");
-    assert_eq!(de.lookup_plural("", "{} branch", "{} branches", 3), "{} Zweige");
+    assert_eq!(
+        de.lookup_plural("", "{} branch", "{} branches", 1),
+        "{} Zweig"
+    );
+    assert_eq!(
+        de.lookup_plural("", "{} branch", "{} branches", 3),
+        "{} Zweige"
+    );
     let fr = lang("fr");
     assert_eq!(fr.lookup("", "Preferences"), "Préférences");
     assert_eq!(fr.lookup("", "Save"), "Enregistrer");
@@ -265,11 +356,25 @@ fn python_messages_resolve() {
     assert_ne!(es.lookup("", "{vc} comparison:"), "{vc} comparison:");
     // Japanese mnemonics in parentheses are dropped
     let ja = lang("ja");
-    assert!(!ja.lookup("", "Save").contains("(_"), "{}", ja.lookup("", "Save"));
+    assert!(
+        !ja.lookup("", "Save").contains("(_"),
+        "{}",
+        ja.lookup("", "Save")
+    );
     // Russian has three forms
     let ru = lang("ru");
-    let forms: Vec<&str> = [1, 2, 5].iter().map(|&n| ru.lookup_plural("", "{} branch", "{} branches", n)).collect();
-    assert_eq!(forms.iter().collect::<std::collections::BTreeSet<_>>().len(), 3, "{forms:?}");
+    let forms: Vec<&str> = [1, 2, 5]
+        .iter()
+        .map(|&n| ru.lookup_plural("", "{} branch", "{} branches", n))
+        .collect();
+    assert_eq!(
+        forms
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        3,
+        "{forms:?}"
+    );
 }
 
 #[test]
@@ -277,7 +382,10 @@ fn formats_placeholders() {
     assert_eq!(format("{} of {}", &[&1, &"two"], &[]), "1 of two");
     // Translations may reorder
     assert_eq!(format("{1} von {0}", &[&1, &"two"], &[]), "two von 1");
-    assert_eq!(format("{b} {a} {}", &[&0], &[("a", &"A"), ("b", &"B")]), "B A 0");
+    assert_eq!(
+        format("{b} {a} {}", &[&0], &[("a", &"A"), ("b", &"B")]),
+        "B A 0"
+    );
     assert_eq!(format("{{literal}} {}%", &[&50], &[]), "{literal} 50%");
     // Missing values stay visible rather than panicking
     assert_eq!(format("{} {} {x}", &[&1], &[]), "1 {} {x}");

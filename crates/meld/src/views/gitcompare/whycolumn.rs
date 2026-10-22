@@ -9,21 +9,23 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::forge::relative_date;
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::overlay;
 use iced::advanced::renderer;
 use iced::advanced::widget::{self, Tree, Widget};
 use iced::advanced::{Clipboard, Shell, mouse};
 use iced::widget::{button, column, container, mouse_area, row, space, text, tooltip};
-use iced::{Background, Border, Color, Element, Event, Length, Rectangle, Renderer, Size, Theme, Vector};
+use iced::{
+    Background, Border, Color, Element, Event, Length, Rectangle, Renderer, Size, Theme, Vector,
+};
 use meld_ailens::cards::{CARD_GAP, layout_cards, reflow};
-use crate::forge::relative_date;
 use meld_ailens::picker::parse_iso_date;
 use meld_ailens::{Card, CardKind, ExplainAction, ExplanationSource, Side};
 
 use super::diffhost::PaneGeometry;
-use crate::ui::ellipsis::{Mode, ellipsized};
 use crate::ui;
+use crate::ui::ellipsis::{Mode, ellipsized};
 
 /// Number of commit colors (`.ailens-color-N` in style.css).
 pub const COLOR_COUNT: usize = 8;
@@ -182,7 +184,12 @@ impl<M> Clone for Callbacks<M> {
 }
 impl<M> Copy for Callbacks<M> {}
 
-fn badge<'a, M: 'a>(label: String, background: Color, color: Option<Color>, italic: bool) -> Element<'a, M> {
+fn badge<'a, M: 'a>(
+    label: String,
+    background: Color,
+    color: Option<Color>,
+    italic: bool,
+) -> Element<'a, M> {
     let mut t = text(label).size(11).wrapping(text::Wrapping::None);
     if italic {
         t = t.font(iced::Font {
@@ -210,18 +217,40 @@ fn long_text<'a, M: Clone + 'a>(
     on_expand: fn(String) -> M,
     bold: bool,
 ) -> Element<'a, M> {
-    let font = if bold { ui::bold() } else { iced::Font::DEFAULT };
+    let font = if bold {
+        ui::bold()
+    } else {
+        iced::Font::DEFAULT
+    };
     if body.chars().count() <= LONG_TEXT {
-        return text(body).size(13).font(font).wrapping(text::Wrapping::WordOrGlyph).into();
+        return text(body)
+            .size(13)
+            .font(font)
+            .wrapping(text::Wrapping::WordOrGlyph)
+            .into();
     }
     let expanded = states.expanded.contains(key);
-    let shown = if expanded { body } else { shorten(&body, SHORT_TEXT) };
+    let shown = if expanded {
+        body
+    } else {
+        shorten(&body, SHORT_TEXT)
+    };
     column![
-        text(shown).size(13).font(font).wrapping(text::Wrapping::WordOrGlyph),
-        button(text(if expanded { tr!("Show less") } else { tr!("Show more") }).size(12))
-            .padding([0, 0])
-            .style(link_button)
-            .on_press(on_expand(key.to_string())),
+        text(shown)
+            .size(13)
+            .font(font)
+            .wrapping(text::Wrapping::WordOrGlyph),
+        button(
+            text(if expanded {
+                tr!("Show less")
+            } else {
+                tr!("Show more")
+            })
+            .size(12)
+        )
+        .padding([0, 0])
+        .style(link_button)
+        .on_press(on_expand(key.to_string())),
     ]
     .spacing(2)
     .into()
@@ -277,13 +306,23 @@ pub fn card_view<'a, M: Clone + 'a>(
                 CardKind::Unstaged => tr!("Unstaged"),
                 _ => tr!("Commit unknown"),
             };
-            header = header.push(text(label).size(12).font(ui::bold()).wrapping(text::Wrapping::None));
+            header = header.push(
+                text(label)
+                    .size(12)
+                    .font(ui::bold())
+                    .wrapping(text::Wrapping::None),
+            );
         }
     }
     if card.agent() {
         let claude = hex(0xd97757);
         header = header.push(tooltip(
-            badge("Claude".into(), claude.scale_alpha(0.2), Some(claude), false),
+            badge(
+                "Claude".into(),
+                claude.scale_alpha(0.2),
+                Some(claude),
+                false,
+            ),
             container(text(card.agent_name.as_str()).size(12))
                 .padding([4, 8])
                 .style(ui::tooltip_box),
@@ -291,17 +330,29 @@ pub fn card_view<'a, M: Clone + 'a>(
         ));
     }
     // The model or author gives way to the date
-    let who = if card.agent() { &card.agent_model } else { &card.author };
+    let who = if card.agent() {
+        &card.agent_model
+    } else {
+        &card.author
+    };
     let filled = !who.is_empty();
     if filled {
-        header = header.push(ellipsized(who.as_str(), Mode::End).size(12).style(dim).width(Length::Fill));
+        header = header.push(
+            ellipsized(who.as_str(), Mode::End)
+                .size(12)
+                .style(dim)
+                .width(Length::Fill),
+        );
     }
     if let Some(date) = parse_iso_date(&card.date).filter(|_| !card.date.is_empty()) {
         if !filled {
             header = header.push(space::horizontal());
         }
         header = header.push(tooltip(
-            text(relative_date(date, now)).size(12).style(dim).wrapping(text::Wrapping::None),
+            text(relative_date(date, now))
+                .size(12)
+                .style(dim)
+                .wrapping(text::Wrapping::None),
             container(text(local_date(date).unwrap_or_else(|| card.date.clone())).size(12))
                 .padding([4, 8])
                 .style(ui::tooltip_box),
@@ -311,7 +362,13 @@ pub fn card_view<'a, M: Clone + 'a>(
 
     let mut body = column![header].spacing(3).width(Length::Fill);
     if !card.what.is_empty() {
-        body = body.push(long_text(reflow(&card.what), &format!("{key}:what"), states, callbacks.expand, true));
+        body = body.push(long_text(
+            reflow(&card.what),
+            &format!("{key}:what"),
+            states,
+            callbacks.expand,
+            true,
+        ));
     }
     if !card.why.is_empty() {
         match card.source {
@@ -319,7 +376,10 @@ pub fn card_view<'a, M: Clone + 'a>(
                 let line = if card.inferred_by.is_empty() {
                     tr!("Inferred by a model, not the author’s words").to_string()
                 } else {
-                    tr!("Inferred by {model}, not the author’s words", model = card.inferred_by)
+                    tr!(
+                        "Inferred by {model}, not the author’s words",
+                        model = card.inferred_by
+                    )
                 };
                 body = body.push(badge_line(line));
             }
@@ -333,23 +393,33 @@ pub fn card_view<'a, M: Clone + 'a>(
             }
             None => {}
         }
-        body = body.push(long_text(reflow(&card.why), &format!("{key}:why"), states, callbacks.expand, false));
+        body = body.push(long_text(
+            reflow(&card.why),
+            &format!("{key}:why"),
+            states,
+            callbacks.expand,
+            false,
+        ));
     }
     if !card.justification.is_empty() {
-        body = body.push(justification(&card.justification, &format!("{key}:justification"), states, callbacks.expand));
+        body = body.push(justification(
+            &card.justification,
+            &format!("{key}:justification"),
+            states,
+            callbacks.expand,
+        ));
     }
 
     if !card.change_what.is_empty() || !card.change_why.is_empty() {
         let line = if card.change_model.is_empty() {
             tr!("This change · inferred by a model").to_string()
         } else {
-            tr!("This change · inferred by {model}", model = card.change_model)
+            tr!(
+                "This change · inferred by {model}",
+                model = card.change_model
+            )
         };
-        let mut change = column![
-            ui::separator(false),
-            badge_line(line),
-        ]
-        .spacing(3);
+        let mut change = column![ui::separator(false), badge_line(line),].spacing(3);
         if !card.change_what.is_empty() {
             change = change.push(text(card.change_what.as_str()).size(13).font(ui::bold()));
         }
@@ -398,20 +468,22 @@ pub fn card_view<'a, M: Clone + 'a>(
             Some(rest) => shorten(&format!("{first} {rest}"), 160),
             None => first,
         };
-        body = body.push(
-            text(error)
-                .size(12)
-                .style(|theme: &Theme| text::Style {
-                    color: Some(theme.extended_palette().danger.base.color),
-                }),
-        );
+        body = body.push(text(error).size(12).style(|theme: &Theme| text::Style {
+            color: Some(theme.extended_palette().danger.base.color),
+        }));
     }
     for build in &card.builds {
         body = body.push(
-            button(text(tr!("Build {name}", name = build.strip_suffix(".md").unwrap_or(build))).size(12))
-                .padding(0)
-                .style(link_button)
-                .on_press((callbacks.build)(build.clone())),
+            button(
+                text(tr!(
+                    "Build {name}",
+                    name = build.strip_suffix(".md").unwrap_or(build)
+                ))
+                .size(12),
+            )
+            .padding(0)
+            .style(link_button)
+            .on_press((callbacks.build)(build.clone())),
         );
     }
 
@@ -421,32 +493,38 @@ pub fn card_view<'a, M: Clone + 'a>(
         .width(4)
         .height(Length::Fill)
         .style(move |theme: &Theme| container::Style {
-            background: Some(Background::Color(card_color(&color, theme.extended_palette().background.base.text))),
+            background: Some(Background::Color(card_color(
+                &color,
+                theme.extended_palette().background.base.text,
+            ))),
             border: Border::default().rounded(iced::border::Radius::default().left(6)),
             ..container::Style::default()
         });
-    let boxed = container(row![edge, container(body).padding([6, 8]).width(Length::Fill)])
-        .width(Length::Fill)
-        .style(move |theme: &Theme| {
-            let palette = theme.extended_palette();
-            let base = palette.background.base.color;
-            let background = if hovered {
-                mix(base, palette.primary.base.color, 0.08)
-            } else {
-                base
-            };
-            container::Style {
-                background: Some(Background::Color(background)),
-                text_color: Some(palette.background.base.text),
-                border: Border::default().rounded(6),
-                shadow: iced::Shadow {
-                    color: Color::BLACK.scale_alpha(0.12),
-                    offset: Vector::new(0.0, 1.0),
-                    blur_radius: 2.0,
-                },
-                ..container::Style::default()
-            }
-        });
+    let boxed = container(row![
+        edge,
+        container(body).padding([6, 8]).width(Length::Fill)
+    ])
+    .width(Length::Fill)
+    .style(move |theme: &Theme| {
+        let palette = theme.extended_palette();
+        let base = palette.background.base.color;
+        let background = if hovered {
+            mix(base, palette.primary.base.color, 0.08)
+        } else {
+            base
+        };
+        container::Style {
+            background: Some(Background::Color(background)),
+            text_color: Some(palette.background.base.text),
+            border: Border::default().rounded(6),
+            shadow: iced::Shadow {
+                color: Color::BLACK.scale_alpha(0.12),
+                offset: Vector::new(0.0, 1.0),
+                blur_radius: 2.0,
+            },
+            ..container::Style::default()
+        }
+    });
     mouse_area(container(boxed).padding([0, 6]))
         .on_enter((callbacks.hover)(Some(card.key.clone())))
         .on_exit((callbacks.hover)(None))
@@ -477,7 +555,12 @@ fn badge_line<'a, M: 'a>(label: String) -> Element<'a, M> {
     .padding([0, 6])
     .style(|theme: &Theme| container::Style {
         background: Some(Background::Color(
-            theme.extended_palette().background.base.text.scale_alpha(0.08),
+            theme
+                .extended_palette()
+                .background
+                .base
+                .text
+                .scale_alpha(0.08),
         )),
         border: Border::default().rounded(9),
         ..container::Style::default()
@@ -550,7 +633,12 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for CardColumn<'a, M> {
         Size::new(Length::Fill, Length::Fill)
     }
 
-    fn layout(&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits) -> layout::Node {
+    fn layout(
+        &mut self,
+        tree: &mut Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
         let size = limits.max();
         // Cards take the column's width and as much height as they need:
         // compressing the height makes fluid heights inside them (the
@@ -583,8 +671,15 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for CardColumn<'a, M> {
     ) {
         operation.container(None, layout.bounds());
         operation.traverse(&mut |operation| {
-            for ((child, state), layout) in self.children.iter_mut().zip(&mut tree.children).zip(layout.children()) {
-                child.as_widget_mut().operate(state, layout, renderer, operation);
+            for ((child, state), layout) in self
+                .children
+                .iter_mut()
+                .zip(&mut tree.children)
+                .zip(layout.children())
+            {
+                child
+                    .as_widget_mut()
+                    .operate(state, layout, renderer, operation);
             }
         });
     }
@@ -603,10 +698,15 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for CardColumn<'a, M> {
         let bounds = layout.bounds();
         let cursor = Self::cursor_in(bounds, cursor);
         let viewport = bounds.intersection(viewport).unwrap_or(bounds);
-        for ((child, state), layout) in self.children.iter_mut().zip(&mut tree.children).zip(layout.children()) {
-            child
-                .as_widget_mut()
-                .update(state, event, layout, cursor, renderer, clipboard, shell, &viewport);
+        for ((child, state), layout) in self
+            .children
+            .iter_mut()
+            .zip(&mut tree.children)
+            .zip(layout.children())
+        {
+            child.as_widget_mut().update(
+                state, event, layout, cursor, renderer, clipboard, shell, &viewport,
+            );
         }
     }
 
@@ -625,7 +725,9 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for CardColumn<'a, M> {
             .zip(&tree.children)
             .zip(layout.children())
             .map(|((child, state), layout)| {
-                child.as_widget().mouse_interaction(state, layout, cursor, viewport, renderer)
+                child
+                    .as_widget()
+                    .mouse_interaction(state, layout, cursor, viewport, renderer)
             })
             .max()
             .unwrap_or_default()
@@ -655,7 +757,9 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for CardColumn<'a, M> {
                 .zip(layout.children())
                 .filter(|(_, l)| l.bounds().intersects(&clip))
             {
-                child.as_widget().draw(state, renderer, theme, style, layout, cursor, &clip);
+                child
+                    .as_widget()
+                    .draw(state, renderer, theme, style, layout, cursor, &clip);
             }
         });
     }
@@ -668,7 +772,14 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for CardColumn<'a, M> {
         viewport: &Rectangle,
         translation: Vector,
     ) -> Option<overlay::Element<'b, M, Theme, Renderer>> {
-        overlay::from_children(&mut self.children, tree, layout, renderer, viewport, translation)
+        overlay::from_children(
+            &mut self.children,
+            tree,
+            layout,
+            renderer,
+            viewport,
+            translation,
+        )
     }
 }
 
@@ -685,8 +796,14 @@ mod tests {
 
     fn card(added: Option<(usize, usize)>, deleted: Option<(usize, usize)>) -> Card {
         Card {
-            added: added.map(|(s, e)| LineRange::new(s, e)).into_iter().collect(),
-            deleted: deleted.map(|(s, e)| LineRange::new(s, e)).into_iter().collect(),
+            added: added
+                .map(|(s, e)| LineRange::new(s, e))
+                .into_iter()
+                .collect(),
+            deleted: deleted
+                .map(|(s, e)| LineRange::new(s, e))
+                .into_iter()
+                .collect(),
             ..Default::default()
         }
     }
@@ -711,7 +828,10 @@ mod tests {
         ];
         // The base pane is scrolled further than the target pane
         let tops = wanted_tops(&cards, [geometry(100.0), geometry(20.0)]);
-        assert_eq!(tops, [2.0 * 20.0 - 20.0, 9.0 * 20.0 - 100.0, 100.0 * 20.0 - 20.0]);
+        assert_eq!(
+            tops,
+            [2.0 * 20.0 - 20.0, 9.0 * 20.0 - 100.0, 100.0 * 20.0 - 20.0]
+        );
     }
 
     #[test]

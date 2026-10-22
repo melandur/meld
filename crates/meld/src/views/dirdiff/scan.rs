@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 
 use iced::futures::Stream;
 use iced::futures::channel::{mpsc, oneshot};
-use meld_files::dirdiff::{Row, WalkItem};
 use meld_files::FolderComparison;
+use meld_files::dirdiff::{Row, WalkItem};
 
 #[derive(Debug, Clone)]
 pub enum ScanEvent {
@@ -27,7 +27,11 @@ pub enum ScanEvent {
 
 const BATCH_INTERVAL: Duration = Duration::from_millis(80);
 
-pub fn start(comparison: FolderComparison, roots: Vec<PathBuf>, cancel: Arc<AtomicBool>) -> impl Stream<Item = ScanEvent> {
+pub fn start(
+    comparison: FolderComparison,
+    roots: Vec<PathBuf>,
+    cancel: Arc<AtomicBool>,
+) -> impl Stream<Item = ScanEvent> {
     let (tx, rx) = mpsc::unbounded();
     std::thread::spawn(move || {
         let base = comparison.root_row(&roots);
@@ -43,7 +47,10 @@ pub fn start(comparison: FolderComparison, roots: Vec<PathBuf>, cancel: Arc<Atom
             if last_sent.elapsed() >= BATCH_INTERVAL {
                 let current = describe(&prefix, batch.last());
                 if tx
-                    .unbounded_send(ScanEvent::Items(Arc::new(std::mem::take(&mut batch)), current))
+                    .unbounded_send(ScanEvent::Items(
+                        Arc::new(std::mem::take(&mut batch)),
+                        current,
+                    ))
                     .is_err()
                 {
                     return;
@@ -68,7 +75,9 @@ fn describe(prefix: &std::path::Path, item: Option<&WalkItem>) -> String {
 }
 
 /// Runs blocking work on a thread of its own.
-pub fn background<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> impl Future<Output = Option<T>> {
+pub fn background<T: Send + 'static>(
+    f: impl FnOnce() -> T + Send + 'static,
+) -> impl Future<Output = Option<T>> {
     let (tx, rx) = oneshot::channel();
     std::thread::spawn(move || {
         let _ = tx.send(f());
@@ -83,7 +92,10 @@ mod tests {
     use meld_files::FolderOptions;
 
     fn block_on<F: Future>(f: F) -> F::Output {
-        tokio::runtime::Builder::new_current_thread().build().unwrap().block_on(f)
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(f)
     }
 
     #[test]
@@ -96,11 +108,13 @@ mod tests {
         std::fs::write(a.join("sub/f"), "1").unwrap();
         std::fs::write(b.join("sub/f"), "2").unwrap();
         let comparison = FolderComparison::new(FolderOptions::default(), Vec::new(), Vec::new());
-        let events: Vec<ScanEvent> = block_on(
-            start(comparison, vec![a, b], Arc::new(AtomicBool::new(false))).collect(),
-        );
+        let events: Vec<ScanEvent> =
+            block_on(start(comparison, vec![a, b], Arc::new(AtomicBool::new(false))).collect());
         assert!(matches!(events.first(), Some(ScanEvent::Base(_))));
-        assert!(matches!(events.last(), Some(ScanEvent::Done { cancelled: false })));
+        assert!(matches!(
+            events.last(),
+            Some(ScanEvent::Done { cancelled: false })
+        ));
         let folders: usize = events
             .iter()
             .map(|e| match e {
@@ -123,6 +137,9 @@ mod tests {
             )
             .collect(),
         );
-        assert!(matches!(events.last(), Some(ScanEvent::Done { cancelled: true })));
+        assert!(matches!(
+            events.last(),
+            Some(ScanEvent::Done { cancelled: true })
+        ));
     }
 }

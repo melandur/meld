@@ -5,8 +5,7 @@ use std::path::{Path, PathBuf};
 
 use iced::{Color, Font, Theme};
 use meld_config::{
-    ComparisonType, RecentComparison, RecentComparisons, Rgba, SchemeManager, Settings,
-    StyleAttr,
+    ComparisonType, RecentComparison, RecentComparisons, Rgba, SchemeManager, Settings, StyleAttr,
 };
 
 use crate::comparison::Comparison;
@@ -51,9 +50,16 @@ impl Shared {
     pub fn initial_window_size() -> iced::Size {
         let state = Settings::load().window_state;
         let size = |value: i32, default: f32, min: f32| {
-            if value > 0 { (value as f32).max(min) } else { default }
+            if value > 0 {
+                (value as f32).max(min)
+            } else {
+                default
+            }
         };
-        iced::Size::new(size(state.width, 1000.0, 500.0), size(state.height, 750.0, 350.0))
+        iced::Size::new(
+            size(state.width, 1000.0, 500.0),
+            size(state.height, 750.0, 350.0),
+        )
     }
 
     pub fn save_settings(&self) {
@@ -65,7 +71,8 @@ impl Shared {
     /// Re-resolves the style scheme, iced theme and fonts after a settings
     /// or system theme change.
     pub fn refresh_theme(&mut self) {
-        self.style = meld_config::Theme::from_settings(&self.schemes, &self.settings, self.system_dark);
+        self.style =
+            meld_config::Theme::from_settings(&self.schemes, &self.settings, self.system_dark);
         self.theme = iced_theme(&self.style);
         let spec = self.settings.font(self.system_monospace.as_deref());
         self.mono_font = match spec.family.to_ascii_lowercase().as_str() {
@@ -212,12 +219,16 @@ fn recent_entry(comparison: &Comparison) -> Option<(ComparisonType, Vec<PathBuf>
             }
             (ComparisonType::Folder, paths.clone(), Vec::new())
         }
-        Comparison::VersionControl { location, .. } => {
-            (ComparisonType::VersionControl, vec![location.clone()], Vec::new())
-        }
-        Comparison::VersionControlFile(path) => {
-            (ComparisonType::VersionControl, vec![path.clone()], Vec::new())
-        }
+        Comparison::VersionControl { location, .. } => (
+            ComparisonType::VersionControl,
+            vec![location.clone()],
+            Vec::new(),
+        ),
+        Comparison::VersionControlFile(path) => (
+            ComparisonType::VersionControl,
+            vec![path.clone()],
+            Vec::new(),
+        ),
         Comparison::Git {
             location,
             base,
@@ -283,6 +294,7 @@ fn comparison_from_recent(entry: &RecentComparison) -> Option<Comparison> {
 }
 
 pub fn read_comparison_file(path: &Path) -> Result<Comparison, String> {
-    let entry = meld_config::read_meldcmp(path).map_err(|e| format!("{}: {e}", tr!("Error reading saved comparison file")))?;
+    let entry = meld_config::read_meldcmp(path)
+        .map_err(|e| format!("{}: {e}", tr!("Error reading saved comparison file")))?;
     comparison_from_recent(&entry).ok_or_else(|| tr!("Error reading saved comparison file").into())
 }

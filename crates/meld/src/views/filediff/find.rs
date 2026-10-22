@@ -54,11 +54,20 @@ impl FindBar {
     }
 }
 
-pub fn build_regex(text: &str, match_case: bool, whole_word: bool, is_regex: bool) -> Option<Regex> {
+pub fn build_regex(
+    text: &str,
+    match_case: bool,
+    whole_word: bool,
+    is_regex: bool,
+) -> Option<Regex> {
     if text.is_empty() {
         return None;
     }
-    let mut pattern = if is_regex { text.to_owned() } else { regex::escape(text) };
+    let mut pattern = if is_regex {
+        text.to_owned()
+    } else {
+        regex::escape(text)
+    };
     if whole_word {
         pattern = format!(r"\b(?:{pattern})\b");
     }
@@ -104,7 +113,11 @@ impl<'a> Joined<'a> {
             starts.push(text.len());
             text.push_str(line);
         }
-        Joined { lines, text, starts }
+        Joined {
+            lines,
+            text,
+            starts,
+        }
     }
 
     fn offset(&self, p: Position) -> usize {
@@ -116,7 +129,10 @@ impl<'a> Joined<'a> {
     }
 
     fn position(&self, byte: usize) -> Position {
-        let line = self.starts.partition_point(|&s| s <= byte).saturating_sub(1);
+        let line = self
+            .starts
+            .partition_point(|&s| s <= byte)
+            .saturating_sub(1);
         let text = self.lines.get(line).map_or("", String::as_str);
         let rel = (byte - self.starts.get(line).copied().unwrap_or(0)).min(text.len());
         Position::new(line, byte_to_col(text, rel))
@@ -134,7 +150,13 @@ impl<'a> Joined<'a> {
 /// ending at or before `from`), wrapping around. Returns the match and
 /// whether the search wrapped. `multiline` searches the joined text, so
 /// matches may span lines.
-pub fn search(re: &Regex, lines: &[String], from: Position, backwards: bool, multiline: bool) -> Option<(Match, bool)> {
+pub fn search(
+    re: &Regex,
+    lines: &[String],
+    from: Position,
+    backwards: bool,
+    multiline: bool,
+) -> Option<(Match, bool)> {
     if multiline {
         return search_joined(re, lines, from, backwards);
     }
@@ -175,7 +197,12 @@ pub fn search(re: &Regex, lines: &[String], from: Position, backwards: bool, mul
     None
 }
 
-fn search_joined(re: &Regex, lines: &[String], from: Position, backwards: bool) -> Option<(Match, bool)> {
+fn search_joined(
+    re: &Regex,
+    lines: &[String],
+    from: Position,
+    backwards: bool,
+) -> Option<(Match, bool)> {
     if lines.is_empty() {
         return None;
     }
@@ -191,7 +218,9 @@ fn search_joined(re: &Regex, lines: &[String], from: Position, backwards: bool) 
             }
             first.get_or_insert(m);
         }
-        after.map(|m| (m, false)).or_else(|| first.map(|m| (m, true)))
+        after
+            .map(|m| (m, false))
+            .or_else(|| first.map(|m| (m, true)))
     } else {
         let mut before = None;
         let mut last = None;
@@ -202,7 +231,9 @@ fn search_joined(re: &Regex, lines: &[String], from: Position, backwards: bool) 
                 last = Some(m);
             }
         }
-        before.map(|m| (m, false)).or_else(|| last.map(|m| (m, true)))
+        before
+            .map(|m| (m, false))
+            .or_else(|| last.map(|m| (m, true)))
     };
     found.map(|(m, wrapped)| ((joined.position(m.start), joined.position(m.end)), wrapped))
 }
@@ -212,17 +243,27 @@ pub fn has_match(re: &Regex, lines: &[String], multiline: bool) -> bool {
     if multiline {
         return Joined::new(lines).matches(re).next().is_some();
     }
-    lines.iter().any(|l| re.find_iter(l).any(|m| m.start() != m.end()))
+    lines
+        .iter()
+        .any(|l| re.find_iter(l).any(|m| m.start() != m.end()))
 }
 
 /// The matches in `lines[range]`, split per line, sorted.
-pub fn matches_in(re: &Regex, lines: &[String], range: Range<usize>, multiline: bool) -> Vec<InlineHighlight> {
+pub fn matches_in(
+    re: &Regex,
+    lines: &[String],
+    range: Range<usize>,
+    multiline: bool,
+) -> Vec<InlineHighlight> {
     let range = range.start.min(lines.len())..range.end.min(lines.len());
     let mut out = Vec::new();
     if !multiline {
         for line in range {
             for (s, e) in line_matches(re, &lines[line]) {
-                out.push(InlineHighlight { line, columns: s..e });
+                out.push(InlineHighlight {
+                    line,
+                    columns: s..e,
+                });
             }
         }
         return out;
@@ -306,7 +347,8 @@ pub fn replace_all(re: &Regex, lines: &[String], replacement: &str, is_regex: bo
         let new = if is_regex {
             re.replace_all(line, replacement).into_owned()
         } else {
-            re.replace_all(line, regex::NoExpand(replacement)).into_owned()
+            re.replace_all(line, regex::NoExpand(replacement))
+                .into_owned()
         };
         if &new != line {
             out.push((i, new));
@@ -328,13 +370,20 @@ mod tests {
         let text = lines(&["foo bar", "baz foo", "qux"]);
         let re = build_regex("foo", false, false, false).unwrap();
         for multiline in [false, true] {
-            let ((s, e), wrapped) = search(&re, &text, Position::new(0, 1), false, multiline).unwrap();
-            assert_eq!((s, e, wrapped), (Position::new(1, 4), Position::new(1, 7), false));
-            let ((s, _), wrapped) = search(&re, &text, Position::new(2, 0), false, multiline).unwrap();
+            let ((s, e), wrapped) =
+                search(&re, &text, Position::new(0, 1), false, multiline).unwrap();
+            assert_eq!(
+                (s, e, wrapped),
+                (Position::new(1, 4), Position::new(1, 7), false)
+            );
+            let ((s, _), wrapped) =
+                search(&re, &text, Position::new(2, 0), false, multiline).unwrap();
             assert_eq!((s, wrapped), (Position::new(0, 0), true));
-            let ((s, _), wrapped) = search(&re, &text, Position::new(1, 4), true, multiline).unwrap();
+            let ((s, _), wrapped) =
+                search(&re, &text, Position::new(1, 4), true, multiline).unwrap();
             assert_eq!((s, wrapped), (Position::new(0, 0), false));
-            let ((s, _), wrapped) = search(&re, &text, Position::new(0, 0), true, multiline).unwrap();
+            let ((s, _), wrapped) =
+                search(&re, &text, Position::new(0, 0), true, multiline).unwrap();
             assert_eq!((s, wrapped), (Position::new(1, 4), true));
         }
     }
@@ -382,7 +431,10 @@ mod tests {
         let text = lines(&["let a = 1;", "let b = 2;", "äb = 3;"]);
         let re = build_regex(r";\nlet", false, false, true).unwrap();
         let ((s, e), wrapped) = search(&re, &text, Position::default(), false, true).unwrap();
-        assert_eq!((s, e, wrapped), (Position::new(0, 9), Position::new(1, 3), false));
+        assert_eq!(
+            (s, e, wrapped),
+            (Position::new(0, 9), Position::new(1, 3), false)
+        );
         assert!(has_match(&re, &text, true));
         assert!(!has_match(&re, &text, false));
         // `^` anchors at line starts of the joined text.
@@ -396,8 +448,14 @@ mod tests {
         assert_eq!(
             hl,
             vec![
-                InlineHighlight { line: 1, columns: 8..10 },
-                InlineHighlight { line: 2, columns: 0..1 },
+                InlineHighlight {
+                    line: 1,
+                    columns: 8..10
+                },
+                InlineHighlight {
+                    line: 2,
+                    columns: 0..1
+                },
             ]
         );
         // Replacing such matches rewrites the text.

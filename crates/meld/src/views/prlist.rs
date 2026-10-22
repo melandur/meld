@@ -100,8 +100,15 @@ impl PrList {
         self.status = Status::Loading(tr!("Looking for pull requests…").into());
         let (generation, cancel) = self.restart();
         Task::perform(
-            forge::blocking(move || forge::load_remotes(&location, None, &cancel).map_err(|e| e.to_string())),
-            move |result| Message::Remotes(generation, result.unwrap_or_else(|| Err(tr!("Internal error").into()))),
+            forge::blocking(move || {
+                forge::load_remotes(&location, None, &cancel).map_err(|e| e.to_string())
+            }),
+            move |result| {
+                Message::Remotes(
+                    generation,
+                    result.unwrap_or_else(|| Err(tr!("Internal error").into())),
+                )
+            },
         )
     }
 
@@ -113,8 +120,17 @@ impl PrList {
         self.status = Status::Loading(forge::loading_prs(Some(forge.kind())).into());
         let (filter, search, limit) = (self.filter, self.search.trim().to_string(), self.limit);
         Task::perform(
-            forge::blocking(move || forge.list(filter, &search, limit, &cancel).map_err(|e| e.to_string())),
-            move |result| Message::Listed(generation, result.unwrap_or_else(|| Err(tr!("Internal error").into()))),
+            forge::blocking(move || {
+                forge
+                    .list(filter, &search, limit, &cancel)
+                    .map_err(|e| e.to_string())
+            }),
+            move |result| {
+                Message::Listed(
+                    generation,
+                    result.unwrap_or_else(|| Err(tr!("Internal error").into())),
+                )
+            },
         )
     }
 
@@ -127,7 +143,9 @@ impl PrList {
                 }
                 match result {
                     Ok(remotes) if remotes.forges.is_empty() => {
-                        self.status = Status::Error(tr!("No remote of this repository is on GitHub or GitLab").into());
+                        self.status = Status::Error(
+                            tr!("No remote of this repository is on GitHub or GitLab").into(),
+                        );
                         self.remotes = Some(remotes);
                         Task::none()
                     }
@@ -175,7 +193,9 @@ impl PrList {
                 self.search = search;
                 self.search_generation += 1;
                 let generation = self.search_generation;
-                Task::perform(tokio::time::sleep(SEARCH_DELAY), move |_| Message::SearchDue(generation))
+                Task::perform(tokio::time::sleep(SEARCH_DELAY), move |_| {
+                    Message::SearchDue(generation)
+                })
             }
             Message::SearchDue(generation) => {
                 if generation != self.search_generation {
@@ -212,9 +232,12 @@ impl PrList {
     pub fn view(&self) -> Element<'_, Message> {
         let forge = self.remotes.as_ref().and_then(|r| r.current());
         let kind = forge.map(|f| f.kind());
-        let mut title = row![text(forge::nouns_heading(kind)).size(14).font(ui::bold()), space::horizontal()]
-            .spacing(8)
-            .align_y(iced::Center);
+        let mut title = row![
+            text(forge::nouns_heading(kind)).size(14).font(ui::bold()),
+            space::horizontal()
+        ]
+        .spacing(8)
+        .align_y(iced::Center);
         if let Some(remotes) = self.remotes.as_ref().filter(|r| r.forges.len() > 1) {
             let options = remotes
                 .forges
@@ -230,7 +253,12 @@ impl PrList {
         let filters = forge::chips(
             StateFilter::ALL
                 .iter()
-                .map(|f| (crate::i18n::pgettext("pull request state", f.label()).to_string(), Message::Filter(*f)))
+                .map(|f| {
+                    (
+                        crate::i18n::pgettext("pull request state", f.label()).to_string(),
+                        Message::Filter(*f),
+                    )
+                })
                 .collect(),
             StateFilter::ALL.iter().position(|f| *f == self.filter),
         );
@@ -249,10 +277,16 @@ impl PrList {
         let mut footer = row![].spacing(8).align_y(iced::Center);
         match &self.status {
             Status::Idle if self.prs.is_empty() => {
-                footer = footer.push(text(forge::no_prs(kind, self.filter)).size(12).style(ui::dim_text));
+                footer = footer.push(
+                    text(forge::no_prs(kind, self.filter))
+                        .size(12)
+                        .style(ui::dim_text),
+                );
             }
             Status::Idle => {}
-            Status::Loading(what) => footer = footer.push(text(format!("⏳ {what}")).size(12).style(ui::dim_text)),
+            Status::Loading(what) => {
+                footer = footer.push(text(format!("⏳ {what}")).size(12).style(ui::dim_text))
+            }
             Status::Error(err) => {
                 let (first, _) = crate::views::gitcompare::condense(err);
                 footer = footer
@@ -293,10 +327,19 @@ impl PrList {
     }
 }
 
-fn pr_row<'a>(pr: &'a PullRequest, now: f64, kind: Option<meld_forge::ForgeKind>) -> Element<'a, Message> {
-    let reference = kind.unwrap_or(meld_forge::ForgeKind::GitHub).reference(pr.number);
+fn pr_row<'a>(
+    pr: &'a PullRequest,
+    now: f64,
+    kind: Option<meld_forge::ForgeKind>,
+) -> Element<'a, Message> {
+    let reference = kind
+        .unwrap_or(meld_forge::ForgeKind::GitHub)
+        .reference(pr.number);
     let line = row![
-        text(reference).size(13).style(ui::dim_text).wrapping(text::Wrapping::None),
+        text(reference)
+            .size(13)
+            .style(ui::dim_text)
+            .wrapping(text::Wrapping::None),
         crate::views::gitcompare::ellipsized_label(&pr.title, 13.0, true),
         forge::state_badge(pr),
     ]
@@ -329,6 +372,12 @@ mod tests {
         assert!(picked.is_none());
         assert!(list.prs.is_empty(), "an answer of an older request");
         let (_, picked) = list.update(Message::Open(4));
-        assert_eq!(picked, Some(PrSpec { number: 4, remote: None }));
+        assert_eq!(
+            picked,
+            Some(PrSpec {
+                number: 4,
+                remote: None
+            })
+        );
     }
 }

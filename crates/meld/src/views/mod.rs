@@ -94,7 +94,10 @@ macro_rules! dispatch {
 
 impl Tab {
     /// Opens a comparison as a tab.
-    pub fn open(comparison: Comparison, shared: &mut Shared) -> Result<(Tab, Task<Message>), String> {
+    pub fn open(
+        comparison: Comparison,
+        shared: &mut Shared,
+    ) -> Result<(Tab, Task<Message>), String> {
         Ok(match comparison {
             Comparison::Files {
                 paths,
@@ -174,11 +177,18 @@ impl Tab {
         dispatch!(self, t => t.unsaved())
     }
 
-    pub fn update(&mut self, message: Message, shared: &mut Shared, events: &mut Vec<Event>) -> Task<Message> {
+    pub fn update(
+        &mut self,
+        message: Message,
+        shared: &mut Shared,
+        events: &mut Vec<Event>,
+    ) -> Task<Message> {
         match (self, message) {
             (Tab::New(t), Message::New(m)) => t.update(m, shared, events).map(Message::New),
             (Tab::File(t), Message::File(m)) => t.update(m, shared, events).map(Message::File),
-            (Tab::Folder(t), Message::Folder(m)) => t.update(m, shared, events).map(Message::Folder),
+            (Tab::Folder(t), Message::Folder(m)) => {
+                t.update(m, shared, events).map(Message::Folder)
+            }
             (Tab::Vc(t), Message::Vc(m)) => t.update(m, shared, events).map(Message::Vc),
             (Tab::Git(t), Message::Git(m)) => t.update(m, shared, events).map(Message::Git),
             (Tab::Image(t), Message::Image(m)) => t.update(m, shared, events).map(Message::Image),
@@ -187,7 +197,12 @@ impl Tab {
         }
     }
 
-    pub fn command(&mut self, command: Command, shared: &mut Shared, events: &mut Vec<Event>) -> Task<Message> {
+    pub fn command(
+        &mut self,
+        command: Command,
+        shared: &mut Shared,
+        events: &mut Vec<Event>,
+    ) -> Task<Message> {
         dispatch!(self, t => t.command(command, shared, events), map)
     }
 

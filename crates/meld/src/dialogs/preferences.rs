@@ -686,7 +686,9 @@ impl Preferences {
         let style_variant = choice_row(
             tr!("Interface Style"),
             None,
-            StyleVariant::ALL.map(|v| (v, crate::i18n::gettext(v.label()))).to_vec(),
+            StyleVariant::ALL
+                .map(|v| (v, crate::i18n::gettext(v.label())))
+                .to_vec(),
             &s.style_variant,
             Choice::StyleVariant,
         );
@@ -718,7 +720,9 @@ impl Preferences {
             .unwrap_or_else(|| format_points(font.size_pt));
         let custom_font = expander(
             tr!("Use Custom Font"),
-            Some(tr!("Choose a font different to the system default monospace font")),
+            Some(tr!(
+                "Choose a font different to the system default monospace font"
+            )),
             BoolKey::CustomFont.get(s),
             |v| Message::Bool(BoolKey::CustomFont, v),
             vec![
@@ -792,7 +796,9 @@ impl Preferences {
         let wrap = choice_row(
             tr!("Text wrapping"),
             Some(tr!("How text should be wrapped when wider than the pane")),
-            WrapMode::PREFERENCES.map(|v| (v, crate::i18n::gettext(v.label()))).to_vec(),
+            WrapMode::PREFERENCES
+                .map(|v| (v, crate::i18n::gettext(v.label())))
+                .to_vec(),
             &s.wrap_mode,
             Choice::WrapMode,
         );
@@ -807,7 +813,10 @@ impl Preferences {
                 Some(tr!("How the overview map is displayed")),
                 vec![
                     (OverviewMapStyle::Chunkmap, tr!("Simple change map")),
-                    (OverviewMapStyle::CompactSourcemap, tr!("Compact source map")),
+                    (
+                        OverviewMapStyle::CompactSourcemap,
+                        tr!("Compact source map"),
+                    ),
                     (OverviewMapStyle::FullSourcemap, tr!("Full source map")),
                 ],
                 &s.overview_map_style,
@@ -817,13 +826,17 @@ impl Preferences {
 
         let editor = expander(
             tr!("Use custom text editor"),
-            Some(tr!("Choose an external text editor different to the system default")),
+            Some(tr!(
+                "Choose an external text editor different to the system default"
+            )),
             BoolKey::CustomEditor.get(s),
             |v| Message::Bool(BoolKey::CustomEditor, v),
             vec![entry_row(
                 tr!("Custom Editor Command"),
-                tr!("The command used to launch a custom editor. Some limited templating is \
-                     supported here; at the moment '{{file}}' and '{{line}}' are recognised tokens."),
+                tr!(
+                    "The command used to launch a custom editor. Some limited templating is \
+                     supported here; at the moment '{{file}}' and '{{line}}' are recognised tokens."
+                ),
                 TextKey::CustomEditorCommand,
                 s,
                 None,
@@ -896,8 +909,10 @@ impl Preferences {
     }
 
     fn folders_page<'a>(&'a self, s: &'a Settings) -> Element<'a, Message> {
-        let resolutions: Vec<(i32, &str)> =
-            TIMESTAMP_RESOLUTIONS.iter().map(|(v, label)| (*v, crate::i18n::gettext(label))).collect();
+        let resolutions: Vec<(i32, &str)> = TIMESTAMP_RESOLUTIONS
+            .iter()
+            .map(|(v, label)| (*v, crate::i18n::gettext(label)))
+            .collect();
         let shallow = expander(
             tr!("Compare files based only on size and timestamp"),
             None,
@@ -954,7 +969,9 @@ impl Preferences {
                 None,
                 vec![switch_row(
                     tr!("Apply text filters during folder comparisons"),
-                    Some(tr!("Enabling text filters will make comparing large files much slower")),
+                    Some(tr!(
+                        "Enabling text filters will make comparing large files much slower"
+                    )),
                     BoolKey::FilterText,
                     s,
                     !s.folder_shallow_comparison,
@@ -986,7 +1003,9 @@ impl Preferences {
                     choice_row(
                         tr!("Order when Merging Files"),
                         None,
-                        MergeFileOrder::ALL.map(|v| (v, crate::i18n::gettext(v.label()))).to_vec(),
+                        MergeFileOrder::ALL
+                            .map(|v| (v, crate::i18n::gettext(v.label())))
+                            .to_vec(),
                         &s.vc_merge_file_order,
                         Choice::MergeFileOrder,
                     ),
@@ -1003,7 +1022,13 @@ impl Preferences {
                         s,
                         true
                     ),
-                    self.spin_row(tr!("Margin position"), None, SpinKey::CommitMargin, s, margin),
+                    self.spin_row(
+                        tr!("Margin position"),
+                        None,
+                        SpinKey::CommitMargin,
+                        s,
+                        margin
+                    ),
                     switch_row(
                         tr!("Automatically break lines at right margin on commit"),
                         None,
@@ -1117,11 +1142,11 @@ impl Preferences {
         column![
             group(
                 Some(tr!("Filename filters")),
-                Some(
-                    tr!("When performing directory comparisons, you may filter out files and \
+                Some(tr!(
+                    "When performing directory comparisons, you may filter out files and \
                          directories by name. Each pattern is a list of shell style wildcards \
-                         separated by spaces.")
-                ),
+                         separated by spaces."
+                )),
                 vec![self.filter_list(FilterKind::Filename, s)],
             ),
             group(
@@ -1129,10 +1154,10 @@ impl Preferences {
                 None,
                 vec![switch_row(
                     tr!("Trim blank line differences from the start and end of changes"),
-                    Some(
-                        tr!("Removing blank lines can simplify comparisons, and can combine with \
-                             text filters to fully remove changes.")
-                    ),
+                    Some(tr!(
+                        "Removing blank lines can simplify comparisons, and can combine with \
+                             text filters to fully remove changes."
+                    )),
                     BoolKey::IgnoreBlankLines,
                     s,
                     true,
@@ -1140,13 +1165,13 @@ impl Preferences {
             ),
             group(
                 Some(tr!("Text filters")),
-                Some(
-                    tr!("When performing file comparisons, you may ignore certain types of changes. \
+                Some(tr!(
+                    "When performing file comparisons, you may ignore certain types of changes. \
                          Each pattern here is a python regular expression which replaces matching \
                          text with the empty string before comparison is performed. If the \
                          expression contains groups, only the groups are replaced. See the user \
-                         manual for more details.")
-                ),
+                         manual for more details."
+                )),
                 vec![self.filter_list(FilterKind::Text, s)],
             ),
         ]
@@ -1483,23 +1508,21 @@ fn diff_colors_section(shared: &Shared) -> Element<'_, Message> {
                 },
                 ..container::Style::default()
             });
-        let mark = container(dot)
-            .center(14)
-            .style(move |theme: &Theme| {
-                let palette = theme.extended_palette();
-                container::Style {
-                    border: Border {
-                        color: if selected {
-                            palette.primary.base.color
-                        } else {
-                            palette.background.base.text.scale_alpha(0.5)
-                        },
-                        width: 1.5,
-                        radius: 7.0.into(),
+        let mark = container(dot).center(14).style(move |theme: &Theme| {
+            let palette = theme.extended_palette();
+            container::Style {
+                border: Border {
+                    color: if selected {
+                        palette.primary.base.color
+                    } else {
+                        palette.background.base.text.scale_alpha(0.5)
                     },
-                    ..container::Style::default()
-                }
-            });
+                    width: 1.5,
+                    radius: 7.0.into(),
+                },
+                ..container::Style::default()
+            }
+        });
         let label = column![
             text(crate::i18n::gettext(mode.label())).size(14),
             text(mode.description()).size(12).style(ui::dim_text),
@@ -1517,7 +1540,12 @@ fn diff_colors_section(shared: &Shared) -> Element<'_, Message> {
                     let mut style = ui::flat_button(theme, status);
                     if selected {
                         style.background = Some(Background::Color(
-                            theme.extended_palette().primary.weak.color.scale_alpha(0.25),
+                            theme
+                                .extended_palette()
+                                .primary
+                                .weak
+                                .color
+                                .scale_alpha(0.25),
                         ));
                     }
                     style.border = Border::default();
@@ -1531,7 +1559,9 @@ fn diff_colors_section(shared: &Shared) -> Element<'_, Message> {
     col = col.push(ui::separator(false));
     col = col.push(setting_row(
         tr!("Difference Color Opacity"),
-        Some(tr!("Fainter colors keep the text easier to read; outlines stay visible")),
+        Some(tr!(
+            "Fainter colors keep the text easier to read; outlines stay visible"
+        )),
         row![
             iced::widget::slider(lo..=hi, opacity, Message::DiffColorOpacity)
                 .step(5)
