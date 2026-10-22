@@ -180,6 +180,8 @@ pub struct GitCompare {
     temp_count: u64,
     cards: CardStates,
     commit: Option<CommitPopup>,
+    /// Asking whether closing may discard pending review comments.
+    confirm_close: bool,
     why_width: f32,
     drag: Option<Drag>,
     files_scroll_id: iced::widget::Id,
@@ -253,6 +255,9 @@ pub enum Message {
     ShowCommit(String),
     CommitAction(text_editor::Action),
     CloseCommit,
+    /// Close the tab although review comments are pending.
+    DiscardAndClose,
+    CancelClose,
     CompareWithParent(String),
     OpenBuild(String),
     HoverCard(Option<String>),
@@ -338,6 +343,7 @@ impl GitCompare {
             temp_count: 0,
             cards: CardStates::default(),
             commit: None,
+            confirm_close: false,
             why_width: whycolumn::DEFAULT_WIDTH,
             drag: None,
             files_scroll_id: iced::widget::Id::unique(),
@@ -1761,6 +1767,17 @@ impl GitCompare {
                 }
                 Task::none()
             }
+            Message::DiscardAndClose => {
+                self.confirm_close = false;
+                if let Some(pr) = self.pr.as_mut() {
+                    pr.drafts.clear();
+                }
+                self.request_close(shared, events)
+            }
+            Message::CancelClose => {
+                self.confirm_close = false;
+                Task::none()
+            }
             Message::CloseCommit => {
                 self.commit = None;
                 Task::none()
@@ -1885,6 +1902,10 @@ impl GitCompare {
     }
 
     pub fn request_close(&mut self, shared: &mut Shared, events: &mut Vec<Event>) -> Task<Message> {
+        if self.pr.as_ref().is_some_and(|pr| !pr.drafts.is_empty()) {
+            self.confirm_close = true;
+            return Task::none();
+        }
         self.diff.request_close(shared, events).map(Message::Diff)
     }
 
@@ -2004,6 +2025,24 @@ impl GitCompare {
 
         if let Some(commit) = &self.commit {
             return ui::modal::modal(page, commit_dialog(commit), Message::CloseCommit);
+        }
+        if self.confirm_close {
+            let count = self.pr.as_ref().map_or(0, |pr| pr.drafts.len());
+            let dialog = ui::modal::dialog(
+                "Discard pending review comments?",
+                text(format!(
+                    "{count} review comments haven't been posted. Closing discards them."
+                ))
+                .size(14),
+                vec![
+                    button(text("Cancel")).style(button::secondary).on_press(Message::CancelClose).into(),
+                    button(text("Discard and Close"))
+                        .style(button::danger)
+                        .on_press(Message::DiscardAndClose)
+                        .into(),
+                ],
+            );
+            return ui::modal::modal(page, dialog, Message::CancelClose);
         }
         match self.active_pr().and_then(|pr| pr.dialog()) {
             Some((dialog, on_blur)) => {
