@@ -240,6 +240,27 @@ pub struct VcView {
     modifiers: Modifiers,
     scroll_y: f32,
     viewport_height: f32,
+    /// The folder an archive location was opened as; dropping it unmounts
+    /// or deletes the folder.
+    archive: Option<meld_files::ArchiveFolder>,
+}
+
+/// The result of opening an archive, handed through a message once.
+#[derive(Debug, Clone)]
+pub struct OpenedArchive(Arc<Mutex<Option<Result<meld_files::ArchiveFolder, String>>>>);
+
+impl OpenedArchive {
+    fn new(result: Result<meld_files::ArchiveFolder, String>) -> Self {
+        OpenedArchive(Arc::new(Mutex::new(Some(result))))
+    }
+
+    fn take(&self) -> Result<meld_files::ArchiveFolder, String> {
+        self.0
+            .lock()
+            .ok()
+            .and_then(|mut r| r.take())
+            .unwrap_or_else(|| Err("the archive was already opened".into()))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -300,6 +321,8 @@ pub enum Message {
     PathCopy,
     PathOpenFolder,
     OpenedFolder(Option<String>),
+    /// An archive location finished opening (load generation).
+    ArchiveOpened(u64, OpenedArchive),
 }
 
 impl VcView {
@@ -342,9 +365,29 @@ impl VcView {
             modifiers: Modifiers::empty(),
             scroll_y: 0.0,
             viewport_height: 0.0,
+            archive: None,
         };
-        let task = view.load();
+        let task = if meld_files::is_archive(&view.location) {
+            view.open_archive()
+        } else {
+            view.load()
+        };
         (view, task)
+    }
+
+    /// An archive given as the location opens as a folder first, like
+    /// Python Meld's `_mount_archives_and_open`.
+    fn open_archive(&mut self) -> Task<Message> {
+        self.cancel_scan();
+        self.load_gen += 1;
+        let generation = self.load_gen;
+        self.phase = Phase::Loading;
+        self.progress = "Opening archive…".into();
+        self.update_sensitivity();
+        let path = self.location.clone();
+        Task::perform(jobs::blocking(move || meld_files::open_archive(&path)), move |result| {
+            Message::ArchiveOpened(generation, OpenedArchive::new(result.and_then(|r| r)))
+        })
     }
 
     pub fn title(&self) -> String {
@@ -813,10 +856,34 @@ impl VcView {
             }
             Message::LocationChosen(path) => {
                 if let Some(path) = path {
+                    self.archive = None;
                     self.location = path;
                     self.tree = TreeModel::root_only(&self.location);
                     self.error = None;
-                    return self.load();
+                    return if meld_files::is_archive(&self.location) {
+                        self.open_archive()
+                    } else {
+                        self.load()
+                    };
+                }
+            }
+            Message::ArchiveOpened(generation, opened) => {
+                if generation != self.load_gen {
+                    return Task::none();
+                }
+                match opened.take() {
+                    Ok(folder) => {
+                        self.location = folder.root.clone();
+                        self.tree = TreeModel::root_only(&self.location);
+                        self.archive = Some(folder);
+                        return self.load();
+                    }
+                    Err(err) => {
+                        self.phase = Phase::Idle;
+                        self.progress.clear();
+                        self.error = Some(("Could not open the archive".into(), Some(err)));
+                        self.update_sensitivity();
+                    }
                 }
             }
             Message::Refresh => return self.load(),

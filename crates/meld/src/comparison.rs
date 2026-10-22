@@ -72,7 +72,7 @@ impl Comparison {
         match paths.as_slice() {
             [] => Err("no paths given".into()),
             [Some(path)] if !path.exists() => Err("Cannot compare a non-existent file".into()),
-            [Some(path)] if path.is_dir() => Ok(Comparison::VersionControl {
+            [Some(path)] if path.is_dir() || meld_files::is_archive(path) => Ok(Comparison::VersionControl {
                 location: path.clone(),
                 auto_compare,
             }),
