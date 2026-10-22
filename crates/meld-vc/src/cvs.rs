@@ -18,15 +18,21 @@
 //!   all for files with unresolved conflicts.
 //! - Revert resurrects removed files with `cvs add`; `cvs update -C`
 //!   leaves them removed.
-//!
-//! Files ignored by `.cvsignore` or CVS's default ignore list are reported
-//! by `cvs status` as unknown, so they show as unversioned.
+//! - Unversioned files and folders matching CVS's ignore rules are
+//!   ignored rather than unversioned ([`IgnoreRules`]; `cvs status`
+//!   reports them as unknown).
+//! - Conflicts left by `cvs update` are compared 3-way: local is the
+//!   backup `.#<name>.<rev>` CVS made of the modified file before merging,
+//!   base that backup's revision, remote the revision merged in (the one
+//!   now in `CVS/Entries`). CVS has no "resolved" flag: a file without
+//!   conflict markers is just modified. Resolve refuses files that still
+//!   contain markers and otherwise only re-checks their status.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::command::{self, VcCommand};
-use crate::entry::{Action, State};
+use crate::entry::{Action, ConflictSide, State};
 use crate::error::{Result, VcError};
 use crate::paths;
 use crate::vc::{TreeCache, Vc, VcCore, VcKind, unsupported};
@@ -151,38 +157,202 @@ pub fn read_module_path(dir: &Path) -> Option<(String, String)> {
     (!root.is_empty() && !module.is_empty()).then(|| (root, module.to_string()))
 }
 
+/// CVS's default ignore list (`ign_default` in CVS 1.12's `src/ignore.c`).
+pub const DEFAULT_IGNORE: &str = ". .. core RCSLOG tags TAGS RCS SCCS .make.state \
+     .nse_depinfo #* .#* cvslog.* ,* CVS CVS.adm .del-* *.a *.olb *.o *.obj *.so *.Z \
+     *~ *.old *.elc *.ln *.bak *.BAK *.orig *.rej *.exe _$* *$";
+
+/// CVS's rules for ignoring unversioned files ("Ignoring files via
+/// cvsignore" in the CVS manual): the default list, then the
+/// repository's `CVSROOT/cvsignore` (read when the repository is local),
+/// `~/.cvsignore`, the `CVSIGNORE` environment variable and finally the
+/// `.cvsignore` of the file's own folder. Each source is a
+/// whitespace-separated list of shell wildcards matched against file
+/// names; a `!` clears the list built so far.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IgnoreRules {
+    /// Patterns that apply to every folder.
+    pub global: Vec<String>,
+}
+
+impl IgnoreRules {
+    /// The global rules for a checkout whose `CVS/Root` is `cvsroot`.
+    pub fn load(cvsroot: Option<&str>) -> IgnoreRules {
+        IgnoreRules::load_from(
+            cvsroot,
+            dirs::home_dir().as_deref(),
+            std::env::var("CVSIGNORE").ok().as_deref(),
+        )
+    }
+
+    /// [`IgnoreRules::load`] with the home folder and the value of
+    /// `CVSIGNORE` given.
+    pub fn load_from(
+        cvsroot: Option<&str>,
+        home: Option<&Path>,
+        cvsignore_var: Option<&str>,
+    ) -> IgnoreRules {
+        let mut rules = IgnoreRules::default();
+        add_patterns(&mut rules.global, DEFAULT_IGNORE);
+        let files = [
+            cvsroot
+                .and_then(local_repository)
+                .map(|repo| repo.join("CVSROOT").join("cvsignore")),
+            home.map(|h| h.join(".cvsignore")),
+        ];
+        for file in files.into_iter().flatten() {
+            if let Ok(text) = std::fs::read_to_string(file) {
+                add_patterns(&mut rules.global, &text);
+            }
+        }
+        if let Some(text) = cvsignore_var {
+            add_patterns(&mut rules.global, text);
+        }
+        rules
+    }
+
+    /// The patterns for files in folder `dir` (global ones plus its
+    /// `.cvsignore`).
+    pub fn for_folder(&self, dir: &Path) -> Vec<String> {
+        let mut patterns = self.global.clone();
+        if let Ok(text) = std::fs::read_to_string(dir.join(".cvsignore")) {
+            add_patterns(&mut patterns, &text);
+        }
+        patterns
+    }
+}
+
+fn add_patterns(patterns: &mut Vec<String>, text: &str) {
+    for word in text.split_whitespace() {
+        if word == "!" {
+            patterns.clear();
+        } else {
+            patterns.push(word.to_string());
+        }
+    }
+}
+
+/// Whether file name `name` matches any of `patterns`.
+pub fn is_ignored_name(patterns: &[String], name: &str) -> bool {
+    patterns.iter().any(|p| fnmatch(p, name))
+}
+
+/// The repository folder of a local `CVSROOT` (`/path` or
+/// `:local:/path`); `None` for remote repositories.
+fn local_repository(cvsroot: &str) -> Option<PathBuf> {
+    let path = cvsroot
+        .strip_prefix(":local:")
+        .or_else(|| cvsroot.strip_prefix(":fork:"))
+        .unwrap_or(cvsroot);
+    path.starts_with('/').then(|| PathBuf::from(path))
+}
+
+/// Shell wildcard matching like `fnmatch(pattern, name, 0)`: `*`, `?`,
+/// `[...]` (`!` or `^` negates, `a-z` ranges) and `\` escapes; `*` also
+/// matches leading dots.
+pub fn fnmatch(pattern: &str, name: &str) -> bool {
+    fn class(p: &[char], c: char) -> Option<(bool, usize)> {
+        // Returns (matched, length of the class in p) or None if unclosed
+        let mut i = 1;
+        let negate = matches!(p.get(i), Some('!' | '^'));
+        if negate {
+            i += 1;
+        }
+        let mut matched = false;
+        let mut first = true;
+        while i < p.len() && (first || p[i] != ']') {
+            first = false;
+            let mut lo = p[i];
+            if lo == '\\' && i + 1 < p.len() {
+                i += 1;
+                lo = p[i];
+            }
+            if i + 2 < p.len() && p[i + 1] == '-' && p[i + 2] != ']' {
+                let hi = p[i + 2];
+                matched |= lo <= c && c <= hi;
+                i += 3;
+            } else {
+                matched |= lo == c;
+                i += 1;
+            }
+        }
+        (i < p.len()).then_some((matched != negate, i + 1))
+    }
+    fn go(p: &[char], n: &[char]) -> bool {
+        match p.first() {
+            None => n.is_empty(),
+            Some('*') => (0..=n.len()).any(|k| go(&p[1..], &n[k..])),
+            Some('?') => !n.is_empty() && go(&p[1..], &n[1..]),
+            Some('[') => match (n.first(), class(p, n.first().copied().unwrap_or('\0'))) {
+                (Some(_), Some((true, len))) => go(&p[len..], &n[1..]),
+                (Some(_), Some((false, _))) | (None, _) => false,
+                // An unclosed bracket is a literal
+                (Some(&c), None) => c == '[' && go(&p[1..], &n[1..]),
+            },
+            Some('\\') if p.len() > 1 => n.first() == Some(&p[1]) && go(&p[2..], &n[1..]),
+            Some(&c) => n.first() == Some(&c) && go(&p[1..], &n[1..]),
+        }
+    }
+    let p: Vec<char> = pattern.chars().collect();
+    let n: Vec<char> = name.chars().collect();
+    go(&p, &n)
+}
+
+/// What [`find_files`] found below a folder.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct FoundFiles {
+    /// Files to query with `cvs status`, relative to the start folder.
+    files: Vec<String>,
+    /// Folders without CVS metadata (not ignored).
+    unversioned: Vec<PathBuf>,
+    /// Unversioned files and folders matching the ignore rules; folders
+    /// are not entered.
+    ignored: Vec<PathBuf>,
+}
+
 /// All files below `dir` (on disk or recorded in `CVS/Entries`; `CVS`
 /// metadata folders are skipped) relative to `relative_to`, in walk order,
-/// and the folders that are not under version control.
-fn find_files(dir: &Path, relative_to: &Path) -> (Vec<String>, Vec<PathBuf>) {
-    let mut out = Vec::new();
-    let mut unversioned = Vec::new();
+/// the folders that are not under version control and the ignored files
+/// and folders.
+fn find_files(dir: &Path, relative_to: &Path, ignore: &IgnoreRules) -> FoundFiles {
+    let mut found = FoundFiles::default();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(current) = stack.pop() {
         let Ok(iter) = std::fs::read_dir(&current) else {
             continue;
         };
+        let entries: BTreeSet<String> =
+            read_entries(&current).into_iter().map(|e| e.name).collect();
+        let patterns = ignore.for_folder(&current);
         let mut names = BTreeSet::new();
         let mut subdirs = Vec::new();
         for child in iter.flatten() {
             let path = child.path();
-            match child.file_type() {
-                Ok(t) if t.is_dir() => {
-                    if child.file_name() != VC_DIR {
-                        if !path.join(VC_DIR).is_dir() {
-                            unversioned.push(path.clone());
-                        }
-                        subdirs.push(path);
-                    }
+            let name = child.file_name().to_string_lossy().into_owned();
+            let Ok(file_type) = child.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                if name == VC_DIR {
+                    continue;
                 }
-                Ok(_) => {
-                    names.insert(child.file_name().to_string_lossy().into_owned());
+                let unversioned = !path.join(VC_DIR).is_dir();
+                if unversioned && is_ignored_name(&patterns, &name) {
+                    found.ignored.push(path);
+                    continue;
                 }
-                _ => {}
+                if unversioned {
+                    found.unversioned.push(path.clone());
+                }
+                subdirs.push(path);
+            } else if !entries.contains(&name) && is_ignored_name(&patterns, &name) {
+                found.ignored.push(path);
+            } else {
+                names.insert(name);
             }
         }
-        names.extend(read_entries(&current).into_iter().map(|e| e.name));
-        out.extend(
+        names.extend(entries);
+        found.files.extend(
             names
                 .iter()
                 .map(|n| paths::lossy(&paths::relpath(&current.join(n), relative_to))),
@@ -191,7 +361,41 @@ fn find_files(dir: &Path, relative_to: &Path) -> (Vec<String>, Vec<PathBuf>) {
         subdirs.sort();
         stack.extend(subdirs.into_iter().rev());
     }
-    (out, unversioned)
+    found
+}
+
+/// Compare dotted CVS revision numbers numerically (`1.10 > 1.9`).
+fn revision_key(rev: &str) -> Vec<u64> {
+    rev.split('.').map(|p| p.parse().unwrap_or(0)).collect()
+}
+
+/// The newest backup `.#<name>.<rev>` that `cvs update` made of the locally
+/// modified file `name` in `dir` before merging into it, with `<rev>`.
+pub fn conflict_backup(dir: &Path, name: &str) -> Option<(PathBuf, String)> {
+    let prefix = format!(".#{name}.");
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter_map(|child| {
+            let file_name = child.file_name().to_string_lossy().into_owned();
+            let rev = file_name.strip_prefix(&prefix)?;
+            let valid = !rev.is_empty() && rev.split('.').all(|p| p.parse::<u64>().is_ok());
+            valid.then(|| (child.path(), rev.to_string()))
+        })
+        .max_by_key(|(_, rev)| revision_key(rev))
+}
+
+/// Whether `path` contains CVS's conflict markers (a line starting with
+/// `<<<<<<< ` or `>>>>>>> `, or a `=======` line), as checked by `cvs
+/// commit`.
+pub fn has_conflict_markers(path: &Path) -> bool {
+    let Ok(content) = std::fs::read(path) else {
+        return false;
+    };
+    content.split(|&b| b == b'\n').any(|line| {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        line.starts_with(b"<<<<<<< ") || line.starts_with(b">>>>>>> ") || line == b"======="
+    })
 }
 
 /// Every parent prefix of each repository-relative file, e.g. `a/b/c.txt`
@@ -228,6 +432,55 @@ impl Cvs {
     fn files_cmd(&self, args: &[&str], files: &[PathBuf]) -> VcCommand {
         VcCommand::new(self.cmd, args, files, &self.core.root)
     }
+
+    fn ignore_rules(&self) -> IgnoreRules {
+        let cvsroot = read_module_path(&self.core.root).map(|(root, _)| root);
+        IgnoreRules::load(cvsroot.as_deref())
+    }
+
+    /// Revision `rev` of the file `name` in folder `dir` written to a
+    /// temporary file. `cvs update -p` prints nothing for files with
+    /// unresolved conflicts; `checkout -p` works whatever the file's state.
+    fn revision_temp(
+        &self,
+        dir: &Path,
+        name: &str,
+        rev: &str,
+        file_id: &str,
+        suffix: &str,
+    ) -> Result<Option<PathBuf>> {
+        let Some((cvsroot, module)) = read_module_path(dir) else {
+            return Ok(None);
+        };
+        let module_file = format!("{module}/{name}");
+        command::call_temp_output(
+            self.cmd,
+            &[
+                "-d",
+                &cvsroot,
+                "-Q",
+                "checkout",
+                "-p",
+                "-r",
+                rev,
+                &module_file,
+            ],
+            dir,
+            file_id,
+            suffix,
+        )
+        .map(Some)
+    }
+}
+
+/// Folder and file name of an absolute path.
+fn split_path(abs: &Path) -> (PathBuf, String) {
+    let dir = paths::parent_or_self(abs);
+    let name = abs
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    (dir, name)
 }
 
 impl Vc for Cvs {
@@ -248,19 +501,41 @@ impl Vc for Cvs {
             Action::Add,
             Action::Remove,
             Action::Revert,
+            Action::Resolve,
         ]
     }
 
     fn update_tree_state_cache(&mut self, path: &Path) -> Result<()> {
         let abs = self.core.resolve(path);
-        let (files, unversioned_dirs) = if abs.is_dir() {
-            find_files(&abs, &self.core.location)
+        let ignore = self.ignore_rules();
+        let found = if abs.is_dir() {
+            find_files(&abs, &self.core.location, &ignore)
         } else {
-            let rel = paths::lossy(&paths::relpath(&abs, &self.core.location));
-            (vec![rel], Vec::new())
+            let (dir, name) = split_path(&abs);
+            let versioned = read_entries(&dir).iter().any(|e| e.name == name);
+            if !versioned && is_ignored_name(&ignore.for_folder(&dir), &name) {
+                FoundFiles {
+                    ignored: vec![abs.clone()],
+                    ..Default::default()
+                }
+            } else {
+                let rel = paths::lossy(&paths::relpath(&abs, &self.core.location));
+                FoundFiles {
+                    files: vec![rel],
+                    ..Default::default()
+                }
+            }
         };
-        for dir in unversioned_dirs {
+        let FoundFiles {
+            files,
+            unversioned,
+            ignored,
+        } = found;
+        for dir in unversioned {
             self.core.cache.states.insert(dir, State::Unversioned);
+        }
+        for path in ignored {
+            self.core.cache.states.insert(path, State::Ignored);
         }
         if files.is_empty() {
             return Ok(());
@@ -285,47 +560,65 @@ impl Vc for Cvs {
         }
         let rel = self.core.repo_relative(NAME, path)?;
         let suffix = paths::suffix(Path::new(&rel));
-        let abs = paths::abspath(path);
-        let dir = paths::parent_or_self(&abs);
-        let name = abs
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        let (dir, name) = split_path(&paths::abspath(path));
         let revision = read_entries(&dir)
             .into_iter()
             .find(|e| e.name == name)
             .map(|e| e.revision.trim_start_matches('-').to_string());
-        match (revision.as_deref(), read_module_path(&dir)) {
+        match revision.as_deref() {
             // Added, not yet committed: no base content
-            (Some("0"), _) => command::write_temp(b"", "", &suffix),
-            // `cvs update -p` prints nothing for files with unresolved
-            // conflicts; `checkout -p` works whatever the file's state.
-            (Some(rev), Some((cvsroot, module))) if !rev.is_empty() => {
-                let module_file = format!("{module}/{name}");
-                command::call_temp_output(
-                    self.cmd,
-                    &[
-                        "-d",
-                        &cvsroot,
-                        "-Q",
-                        "checkout",
-                        "-p",
-                        "-r",
-                        rev,
-                        &module_file,
-                    ],
-                    &dir,
-                    "",
-                    &suffix,
-                )
+            Some("0") => return command::write_temp(b"", "", &suffix),
+            Some(rev) if !rev.is_empty() => {
+                if let Some(temp) = self.revision_temp(&dir, &name, rev, "", &suffix)? {
+                    return Ok(temp);
+                }
             }
-            _ => command::call_temp_output(
-                self.cmd,
-                &["-q", "update", "-p", &rel],
-                &self.core.root,
-                "",
-                &suffix,
-            ),
+            _ => {}
+        }
+        command::call_temp_output(
+            self.cmd,
+            &["-q", "update", "-p", &rel],
+            &self.core.root,
+            "",
+            &suffix,
+        )
+    }
+
+    /// Local is CVS's backup of the file before the merge (owned by CVS,
+    /// not temporary), base the backup's revision and remote the revision
+    /// in `CVS/Entries`, which `cvs update` merged in. Without a backup
+    /// (e.g. after deleting it) conflicts are compared 2-way, like files
+    /// of backends without conflict support.
+    fn get_path_for_conflict(&self, path: &Path, side: ConflictSide) -> Result<(PathBuf, bool)> {
+        let rel = self.core.repo_relative(NAME, path)?;
+        let abs = paths::abspath(path);
+        if side == ConflictSide::Merged {
+            return Ok((abs, false));
+        }
+        let (dir, name) = split_path(&abs);
+        let Some((backup, base_rev)) = conflict_backup(&dir, &name) else {
+            return unsupported(
+                self.kind(),
+                "conflicts without the backup of the local file",
+            );
+        };
+        let revision = match side {
+            ConflictSide::Local => return Ok((backup, false)),
+            ConflictSide::Base => Some(base_rev),
+            _ => read_entries(&dir)
+                .into_iter()
+                .find(|e| e.name == name)
+                .map(|e| e.revision),
+        };
+        let suffix = paths::suffix(Path::new(&rel));
+        match revision {
+            Some(rev) if !rev.is_empty() && !rev.starts_with(['0', '-']) => {
+                match self.revision_temp(&dir, &name, &rev, side.label(), &suffix)? {
+                    Some(temp) => Ok((temp, true)),
+                    None => unsupported(self.kind(), "conflicts without CVS/Repository"),
+                }
+            }
+            _ => unsupported(self.kind(), "conflicts of files that are not checked out"),
         }
     }
 
@@ -366,6 +659,19 @@ impl Vc for Cvs {
             commands.push(self.files_cmd(&["update", "-C"], &others));
         }
         Ok(commands)
+    }
+    /// CVS can't mark conflicts resolved: a conflicted file whose markers
+    /// have been edited out is reported as modified. Files that still
+    /// contain markers are refused; for the others `cvs status` is run,
+    /// which shows (and refreshes) their new state.
+    fn resolve(&self, files: &[PathBuf]) -> Result<Vec<VcCommand>> {
+        if let Some(file) = files.iter().find(|f| has_conflict_markers(f)) {
+            return Err(VcError::ConflictMarkers {
+                vc: NAME,
+                path: file.clone(),
+            });
+        }
+        Ok(vec![self.files_cmd(&["-Q", "status"], files)])
     }
 }
 
@@ -514,11 +820,136 @@ File: unknown.txt      \tStatus: Unknown
         std::fs::write(root.join("a.txt"), b"").unwrap();
         std::fs::write(root.join("sub/b.txt"), b"").unwrap();
         std::fs::write(root.join("unknown/c.txt"), b"").unwrap();
-        let (files, unversioned) = find_files(root, root);
+        let found = find_files(root, root, &IgnoreRules::default());
         assert_eq!(
-            files,
+            found.files,
             vec!["a.txt", "removed.txt", "sub/b.txt", "unknown/c.txt"]
         );
-        assert_eq!(unversioned, vec![root.join("unknown")]);
+        assert_eq!(found.unversioned, vec![root.join("unknown")]);
+        assert!(found.ignored.is_empty());
+
+        // Ignored files and folders are not queried; versioned files are
+        // never ignored.
+        std::fs::write(root.join("CVS/Entries"), b"/kept.o/1.1///\n").unwrap();
+        std::fs::write(root.join("kept.o"), b"").unwrap();
+        std::fs::write(root.join("x.o"), b"").unwrap();
+        std::fs::write(root.join("sub/.cvsignore"), b"b.txt\n").unwrap();
+        std::fs::write(root.join("sub/y.log"), b"").unwrap();
+        std::fs::write(root.join(".cvsignore"), b"*.log unknown\n").unwrap();
+        std::fs::write(root.join("top.log"), b"").unwrap();
+        let rules = IgnoreRules {
+            global: vec!["*.o".into()],
+        };
+        let found = find_files(root, root, &rules);
+        assert_eq!(
+            found.files,
+            vec![
+                ".cvsignore",
+                "a.txt",
+                "kept.o",
+                "sub/.cvsignore",
+                "sub/y.log"
+            ]
+        );
+        assert!(found.unversioned.is_empty());
+        let mut ignored = found.ignored.clone();
+        ignored.sort();
+        assert_eq!(
+            ignored,
+            vec![
+                root.join("sub/b.txt"),
+                root.join("top.log"),
+                root.join("unknown"),
+                root.join("x.o"),
+            ]
+        );
+    }
+
+    #[test]
+    fn wildcards() {
+        assert!(fnmatch("*.o", "a.o") && fnmatch("*.o", ".o"));
+        assert!(!fnmatch("*.o", "a.obj"));
+        assert!(fnmatch(".#*", ".#f.txt.1.2"));
+        assert!(fnmatch("#*", "#x#") && fnmatch("*~", "a.txt~"));
+        assert!(fnmatch("_$*", "_$x") && fnmatch("*$", "a$"));
+        assert!(fnmatch("a?c", "abc") && !fnmatch("a?c", "ac"));
+        assert!(fnmatch("[ab]x", "bx") && !fnmatch("[ab]x", "cx"));
+        assert!(fnmatch("[!ab]x", "cx") && !fnmatch("[!ab]x", "ax"));
+        assert!(fnmatch("[a-c]*", "cat") && !fnmatch("[a-c]*", "dog"));
+        assert!(fnmatch("[]]", "]") && fnmatch("[", "["));
+        assert!(fnmatch(r"\*", "*") && !fnmatch(r"\*", "a"));
+        assert!(fnmatch("core", "core") && !fnmatch("core", "core.c"));
+        assert!(fnmatch("*", ""));
+    }
+
+    #[test]
+    fn ignore_rules() {
+        let mut patterns = Vec::new();
+        add_patterns(&mut patterns, DEFAULT_IGNORE);
+        for name in ["x.o", "core", ".#f.txt.1.1", "a~", "CVS", "tags", "x.orig"] {
+            assert!(is_ignored_name(&patterns, name), "{name}");
+        }
+        for name in ["a.txt", "core.c", "Makefile", "x.log"] {
+            assert!(!is_ignored_name(&patterns, name), "{name}");
+        }
+        add_patterns(&mut patterns, "*.log\n! *.txt");
+        assert_eq!(patterns, vec!["*.txt"]);
+        assert_eq!(
+            local_repository("/srv/cvs"),
+            Some(PathBuf::from("/srv/cvs"))
+        );
+        assert_eq!(
+            local_repository(":local:/srv/cvs"),
+            Some(PathBuf::from("/srv/cvs"))
+        );
+        assert_eq!(local_repository(":pserver:me@host:/srv/cvs"), None);
+
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(repo.join("CVSROOT")).unwrap();
+        std::fs::write(repo.join("CVSROOT/cvsignore"), "*.repo\n").unwrap();
+        std::fs::write(dir.path().join(".cvsignore"), "*.home\n").unwrap();
+        let repo_s = paths::lossy(&repo);
+        let rules = IgnoreRules::load_from(Some(&repo_s), Some(dir.path()), Some("*.env"));
+        for name in ["x.o", "a.repo", "a.home", "a.env"] {
+            assert!(is_ignored_name(&rules.global, name), "{name}");
+        }
+        // `!` in CVSIGNORE drops everything before it
+        let rules = IgnoreRules::load_from(Some(&repo_s), Some(dir.path()), Some("! *.env"));
+        assert_eq!(rules.global, vec!["*.env"]);
+        std::fs::write(dir.path().join(".cvsignore"), "! *.txt").unwrap();
+        assert_eq!(
+            rules.for_folder(dir.path()),
+            vec!["*.txt"],
+            "a folder's .cvsignore can clear the global list"
+        );
+    }
+
+    #[test]
+    fn conflict_backups_and_markers() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        assert_eq!(conflict_backup(d, "f.txt"), None);
+        for name in [
+            ".#f.txt.1.9",
+            ".#f.txt.1.10",
+            ".#f.txt.x",
+            ".#g.txt.1.20",
+            "f.txt",
+        ] {
+            std::fs::write(d.join(name), b"").unwrap();
+        }
+        assert_eq!(
+            conflict_backup(d, "f.txt"),
+            Some((d.join(".#f.txt.1.10"), "1.10".to_string()))
+        );
+        let f = d.join("f.txt");
+        std::fs::write(&f, "a\n<<<<<<< f.txt\nb\n=======\nc\n>>>>>>> 1.2\n").unwrap();
+        assert!(has_conflict_markers(&f));
+        std::fs::write(&f, "a\r\n=======\r\n").unwrap();
+        assert!(has_conflict_markers(&f));
+        std::fs::write(&f, "a\n<<<<<<<b\n========\n").unwrap();
+        assert!(!has_conflict_markers(&f));
+        assert!(!has_conflict_markers(&d.join("missing")));
     }
 }

@@ -44,6 +44,12 @@ pub enum VcError {
         source: io::Error,
     },
 
+    /// A file can't be marked resolved because it still contains conflict
+    /// markers (backends without a "resolved" flag, like CVS and Darcs,
+    /// treat a file without markers as resolved).
+    #[error("{vc}: {} still contains conflict markers; edit them out before marking it resolved", path.display())]
+    ConflictMarkers { vc: &'static str, path: PathBuf },
+
     /// The version control program's output could not be understood.
     #[error("{vc}: could not parse output: {reason}")]
     Parse { vc: &'static str, reason: String },

@@ -7,7 +7,9 @@
 //! files unless a merge is pending, and missing files count as files to
 //! commit. See [`parse_status`] and [`Bazaar`]'s `commit`.
 //!
-//! Ignored files are not reported by `bzr status`, so they show as normal.
+//! Ignored files, which `bzr status` doesn't report, are listed with `bzr
+//! ls --ignored` (Python showed them as normal); ignored folders aren't
+//! entered, like Git's.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -201,6 +203,20 @@ pub fn parse_status(
     }
 }
 
+/// Record the ignored files of `bzr ls --ignored -R --null <branch_root>`
+/// output (NUL-separated paths, absolute when the argument is) in
+/// `status`. Paths with another state (e.g. an ignored name that is
+/// versioned and modified) keep it.
+pub fn add_ignored(status: &mut BzrStatus, branch_root: &Path, output: &str) {
+    for name in output.split('\0').map(|n| n.trim_matches('\n')) {
+        if name.is_empty() {
+            continue;
+        }
+        let path = normalize_entry(&branch_root.join(name));
+        status.states.entry(path).or_insert(State::Ignored);
+    }
+}
+
 /// `path.removesuffix("/")` after joining (`os.path.join` keeps `..`).
 fn normalize_entry(path: &Path) -> PathBuf {
     paths::normalize(path)
@@ -289,7 +305,11 @@ impl Vc for Bazaar {
                 .map(|o| o.lines().next().unwrap_or_default().to_string())
                 .unwrap_or_default()
         };
-        let status = parse_status(&output, &branch_root, &mut diff);
+        let mut status = parse_status(&output, &branch_root, &mut diff);
+        let mut ls_args: Vec<&str> = CMDARGS.to_vec();
+        ls_args.extend(["ls", "--ignored", "-R", "--null", branch_root_s.as_str()]);
+        let ignored = command::output_text(cmd(), &ls_args, None)?;
+        add_ignored(&mut status, &branch_root, &ignored);
         self.apply(status);
         Ok(())
     }
@@ -452,8 +472,15 @@ P   Meld Test 2026-10-22 other
             assert!(st.removed.contains(&PathBuf::from(p)), "{p}");
         }
 
-        let st = parse_status(" M  a.txt\n", root, &mut |_| String::new());
+        let mut st = parse_status(" M  a.txt\n", root, &mut |_| String::new());
         assert!(!st.pending_merge);
+
+        add_ignored(&mut st, root, "/b/build\0/b/sub/x.o\0a.txt\0rel dir/\0");
+        let s = |p: &str| st.states.get(Path::new(p)).copied();
+        assert_eq!(s("/b/build"), Some(State::Ignored));
+        assert_eq!(s("/b/sub/x.o"), Some(State::Ignored));
+        assert_eq!(s("/b/rel dir"), Some(State::Ignored));
+        assert_eq!(s("/b/a.txt"), Some(State::Modified));
     }
 
     fn fake_vc() -> Bazaar {

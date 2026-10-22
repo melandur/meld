@@ -12,8 +12,8 @@ use std::path::{Path, PathBuf};
 
 use common::{Fixture, run_ok, take, write};
 use meld_vc::{
-    Action, DiffOptions, DiffRequest, State, StatusFilters, Vc, VcKind, VcRow, choose_vcs, get_vcs,
-    prepare_diff, scan_tree,
+    Action, ConflictSide, DiffOptions, DiffRequest, MergeFileOrder, State, StatusFilters, Vc,
+    VcKind, VcRow, choose_vcs, get_vcs, prepare_diff, scan_tree,
 };
 
 fn hg(dir: &Path, args: &[&str]) -> String {
@@ -231,10 +231,235 @@ fn valid_actions() {
     ] {
         assert!(v.contains(&a), "{a}");
     }
-    // Not implemented for Mercurial
+    // Not implemented for Mercurial, or (resolve) only for conflicts
     for a in [Action::Push, Action::Resolve, Action::Unstage] {
         assert!(!v.contains(&a), "{a}");
     }
+}
+
+/// Run `hg args` in `dir`, which is expected to fail (exit 1) because of
+/// merge conflicts. Merges use Mercurial's internal merge with conflict
+/// markers, whatever `HGMERGE` says.
+fn hg_conflicting(dir: &Path, args: &[&str]) {
+    let mut full = args.to_vec();
+    full.extend(["--tool", "internal:merge"]);
+    let out = common::run_in(dir, "hg", &full, true);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "hg {args:?} should leave conflicts: {}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// A repository where merging `other` into `main` conflicts in
+/// `conflict.txt` (and, in `sub/`, in `sub/nested.txt`) and merges
+/// `clean-merge.txt` cleanly.
+fn merge_conflict_repo() -> Fixture {
+    let fx = init_repo();
+    let root = &fx.root;
+    write(root, "conflict.txt", "a\nb\nc\n");
+    write(root, "sub/nested.txt", "1\n2\n3\n");
+    write(root, "clean-merge.txt", "x\n");
+    hg(root, &["add", "-q"]);
+    hg(root, &["commit", "-q", "-m", "base"]);
+    write(root, "conflict.txt", "a\nMAIN\nc\n");
+    write(root, "sub/nested.txt", "1\nMAIN\n3\n");
+    hg(root, &["commit", "-q", "-m", "main"]);
+    hg(root, &["update", "-q", "0"]);
+    write(root, "conflict.txt", "a\nOTHER\nc\n");
+    write(root, "sub/nested.txt", "1\nOTHER\n3\n");
+    write(root, "clean-merge.txt", "y\n");
+    hg(root, &["commit", "-q", "-m", "other"]);
+    hg(root, &["update", "-q", "1"]);
+    hg_conflicting(root, &["merge", "2"]);
+    fx
+}
+
+fn conflict_side(vc: &dyn Vc, file: &Path, side: ConflictSide) -> String {
+    let (p, is_temp) = vc.get_path_for_conflict(file, side).unwrap();
+    if side == ConflictSide::Merged {
+        assert!(!is_temp, "the merged file is the working file");
+        assert_eq!(p, file);
+        fs::read_to_string(p).unwrap()
+    } else {
+        assert!(is_temp);
+        take(&p)
+    }
+}
+
+#[test]
+fn merge_conflicts() {
+    require_tool!("hg");
+    let fx = merge_conflict_repo();
+    let root = &fx.root;
+    let mut vc = open(root);
+    let file = root.join("conflict.txt");
+    assert_eq!(vc.get_entry(&file).state, State::Conflict);
+    assert_eq!(
+        vc.get_entry(&root.join("sub/nested.txt")).state,
+        State::Conflict
+    );
+    assert_eq!(
+        vc.get_entry(&root.join("clean-merge.txt")).state,
+        State::Modified
+    );
+    assert_eq!(
+        vc.get_entry(&root.join("conflict.txt.orig")).state,
+        State::Unversioned
+    );
+    assert!(
+        vc.get_valid_actions(&[(file.clone(), State::Conflict)])
+            .contains(&Action::Resolve)
+    );
+
+    assert_eq!(
+        conflict_side(vc.as_ref(), &file, ConflictSide::Base),
+        "a\nb\nc\n"
+    );
+    assert_eq!(
+        conflict_side(vc.as_ref(), &file, ConflictSide::Local),
+        "a\nMAIN\nc\n"
+    );
+    assert_eq!(
+        conflict_side(vc.as_ref(), &file, ConflictSide::Remote),
+        "a\nOTHER\nc\n"
+    );
+    assert!(conflict_side(vc.as_ref(), &file, ConflictSide::Merged).contains("<<<<<<<"));
+
+    // A sub-folder location sees the conflict below it
+    let sub = root.join("sub");
+    let mut subvc = VcKind::Mercurial.open(&sub).unwrap();
+    subvc.refresh_vc_state(None).unwrap();
+    let nested = sub.join("nested.txt");
+    assert_eq!(subvc.get_entry(&nested).state, State::Conflict);
+    assert_eq!(
+        conflict_side(subvc.as_ref(), &nested, ConflictSide::Remote),
+        "1\nOTHER\n3\n"
+    );
+
+    let opts = DiffOptions {
+        merge_file_order: MergeFileOrder::LocalMergeRemote,
+        ..Default::default()
+    };
+    let DiffRequest::Files {
+        paths,
+        merge_output,
+        temp_files,
+        prompt_resolve,
+        ..
+    } = prepare_diff(vc.as_ref(), &file, &opts).unwrap()
+    else {
+        panic!("expected a file comparison")
+    };
+    assert_eq!(fs::read_to_string(&paths[0]).unwrap(), "a\nMAIN\nc\n");
+    assert_eq!(paths[1], file);
+    assert_eq!(fs::read_to_string(&paths[2]).unwrap(), "a\nOTHER\nc\n");
+    assert_eq!(merge_output, Some(file.clone()));
+    assert!(prompt_resolve);
+    assert_eq!(temp_files.len(), 2);
+    let mut temps = meld_vc::TempFiles::new();
+    temps.register(temp_files);
+
+    // Resolve one file: it's modified again; a single-file refresh keeps
+    // the other conflict.
+    write(root, "conflict.txt", "a\nRESOLVED\nc\n");
+    run_ok(vc.resolve(std::slice::from_ref(&file)).unwrap());
+    vc.refresh_vc_state(Some(&file)).unwrap();
+    assert_eq!(vc.get_entry(&file).state, State::Modified);
+    assert_eq!(
+        vc.get_entry(&root.join("sub/nested.txt")).state,
+        State::Conflict
+    );
+    write(root, "sub/nested.txt", "1\nRESOLVED\n3\n");
+    run_ok(vc.resolve(&[root.join("sub/nested.txt")]).unwrap());
+
+    // Committing a merge commits everything, whatever the selection
+    vc.refresh_vc_state(None).unwrap();
+    let cmds = vc.commit(std::slice::from_ref(&file), "Merge").unwrap();
+    assert_eq!(cmds[0].argv(), vec!["commit", "-m", "Merge"]);
+    run_ok(cmds);
+    vc.refresh_vc_state(None).unwrap();
+    assert_eq!(vc.get_entry(&file).state, State::Normal);
+    assert_eq!(
+        vc.get_entry(&root.join("clean-merge.txt")).state,
+        State::Normal
+    );
+    assert_eq!(hg(root, &["log", "-r", "p2()", "-T", "{desc}"]), "");
+    assert_eq!(hg(root, &["log", "-r", ".", "-T", "{desc}"]), "Merge");
+    // Back to normal commits of the selection
+    write(root, "conflict.txt", "after\n");
+    write(root, "clean-merge.txt", "after\n");
+    run_ok(vc.commit(std::slice::from_ref(&file), "One").unwrap());
+    vc.refresh_vc_state(None).unwrap();
+    assert_eq!(
+        vc.get_entry(&root.join("clean-merge.txt")).state,
+        State::Modified
+    );
+}
+
+/// Grafting has no second parent, and its base is the grafted changeset's
+/// parent rather than a common ancestor.
+#[test]
+fn graft_conflicts() {
+    require_tool!("hg");
+    let fx = init_repo();
+    let root = &fx.root;
+    write(root, "f.txt", "a\nb\nc\n");
+    hg(root, &["add", "-q"]);
+    hg(root, &["commit", "-q", "-m", "base"]);
+    write(root, "f.txt", "a\nB1\nc\n");
+    hg(root, &["commit", "-q", "-m", "first"]);
+    write(root, "f.txt", "a\nB2\nc\n");
+    hg(root, &["commit", "-q", "-m", "second"]);
+    hg(root, &["update", "-q", "0"]);
+    write(root, "f.txt", "a\nMAIN\nc\n");
+    hg(root, &["commit", "-q", "-m", "main"]);
+    hg_conflicting(root, &["graft", "-r", "2"]);
+
+    let vc = open(root);
+    let file = root.join("f.txt");
+    assert_eq!(vc.get_entry(&file).state, State::Conflict);
+    assert_eq!(
+        conflict_side(vc.as_ref(), &file, ConflictSide::Base),
+        "a\nB1\nc\n"
+    );
+    assert_eq!(
+        conflict_side(vc.as_ref(), &file, ConflictSide::Local),
+        "a\nMAIN\nc\n"
+    );
+    assert_eq!(
+        conflict_side(vc.as_ref(), &file, ConflictSide::Remote),
+        "a\nB2\nc\n"
+    );
+}
+
+/// A file deleted on one side and changed on the other has an empty side.
+#[test]
+fn delete_modify_conflict() {
+    require_tool!("hg");
+    let fx = init_repo();
+    let root = &fx.root;
+    write(root, "f.txt", "a\n");
+    hg(root, &["add", "-q"]);
+    hg(root, &["commit", "-q", "-m", "base"]);
+    write(root, "f.txt", "changed\n");
+    hg(root, &["commit", "-q", "-m", "changed"]);
+    hg(root, &["update", "-q", "0"]);
+    hg(root, &["rm", "-q", "f.txt"]);
+    hg(root, &["commit", "-q", "-m", "deleted"]);
+    hg_conflicting(root, &["merge", "1"]);
+
+    let vc = open(root);
+    let file = root.join("f.txt");
+    assert_eq!(vc.get_entry(&file).state, State::Conflict);
+    assert_eq!(conflict_side(vc.as_ref(), &file, ConflictSide::Local), "");
+    assert_eq!(conflict_side(vc.as_ref(), &file, ConflictSide::Base), "a\n");
+    assert_eq!(
+        conflict_side(vc.as_ref(), &file, ConflictSide::Remote),
+        "changed\n"
+    );
 }
 
 #[test]

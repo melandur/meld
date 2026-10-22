@@ -5,17 +5,20 @@
 //! without checking anything) when it isn't. Last run against Darcs 2.18.4
 //! (Debian's `darcs_2.18.4-1` binary).
 //!
-//! `darcs whatsnew` doesn't report conflicts (darcs issue2138), so
-//! conflicted files show as modified and are compared with the recorded
-//! version; boring (ignored) files aren't reported either.
+//! `darcs whatsnew` reports neither conflicts (darcs issue2138) nor boring
+//! (ignored) files; the backend finds conflicts by their markup and boring
+//! files by the boring file's rules, checked here against what Darcs does.
 
 mod common;
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use common::{Fixture, run_ok, take, write};
-use meld_vc::{Action, State, StatusFilters, Vc, VcKind, VcRow, choose_vcs, scan_tree};
+use meld_vc::{
+    Action, ConflictSide, DiffOptions, DiffRequest, MergeFileOrder, State, StatusFilters, Vc,
+    VcKind, VcRow, choose_vcs, prepare_diff, scan_tree,
+};
 
 fn darcs(dir: &Path, args: &[&str]) -> String {
     common::tool(dir, "darcs", args)
@@ -270,6 +273,215 @@ fn add_commit_remove_revert() {
     let v = vc.get_valid_actions(&[(root.join("modified.txt"), State::Modified)]);
     assert!(v.contains(&Action::Push) && v.contains(&Action::Update));
     assert!(!v.contains(&Action::Resolve) && !v.contains(&Action::Unstage));
+}
+
+/// Two clones whose `conflict.txt` and `sub/nested.txt` changes conflict;
+/// `merged.txt` changes on one side only. Returns the fixture with
+/// clones at `root` ("main") and `other`.
+fn conflicting_clones() -> (Fixture, PathBuf) {
+    let fx = init_repo();
+    let root = &fx.root;
+    write(root, "conflict.txt", "a\nb\nc\nd\ne\n");
+    write(root, "sub/nested.txt", "1\n2\n3\n");
+    write(root, "merged.txt", "x\n");
+    darcs(root, &["add", "-q", "-r", "."]);
+    darcs(root, &["record", "-q", "-a", "-m", "base"]);
+    darcs(fx._tmp.path(), &["clone", "-q", "repo", "other"]);
+    let other = fx.sibling("other");
+    write(&other, "conflict.txt", "a\nOTHER\nc\nd\nE\n");
+    write(&other, "sub/nested.txt", "1\nOTHER\n3\n");
+    write(&other, "merged.txt", "y\n");
+    darcs(&other, &["record", "-q", "-a", "-m", "other"]);
+    write(root, "conflict.txt", "a\nMAIN\nc\nd\ne\n");
+    write(root, "sub/nested.txt", "1\nMAIN\n3\n");
+    darcs(root, &["record", "-q", "-a", "-m", "main"]);
+    (fx, other)
+}
+
+fn conflict_side(vc: &dyn Vc, file: &Path, side: ConflictSide) -> String {
+    let (p, is_temp) = vc.get_path_for_conflict(file, side).unwrap();
+    assert!(is_temp);
+    take(&p)
+}
+
+#[test]
+fn conflicts() {
+    require_tool!("darcs");
+    let (fx, other) = conflicting_clones();
+    let root = &fx.root;
+    let other_s = other.to_string_lossy().into_owned();
+    darcs(root, &["pull", "-q", "-a", &other_s]);
+    let mut vc = open(root);
+    let file = root.join("conflict.txt");
+    assert!(fs::read_to_string(&file).unwrap().contains("v v v v v v v"));
+    assert_eq!(vc.get_entry(&file).state, State::Conflict);
+    assert_eq!(
+        vc.get_entry(&root.join("sub/nested.txt")).state,
+        State::Conflict
+    );
+    assert_eq!(vc.get_entry(&root.join("merged.txt")).state, State::Normal);
+    // Darcs' backup of the file is boring
+    assert_eq!(
+        vc.get_entry(&root.join("conflict.txt.~0~")).state,
+        State::Ignored
+    );
+    assert!(
+        vc.get_valid_actions(&[(file.clone(), State::Conflict)])
+            .contains(&Action::Resolve)
+    );
+
+    assert_eq!(
+        conflict_side(vc.as_ref(), &file, ConflictSide::Base),
+        "a\nb\nc\nd\nE\n"
+    );
+    assert_eq!(
+        conflict_side(vc.as_ref(), &file, ConflictSide::Local),
+        "a\nMAIN\nc\nd\nE\n"
+    );
+    assert_eq!(
+        conflict_side(vc.as_ref(), &file, ConflictSide::Remote),
+        "a\nOTHER\nc\nd\nE\n"
+    );
+    assert_eq!(
+        vc.get_path_for_conflict(&file, ConflictSide::Merged)
+            .unwrap(),
+        (file.clone(), false)
+    );
+
+    let opts = DiffOptions {
+        merge_file_order: MergeFileOrder::LocalMergeRemote,
+        ..Default::default()
+    };
+    let DiffRequest::Files {
+        paths,
+        merge_output,
+        temp_files,
+        ..
+    } = prepare_diff(vc.as_ref(), &file, &opts).unwrap()
+    else {
+        panic!("expected a file comparison")
+    };
+    assert_eq!(fs::read_to_string(&paths[0]).unwrap(), "a\nMAIN\nc\nd\nE\n");
+    assert_eq!(paths[1], file);
+    assert_eq!(
+        fs::read_to_string(&paths[2]).unwrap(),
+        "a\nOTHER\nc\nd\nE\n"
+    );
+    assert_eq!(merge_output, Some(file.clone()));
+    let mut temps = meld_vc::TempFiles::new();
+    temps.register(temp_files);
+
+    // Resolve refuses files with markup; once it's gone the file is
+    // modified, and recording it records the resolution.
+    let err = vc.resolve(std::slice::from_ref(&file)).unwrap_err();
+    assert!(err.to_string().contains("conflict markers"), "{err}");
+    write(root, "conflict.txt", "a\nRESOLVED\nc\nd\nE\n");
+    run_ok(vc.resolve(std::slice::from_ref(&file)).unwrap());
+    vc.refresh_vc_state(Some(&file)).unwrap();
+    assert_eq!(vc.get_entry(&file).state, State::Modified);
+    write(root, "sub/nested.txt", "1\nRESOLVED\n3\n");
+    run_ok(vc.commit(std::slice::from_ref(root), "Resolve").unwrap());
+    vc.refresh_vc_state(None).unwrap();
+    assert_eq!(vc.get_entry(&file).state, State::Normal);
+    assert_eq!(fs::read_to_string(&file).unwrap(), "a\nRESOLVED\nc\nd\nE\n");
+}
+
+/// Darcs writes the conflicting versions in its own order, not local
+/// first; the local one is recognised with Darcs' backup of the file.
+#[test]
+fn conflicts_pulled_the_other_way() {
+    require_tool!("darcs");
+    let (fx, other) = conflicting_clones();
+    let root_s = fx.root.to_string_lossy().into_owned();
+    darcs(&other, &["pull", "-q", "-a", &root_s]);
+    let vc = open(&other);
+    let file = other.join("conflict.txt");
+    assert_eq!(vc.get_entry(&file).state, State::Conflict);
+    let markup = fs::read_to_string(&file).unwrap();
+    assert!(
+        markup.find("MAIN") < markup.find("OTHER"),
+        "Darcs no longer writes the versions in the same order: {markup}"
+    );
+    assert_eq!(
+        conflict_side(vc.as_ref(), &file, ConflictSide::Local),
+        "a\nOTHER\nc\nd\nE\n"
+    );
+    assert_eq!(
+        conflict_side(vc.as_ref(), &file, ConflictSide::Remote),
+        "a\nMAIN\nc\nd\nE\n"
+    );
+    let nested = other.join("sub/nested.txt");
+    assert_eq!(
+        conflict_side(vc.as_ref(), &nested, ConflictSide::Local),
+        "1\nOTHER\n3\n"
+    );
+}
+
+#[test]
+fn boring_files() {
+    require_tool!("darcs");
+    let fx = init_repo();
+    let root = &fx.root;
+    write(root, "a.txt", "a\n");
+    write(root, "kept.o", "recorded although boring\n");
+    darcs(root, &["add", "-q", "a.txt"]);
+    darcs(root, &["add", "-q", "--boring", "kept.o"]);
+    darcs(root, &["record", "-q", "-a", "-m", "initial"]);
+    let mut boring = fs::read_to_string(root.join("_darcs/prefs/boring")).unwrap();
+    boring.push_str("^build(/|$)\n\\.log$\n");
+    fs::write(root.join("_darcs/prefs/boring"), boring).unwrap();
+    for name in [
+        "x.o",
+        "debug.log",
+        "sub/nested.log",
+        "sub/notes.txt",
+        "build/out.txt",
+        "backup.txt~",
+        ".git/HEAD",
+        "unknown-dir/q.o",
+        "unknown-dir/q.txt",
+    ] {
+        write(root, name, "x\n");
+    }
+    write(root, "kept.o", "changed\n");
+
+    let vc = open(root);
+    let st = |name: &str| vc.get_entry(&root.join(name)).state;
+    for name in [
+        "x.o",
+        "debug.log",
+        "sub/nested.log",
+        "build",
+        "backup.txt~",
+        ".git",
+        "unknown-dir/q.o",
+    ] {
+        assert_eq!(st(name), State::Ignored, "{name}");
+    }
+    // Boring folders aren't entered
+    assert_eq!(st("build/out.txt"), State::Normal);
+    assert_eq!(st("sub/notes.txt"), State::Unversioned);
+    assert_eq!(st("unknown-dir/q.txt"), State::Unversioned);
+    assert_eq!(st("kept.o"), State::Modified);
+    assert_eq!(st("a.txt"), State::Normal);
+
+    // Darcs agrees on what isn't boring
+    let whatsnew = darcs(root, &["whatsnew", "-sl", "--machine-readable"]);
+    let mut listed: Vec<&str> = whatsnew
+        .lines()
+        .filter_map(|l| l.strip_prefix("a ./"))
+        .collect();
+    listed.sort();
+    assert_eq!(
+        listed,
+        vec!["sub/", "sub/notes.txt", "unknown-dir/", "unknown-dir/q.txt"]
+    );
+
+    // A sub-folder location
+    let sub = root.join("sub");
+    let mut vc = VcKind::Darcs.open(&sub).unwrap();
+    vc.refresh_vc_state(None).unwrap();
+    assert_eq!(vc.get_entry(&sub.join("nested.log")).state, State::Ignored);
 }
 
 #[test]

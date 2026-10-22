@@ -11,7 +11,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use common::{Fixture, run_ok, take, write};
-use meld_vc::{Action, DiffOptions, DiffRequest, State, Vc, VcKind, choose_vcs, prepare_diff};
+use meld_vc::{
+    Action, ConflictSide, DiffOptions, DiffRequest, MergeFileOrder, State, Vc, VcKind, choose_vcs,
+    prepare_diff,
+};
 
 fn cvs_cmd() -> &'static str {
     VcKind::Cvs.cmd().unwrap()
@@ -164,24 +167,155 @@ fn statuses() {
     vc.refresh_vc_state(Some(&file)).unwrap();
     assert_eq!(vc.get_entry(&file).state, State::Modified);
 
-    // Conflicts fall back to comparing with the base revision
-    let v = vc.get_valid_actions(&[(root.join("conflict.txt"), State::Conflict)]);
-    assert!(!v.contains(&Action::Resolve));
+    // The conflict backup `cvs update` made is ignored by CVS's defaults
+    let backup = root.join(".#conflict.txt.1.2");
+    assert!(backup.exists());
+    assert_eq!(vc.get_entry(&backup).state, State::Ignored);
+}
+
+#[test]
+fn conflicts() {
+    require_tool!("cvs", "cvsnt");
+    let fx = status_wc();
+    let root = &fx.root;
+    let mut vc = open(root);
+    let file = root.join("conflict.txt");
+    assert_eq!(vc.get_entry(&file).state, State::Conflict);
+    let v = vc.get_valid_actions(&[(file.clone(), State::Conflict)]);
+    assert!(v.contains(&Action::Resolve));
+
+    let side = |side| vc.get_path_for_conflict(&file, side).unwrap();
+    let (local, is_temp) = side(ConflictSide::Local);
+    assert_eq!(local, root.join(".#conflict.txt.1.2"));
+    assert!(!is_temp, "CVS owns its backup");
+    assert_eq!(fs::read_to_string(&local).unwrap(), "a\nMAIN\nc\n");
+    let (base, is_temp) = side(ConflictSide::Base);
+    assert!(is_temp);
+    assert_eq!(take(&base), "a\nb\nc\n");
+    let (remote, is_temp) = side(ConflictSide::Remote);
+    assert!(is_temp);
+    assert_eq!(take(&remote), "a\nOTHER\nc\n");
+    assert_eq!(side(ConflictSide::Merged), (file.clone(), false));
+
+    let opts = DiffOptions {
+        merge_file_order: MergeFileOrder::RemoteMergeLocal,
+        ..Default::default()
+    };
+    let DiffRequest::Files {
+        paths,
+        merge_output,
+        temp_files,
+        prompt_resolve,
+        ..
+    } = prepare_diff(vc.as_ref(), &file, &opts).unwrap()
+    else {
+        panic!("expected a file comparison")
+    };
+    assert_eq!(fs::read_to_string(&paths[0]).unwrap(), "a\nOTHER\nc\n");
+    assert_eq!(paths[1], file);
+    assert_eq!(paths[2], local);
+    assert_eq!(merge_output, Some(file.clone()));
+    assert!(prompt_resolve);
+    assert_eq!(temp_files.len(), 1);
+    let mut temps = meld_vc::TempFiles::new();
+    temps.register(temp_files);
+
+    // Resolving is refused while the markers are there
+    let err = vc.resolve(std::slice::from_ref(&file)).unwrap_err();
+    assert!(err.to_string().contains("conflict markers"), "{err}");
+    // Once they're gone the file is modified, and resolve only re-checks
+    write(root, "conflict.txt", "a\nRESOLVED\nc\n");
+    let cmds = vc.resolve(std::slice::from_ref(&file)).unwrap();
+    assert_eq!(cmds[0].argv(), vec!["-Q", "status", "conflict.txt"]);
+    run_ok(cmds);
+    vc.refresh_vc_state(Some(&file)).unwrap();
+    assert_eq!(vc.get_entry(&file).state, State::Modified);
+    run_ok(vc.commit(std::slice::from_ref(&file), "Resolved").unwrap());
+    vc.refresh_vc_state(None).unwrap();
+    assert_eq!(vc.get_entry(&file).state, State::Normal);
+
+    // Without the backup, conflicts are compared with the base revision
+    let fx = status_wc();
+    let root = &fx.root;
+    fs::remove_file(root.join(".#conflict.txt.1.2")).unwrap();
+    let vc = open(root);
+    let file = root.join("conflict.txt");
     let DiffRequest::Files {
         paths, temp_files, ..
-    } = prepare_diff(
-        vc.as_ref(),
-        &root.join("conflict.txt"),
-        &DiffOptions::default(),
-    )
-    .unwrap()
+    } = prepare_diff(vc.as_ref(), &file, &DiffOptions::default()).unwrap()
     else {
         panic!("expected a file comparison")
     };
     assert_eq!(paths.len(), 2);
     assert_eq!(fs::read_to_string(&paths[0]).unwrap(), "a\nOTHER\nc\n");
-    let mut temps = meld_vc::TempFiles::new();
     temps.register(temp_files);
+}
+
+#[test]
+fn ignored_files() {
+    require_tool!("cvs", "cvsnt");
+    let fx = checkout(&["a.txt", "kept.o", "sub/b.txt"]);
+    let root = &fx.root;
+    // The repository's CVSROOT/cvsignore applies everywhere
+    let cvsroot = fx.sibling("cvsroot");
+    write(&cvsroot, "CVSROOT/cvsignore", "*.repo\n");
+    write(root, ".cvsignore", "*.log build\n");
+    cvs(root, &["-Q", "add", ".cvsignore"]);
+    write(root, "sub/.cvsignore", "local.txt\n");
+    for name in [
+        "x.o",
+        "debug.log",
+        "data.repo",
+        "build/out.txt",
+        "sub/local.txt",
+        "sub/nested.log",
+        "sub/core",
+        "core.c",
+        "notes.txt",
+    ] {
+        write(root, name, "x\n");
+    }
+    let mut vc = open(root);
+    let st = |vc: &dyn Vc, name: &str| vc.get_entry(&root.join(name)).state;
+    for name in [
+        "x.o",
+        "debug.log",
+        "data.repo",
+        "build",
+        "sub/local.txt",
+        "sub/core",
+    ] {
+        assert_eq!(st(vc.as_ref(), name), State::Ignored, "{name}");
+    }
+    // .cvsignore applies to its own folder only
+    assert_eq!(st(vc.as_ref(), "sub/nested.log"), State::Unversioned);
+    assert_eq!(st(vc.as_ref(), "sub/.cvsignore"), State::Unversioned);
+    assert_eq!(st(vc.as_ref(), "core.c"), State::Unversioned);
+    assert_eq!(st(vc.as_ref(), "notes.txt"), State::Unversioned);
+    // Versioned files are never ignored
+    assert_eq!(st(vc.as_ref(), "kept.o"), State::Normal);
+    assert_eq!(st(vc.as_ref(), ".cvsignore"), State::New);
+    // CVS agrees on what is unknown
+    let unknown = cvs(root, &["-n", "-q", "update"]);
+    let mut listed: Vec<&str> = unknown
+        .lines()
+        .filter_map(|l| l.strip_prefix("? "))
+        .collect();
+    listed.sort();
+    assert_eq!(
+        listed,
+        vec!["core.c", "notes.txt", "sub/.cvsignore", "sub/nested.log"]
+    );
+
+    // ~/.cvsignore, with a single-file refresh (the test HOME is private;
+    // no other test has files with this extension)
+    let home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+    write(&home, ".cvsignore", "*.meld-home-ignored\n");
+    write(root, "sub/x.meld-home-ignored", "x\n");
+    let file = root.join("sub/x.meld-home-ignored");
+    vc.refresh_vc_state(Some(&file)).unwrap();
+    assert_eq!(vc.get_entry(&file).state, State::Ignored);
+    assert_eq!(st(vc.as_ref(), "notes.txt"), State::Unversioned);
 }
 
 #[test]

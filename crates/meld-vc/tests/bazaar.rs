@@ -12,8 +12,8 @@ use std::path::Path;
 
 use common::{Fixture, run_ok, take, write};
 use meld_vc::{
-    Action, ConflictSide, DiffOptions, DiffRequest, MergeFileOrder, State, Vc, VcKind, choose_vcs,
-    prepare_diff,
+    Action, ConflictSide, DiffOptions, DiffRequest, MergeFileOrder, State, StatusFilters, Vc,
+    VcKind, VcRow, choose_vcs, prepare_diff, scan_tree,
 };
 
 fn bzr(dir: &Path, args: &[&str]) -> String {
@@ -134,6 +134,74 @@ fn statuses() {
             .unwrap(),
         vec!["new.txt", "sub/nested.txt"]
     );
+}
+
+#[test]
+fn ignored_files() {
+    require_tool!("bzr", "brz");
+    let fx = init_branch();
+    let root = &fx.root;
+    write(root, "a.txt", "a\n");
+    write(root, "kept.log", "versioned although it matches\n");
+    write(root, "sub/b.txt", "b\n");
+    bzr(root, &["add", "-q"]);
+    bzr(root, &["commit", "-q", "-m", "initial"]);
+    write(root, ".bzrignore", "*.log\nbuild\n");
+    bzr(root, &["add", "-q", ".bzrignore"]);
+    for name in [
+        "debug.log",
+        "sub/nested.log",
+        "x.pyc",
+        "backup.txt~",
+        "build/deep/out.txt",
+        "unknown-dir/q.log",
+        "notes.txt",
+    ] {
+        write(root, name, "x\n");
+    }
+    write(root, "kept.log", "changed\n");
+
+    let vc = open(root);
+    let st = |name: &str| vc.get_entry(&root.join(name)).state;
+    for name in [
+        "debug.log",
+        "sub/nested.log",
+        "x.pyc",
+        "backup.txt~",
+        "build",
+    ] {
+        assert_eq!(st(name), State::Ignored, "{name}");
+    }
+    // Ignored folders aren't entered; unknown ones aren't by Bazaar either
+    assert_eq!(st("build/deep"), State::Normal);
+    assert_eq!(st("unknown-dir"), State::Unversioned);
+    assert_eq!(st("notes.txt"), State::Unversioned);
+    assert_eq!(st("kept.log"), State::Modified);
+    assert_eq!(st(".bzrignore"), State::New);
+
+    // Shown with the "ignored" filter; flattened views don't list or enter
+    // ignored folders
+    let filters = StatusFilters {
+        ignored: true,
+        ..StatusFilters::default()
+    };
+    let tree = scan_tree(vc.as_ref(), root, &filters).unwrap();
+    let names: Vec<String> = tree
+        .children()
+        .iter()
+        .filter_map(VcRow::entry)
+        .map(|e| e.name.clone())
+        .collect();
+    for name in ["debug.log", "x.pyc", "nested.log", "backup.txt~"] {
+        assert!(names.contains(&name.to_string()), "{name} not in {names:?}");
+    }
+    assert!(!names.contains(&"out.txt".to_string()), "{names:?}");
+
+    // A sub-folder location sees the ignored files below it
+    let sub = root.join("sub");
+    let mut vc = VcKind::Bazaar.open(&sub).unwrap();
+    vc.refresh_vc_state(None).unwrap();
+    assert_eq!(vc.get_entry(&sub.join("nested.log")).state, State::Ignored);
 }
 
 #[test]

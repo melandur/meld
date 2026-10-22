@@ -55,12 +55,47 @@
 //! (`textwrap.fill` port) and [`MessageHistory`] ("Previous logs",
 //! persisted in `history.ini`).
 //!
+//! # Conflicts and ignored files per backend
+//!
+//! Every backend reports conflicts as [`State::Conflict`], gives the three
+//! sides through `get_path_for_conflict` (3-way comparisons) and
+//! implements [`Action::Resolve`]; every backend except the null one
+//! reports ignored files as [`State::Ignored`]. Beyond Python:
+//! - Mercurial: unresolved files of a merge, rebase, graft, ... (`hg
+//!   resolve --list`), with sides from Mercurial's merge state; resolve
+//!   is `hg resolve --mark`; a pending merge is committed as a whole.
+//! - Bazaar: ignored files from `bzr ls --ignored`.
+//! - CVS: ignored files by CVS's ignore rules (default list,
+//!   `CVSROOT/cvsignore` of local repositories, `~/.cvsignore`,
+//!   `CVSIGNORE`, `.cvsignore`); conflict sides from the `.#<file>.<rev>`
+//!   backup and the revisions before and after `cvs update`.
+//! - Darcs: conflicts found by the conflict markup in modified files, with
+//!   sides rebuilt from the markup; boring files by the boring file rules.
+//!
+//! CVS and Darcs have no "resolved" flag: a conflicted file without
+//! markers is simply modified. Their Resolve refuses files that still
+//! contain markers ([`VcError::ConflictMarkers`]) and otherwise runs a
+//! read-only command so the view refreshes.
+//!
+//! Limitations: Darcs' markup doesn't say which version is local; it is
+//! recognised with the backup Darcs makes before writing markup, else the
+//! first version is taken as local, and with more than two conflicting
+//! versions remote is only the first non-local one. CVS sides are right
+//! for `cvs update` merges only (for `update -j` merges base and remote
+//! are both the working revision), and conflicts are compared 2-way once
+//! the backup is deleted. Bazaar's ignored files cost one more `bzr` call
+//! per refresh.
+//!
 //! # Testing
 //!
 //! `tests/<backend>.rs` run each backend against real repositories made
 //! with the VC program found on `PATH` (`git`, `hg`, `bzr`/`brz`, `svn` and
 //! `svnadmin`, `cvs`, `darcs`); tests of a backend whose program is missing
 //! are skipped. Each file's doc comment names the tool version last tested.
+//! Conflicts are made for real (`git merge`, `hg merge`/`graft`, `bzr
+//! merge`, `svn update`/`merge`, a conflicting `cvs update` or `darcs
+//! pull`) and ignored files checked against what the tool itself reports
+//! (e.g. `cvs -n -q update`, `darcs whatsnew -l`).
 
 pub mod bzr;
 pub mod command;
