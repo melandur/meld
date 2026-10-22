@@ -258,7 +258,7 @@ impl Meld {
             Message::QuitAnyway => self.exit(),
             Message::WindowOpened(id) => {
                 self.window = Some(id);
-                if self.shared.settings.is_maximized {
+                if self.shared.settings.window_state.is_maximized {
                     window::maximize(id, true)
                 } else {
                     Task::none()
@@ -266,8 +266,8 @@ impl Meld {
             }
             Message::WindowResized(size) => {
                 if !self.fullscreen {
-                    self.shared.settings.width = size.width as i32;
-                    self.shared.settings.height = size.height as i32;
+                    self.shared.settings.window_state.width = size.width as i32;
+                    self.shared.settings.window_state.height = size.height as i32;
                 }
                 Task::none()
             }

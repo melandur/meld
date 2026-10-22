@@ -503,16 +503,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bstr"
-version = "1.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6bb31b46c14244e20ee9984b11bf5c992b91fb6939fea616e3512c8baecdbe5f"
-dependencies = [
- "memchr",
- "serde_core",
-]
-
-[[package]]
 name = "built"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1529,19 +1519,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "151665d9be52f9bb40fc7966565d39666f2d1e69233571b71b87791c7e0528b3"
 
 [[package]]
-name = "globset"
-version = "0.4.20"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07c34a9410465b45bd9787443bc7370f37735bad04b0f0cd57ff1a3186c98988"
-dependencies = [
- "aho-corasick",
- "bstr",
- "log",
- "regex-automata",
- "regex-syntax",
-]
-
-[[package]]
 name = "glow"
 version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2357,12 +2334,7 @@ dependencies = [
  "env_logger",
  "iced",
  "log",
- "meld-ailens",
  "meld-config",
- "meld-diff",
- "meld-files",
- "meld-vc",
- "meld-widgets",
  "open",
  "rfd",
  "tempfile",
@@ -2373,11 +2345,12 @@ dependencies = [
 name = "meld-ailens"
 version = "4.0.0-alpha.1"
 dependencies = [
- "globset",
+ "libc",
  "log",
  "regex",
  "serde",
  "serde_json",
+ "sha1_smol",
  "tempfile",
  "thiserror 2.0.21",
 ]
@@ -2400,6 +2373,7 @@ name = "meld-diff"
 version = "4.0.0-alpha.1"
 dependencies = [
  "regex",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 
@@ -2409,18 +2383,22 @@ version = "4.0.0-alpha.1"
 dependencies = [
  "chardetng",
  "encoding_rs",
- "globset",
+ "fancy-regex",
+ "libc",
  "log",
  "regex",
  "tempfile",
  "thiserror 2.0.21",
+ "unicode-normalization",
 ]
 
 [[package]]
 name = "meld-vc"
 version = "4.0.0-alpha.1"
 dependencies = [
+ "dirs",
  "log",
+ "quick-xml 0.38.4",
  "regex",
  "tempfile",
  "thiserror 2.0.21",
@@ -2433,6 +2411,8 @@ dependencies = [
  "iced",
  "log",
  "syntect",
+ "thiserror 2.0.21",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -3925,6 +3905,8 @@ version = "1.0.154"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7e9cc8b1b85264074fbcc02a88680c4096b1e47df8f739dceb03bf482f04bd6"
 dependencies = [
+ "foldhash 0.2.0",
+ "indexmap",
  "itoa",
  "memchr",
  "serde",
@@ -3951,6 +3933,12 @@ checksum = "4e7523beb55eece201a2356bee0bbca0d1ab466c14c07703b2e0ee6d42cb0c2c"
 dependencies = [
  "serde_core",
 ]
+
+[[package]]
+name = "sha1_smol"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbfa15b3dddfee50a0fff136974b3e1bde555604ba463834a7eb7deb6417705d"
 
 [[package]]
 name = "shlex"
@@ -4549,6 +4537,15 @@ name = "unicode-linebreak"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3b09c83c3c29d37506a3e260c08c03743a6bb66a9cd432c6934ab501a190571f"
+
+[[package]]
+name = "unicode-normalization"
+version = "0.1.26"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75cd3fb03d5288b3ba9a1ee103ac7e9cbb59f0b03d64f8ddfcc04dd42758a85d"
+dependencies = [
+ "tinyvec",
+]
 
 [[package]]
 name = "unicode-properties"
