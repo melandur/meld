@@ -4,15 +4,27 @@
 //! The [`Highlighter`] keeps per-line spans plus parse-state checkpoints.
 //! After an [`Edit`](crate::buffer::Edit) it re-parses from the edited line
 //! until the parser state converges with the previous parse, so typing
-//! only re-highlights a handful of lines. Work is lazy and can be
+//! only re-highlights a handful of lines. Work on the UI thread is lazy and
 //! time-budgeted: the text pane asks for the visible lines while drawing
 //! and keeps requesting frames until they are done.
+//!
+//! [`Highlighter::highlight_visible`] also hands the rest of a large buffer
+//! to a background job, which parses it in parallel chunks (speculatively
+//! from a fresh state, then fixed up from the true state until the two
+//! converge) and streams exact spans and checkpoints back, so jumping
+//! anywhere in a huge file soon shows exact colours from a nearby
+//! checkpoint. Edits cancel a running job; the next draw restarts it from
+//! the nearest exact checkpoint.
 
 use std::cell::RefCell;
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::ops::Range;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use syntect::parsing::{ParseState, ScopeStack, SyntaxReference, SyntaxSet};
+use syntect::parsing::{ParseState, Scope, ScopeStack, SyntaxReference, SyntaxSet};
 
 use crate::buffer::Edit;
 
@@ -288,11 +300,77 @@ const APPROX_GAP: usize = 2000;
 const APPROX_CONTEXT: usize = 200;
 /// Distance between stored parse-state checkpoints.
 const CHECKPOINT_INTERVAL: usize = 32;
+/// While a background job is running, the visible range is parsed on the
+/// UI thread only if it starts at most this many lines past the exact part.
+const SYNC_REACH: usize = 256;
+
+/// Background job sizes.
+#[derive(Clone, Copy)]
+struct Tuning {
+    /// Leave at least this many unhighlighted lines before handing the
+    /// rest of the buffer to a background job; smaller gaps are parsed on
+    /// the UI thread as they scroll into view.
+    background_min: usize,
+    /// Minimum lines per speculative chunk.
+    min_chunk: usize,
+    /// Lines per exact piece streamed back.
+    piece: usize,
+    /// Fixed number of chunks to parse in parallel (default: per CPU).
+    threads: Option<usize>,
+}
+
+const TUNING: Tuning = Tuning {
+    background_min: 1024,
+    min_chunk: 4096,
+    piece: 1024,
+    threads: None,
+};
+
+/// Small sizes so unit tests exercise chunking and fix-up on small inputs.
+#[cfg(test)]
+const TEST_TUNING: Tuning = Tuning {
+    background_min: 64,
+    min_chunk: 64,
+    piece: 32,
+    threads: Some(4),
+};
+
+/// Set by the benchmark to measure the real sizes.
+#[cfg(test)]
+static REAL_TUNING: AtomicBool = AtomicBool::new(false);
+
+fn tuning() -> Tuning {
+    #[cfg(test)]
+    if !REAL_TUNING.load(Ordering::Relaxed) {
+        return TEST_TUNING;
+    }
+    TUNING
+}
+
+/// A background job started right after an edit waits this long first, so
+/// typing does not restart a full-buffer parse on every key.
+const EDIT_DEBOUNCE: Duration = Duration::from_millis(150);
 
 #[derive(Clone, PartialEq, Eq)]
 struct State {
     parse: ParseState,
     scopes: ScopeStack,
+}
+
+// SAFETY: with the Oniguruma backend a `ParseState` holds `onig::Region`s
+// (captures for backreferences), which wrap a raw `OnigRegion`. A region
+// uniquely owns its malloc'd position arrays (deep-copied by `Clone`, freed
+// by `Drop`) and has no thread affinity, so moving one to another thread is
+// sound. States are only ever moved between threads, never shared.
+unsafe impl Send for State {}
+
+impl State {
+    fn new(syntax: &SyntaxReference) -> Self {
+        Self {
+            parse: ParseState::new(syntax),
+            scopes: ScopeStack::new(),
+        }
+    }
 }
 
 struct Inner {
@@ -310,6 +388,12 @@ struct Inner {
     /// fresh state, shown until the exact parse catches up.
     approx: Option<(usize, Vec<Box<[StyleSpan]>>)>,
     line_buf: String,
+    /// Background parse of the rest of the buffer, if one is running.
+    job: Option<Job>,
+    /// When the buffer was last edited.
+    last_edit: Option<Instant>,
+    /// Set when a background thread could not be started.
+    no_jobs: bool,
 }
 
 /// Incremental syntax highlighter for one buffer. See the module docs.
@@ -369,6 +453,9 @@ impl Highlighter {
                 checkpoints: Vec::new(),
                 approx: None,
                 line_buf: String::new(),
+                job: None,
+                last_edit: None,
+                no_jobs: false,
             }),
         }
     }
@@ -391,6 +478,8 @@ impl Highlighter {
         inner.approx = None;
         inner.valid = 0;
         inner.reparse_until = 0;
+        inner.job = None;
+        inner.last_edit = None;
     }
 
     /// Records an edit. Stale spans stay visible (shifted) until they are
@@ -407,6 +496,9 @@ impl Highlighter {
     /// lines.
     pub fn lines_changed(&mut self, start: usize, removed: usize, inserted: usize) {
         let inner = self.inner.get_mut();
+        // A running job parses a snapshot that no longer matches.
+        inner.job = None;
+        inner.last_edit = Some(Instant::now());
         let delta = inserted as isize - removed as isize;
         let shift = |l: usize| (l as isize + delta).max(0) as usize;
         inner.approx = None;
@@ -446,96 +538,41 @@ impl Highlighter {
     /// `budget` (if given). Returns whether `0..upto` is now valid.
     pub fn highlight(&self, lines: &[String], upto: usize, budget: Option<Duration>) -> bool {
         let mut inner = self.inner.borrow_mut();
-        let upto = upto.min(lines.len());
-        let Some(syntax) = inner.syntax else {
-            return true;
-        };
-        if inner.valid >= upto {
-            return true;
-        }
-        let deadline = budget.map(|b| Instant::now() + b);
-        let set = syntax_set();
-
-        // Resume from the last checkpoint at or before `valid`; every
-        // checkpoint after it is from an earlier parse ("stale").
-        let valid = inner.valid;
-        let idx = inner.checkpoints.partition_point(|(l, _)| *l <= valid);
-        let (mut line, mut state) = match idx.checked_sub(1) {
-            Some(i) => inner.checkpoints[i].clone(),
-            None => (
-                0,
-                State {
-                    parse: ParseState::new(syntax),
-                    scopes: ScopeStack::new(),
-                },
-            ),
-        };
-        let resume = line;
-        let mut last_checkpoint = line;
-        // Parse a little past what was asked for so that we reach a stale
-        // checkpoint and can detect convergence.
-        let stop = upto.max(inner.reparse_until) + 2 * CHECKPOINT_INTERVAL;
-
-        while line < lines.len() {
-            if line > resume {
-                if line >= inner.reparse_until
-                    && line < inner.spans.len()
-                    && inner.stale_checkpoint(line).is_some_and(|s| *s == state)
-                {
-                    inner.valid = inner.spans.len();
-                    inner.reparse_until = 0;
-                    break;
-                }
-                if line - last_checkpoint >= CHECKPOINT_INTERVAL {
-                    inner.store_checkpoint(line, state.clone());
-                    last_checkpoint = line;
-                } else {
-                    inner.drop_checkpoint(line);
-                }
-            }
-            if line >= stop || (line > resume && deadline.is_some_and(|d| Instant::now() >= d)) {
-                // Remember where we stopped so the next call resumes here.
-                inner.store_checkpoint(line, state.clone());
-                break;
-            }
-            let spans = parse_line(&mut inner.line_buf, &lines[line], &mut state, set);
-            if line < inner.spans.len() {
-                inner.spans[line] = spans;
-            } else {
-                inner.spans.push(spans);
-            }
-            line += 1;
-            inner.valid = inner.valid.max(line);
-        }
-        if line >= lines.len() {
-            inner.valid = lines.len();
-            inner.spans.truncate(lines.len());
-            inner.checkpoints.retain(|(l, _)| *l < lines.len());
-            inner.reparse_until = 0;
-        }
-        inner.valid >= upto
+        inner.poll_job(lines.len());
+        inner.highlight(lines, upto, budget)
     }
 
-    /// Highlights for display: exact spans up to `visible.end` within
-    /// `budget`; if the exact parse is still far behind the visible range
-    /// (e.g. after jumping to the end of a huge file), the visible lines
-    /// are additionally parsed from a fresh state nearby so they show
-    /// approximate colours immediately. Returns whether the visible lines
-    /// are exact.
+    /// Highlights for display, never blocking for longer than `budget`.
+    ///
+    /// The rest of a large buffer is parsed by a background job that
+    /// streams exact spans and parse-state checkpoints back; they are
+    /// picked up here. Near the exact part, the visible lines are parsed
+    /// on this thread from the nearest exact checkpoint. If the visible
+    /// range is still far beyond it (e.g. right after jumping to the end
+    /// of a huge file), its lines are additionally parsed from a fresh
+    /// state nearby so they show approximate colours until the exact
+    /// spans arrive. Returns whether the visible lines are exact.
     pub fn highlight_visible(
         &self,
         lines: &[String],
         visible: std::ops::Range<usize>,
         budget: Option<Duration>,
     ) -> bool {
-        if self.highlight(lines, visible.end, budget) {
-            return true;
-        }
         let mut inner = self.inner.borrow_mut();
         let Some(syntax) = inner.syntax else {
             return true;
         };
-        if visible.start < inner.valid + APPROX_GAP {
+        inner.poll_job(lines.len());
+        let end = visible.end.min(lines.len());
+        // With a job running, leave far-away lines to it rather than
+        // duplicating its work here.
+        let far = inner.job.is_some() && visible.start > inner.valid + SYNC_REACH;
+        let exact = !far && inner.highlight(lines, end, budget);
+        inner.maybe_spawn_job(lines);
+        if exact {
+            return true;
+        }
+        if !far && visible.start < inner.valid + APPROX_GAP {
             return false;
         }
         let end = (visible.end + APPROX_CONTEXT).min(lines.len());
@@ -543,11 +580,8 @@ impl Highlighter {
             *s <= visible.start && s + v.len() >= visible.end.min(lines.len())
         });
         if !covered {
-            let start = visible.start.saturating_sub(APPROX_CONTEXT);
-            let mut state = State {
-                parse: ParseState::new(syntax),
-                scopes: ScopeStack::new(),
-            };
+            let start = visible.start.saturating_sub(APPROX_CONTEXT).min(end);
+            let mut state = State::new(syntax);
             let set = syntax_set();
             let mut buf = std::mem::take(&mut inner.line_buf);
             let spans = lines[start..end]
@@ -576,6 +610,177 @@ impl Highlighter {
 }
 
 impl Inner {
+    fn highlight(&mut self, lines: &[String], upto: usize, budget: Option<Duration>) -> bool {
+        let upto = upto.min(lines.len());
+        let Some(syntax) = self.syntax else {
+            return true;
+        };
+        if self.valid >= upto {
+            return true;
+        }
+        let deadline = budget.map(|b| Instant::now() + b);
+        let set = syntax_set();
+
+        // Resume from the last checkpoint at or before `valid`; every
+        // checkpoint after it is from an earlier parse ("stale").
+        let (mut line, mut state) = self.resume_point(syntax);
+        let resume = line;
+        let mut last_checkpoint = line;
+        // Parse a little past what was asked for so that we reach a stale
+        // checkpoint and can detect convergence.
+        let stop = upto.max(self.reparse_until) + 2 * CHECKPOINT_INTERVAL;
+
+        while line < lines.len() {
+            if line > resume {
+                if line >= self.reparse_until
+                    && line < self.spans.len()
+                    && self.stale_checkpoint(line).is_some_and(|s| *s == state)
+                {
+                    self.valid = self.spans.len();
+                    self.reparse_until = 0;
+                    break;
+                }
+                if line - last_checkpoint >= CHECKPOINT_INTERVAL {
+                    self.store_checkpoint(line, state.clone());
+                    last_checkpoint = line;
+                } else {
+                    self.drop_checkpoint(line);
+                }
+            }
+            if line >= stop || (line > resume && deadline.is_some_and(|d| Instant::now() >= d)) {
+                // Remember where we stopped so the next call resumes here.
+                self.store_checkpoint(line, state.clone());
+                break;
+            }
+            let spans = parse_line(&mut self.line_buf, &lines[line], &mut state, set);
+            if line < self.spans.len() {
+                self.spans[line] = spans;
+            } else {
+                self.spans.push(spans);
+            }
+            line += 1;
+            self.valid = self.valid.max(line);
+        }
+        if line >= lines.len() {
+            self.finish(lines.len());
+        }
+        self.valid >= upto
+    }
+
+    /// The last exact checkpoint at or before `valid`.
+    fn resume_point(&self, syntax: &SyntaxReference) -> (usize, State) {
+        let valid = self.valid;
+        let idx = self.checkpoints.partition_point(|(l, _)| *l <= valid);
+        match idx.checked_sub(1) {
+            Some(i) => self.checkpoints[i].clone(),
+            None => (0, State::new(syntax)),
+        }
+    }
+
+    /// Marks all `len` lines as exact.
+    fn finish(&mut self, len: usize) {
+        self.valid = len;
+        self.spans.truncate(len);
+        self.checkpoints.retain(|(l, _)| *l < len);
+        self.reparse_until = 0;
+        self.job = None;
+    }
+
+    /// Takes in the pieces a background job has finished.
+    fn poll_job(&mut self, len: usize) {
+        let Some(job) = self.job.take() else {
+            return;
+        };
+        if job.total != len {
+            // The buffer was replaced without telling us.
+            return;
+        }
+        let alive = loop {
+            match job.rx.try_recv() {
+                Ok(piece) => self.apply_piece(piece),
+                Err(TryRecvError::Empty) => break true,
+                Err(TryRecvError::Disconnected) => break false,
+            }
+        };
+        if self.valid >= len {
+            self.finish(len);
+        } else if alive {
+            self.job = Some(job);
+        } else {
+            // Only a failure (e.g. a panic) ends a job early; don't retry.
+            log::warn!("background highlighting stopped early");
+            self.no_jobs = true;
+        }
+    }
+
+    fn apply_piece(&mut self, piece: Piece) {
+        let end = piece.start + piece.spans.len();
+        if end <= self.valid || piece.start > self.valid {
+            return;
+        }
+        let from = self.valid;
+        for (l, s) in (piece.start..).zip(piece.spans).skip(from - piece.start) {
+            if l < self.spans.len() {
+                self.spans[l] = s;
+            } else {
+                self.spans.push(s);
+            }
+        }
+        let lo = self.checkpoints.partition_point(|(l, _)| *l <= from);
+        let hi = self.checkpoints.partition_point(|(l, _)| *l <= end);
+        self.checkpoints.splice(
+            lo..hi,
+            piece.checkpoints.into_iter().filter(|(l, _)| *l > from),
+        );
+        self.valid = end;
+    }
+
+    /// Hands the rest of the buffer to a background job if it is big.
+    fn maybe_spawn_job(&mut self, lines: &[String]) {
+        let Some(syntax) = self.syntax else {
+            return;
+        };
+        if self.job.is_some() || self.no_jobs || self.valid + tuning().background_min > lines.len()
+        {
+            return;
+        }
+        let (from, state) = self.resume_point(syntax);
+        let rest = &lines[from..];
+        let mut text = String::with_capacity(rest.iter().map(|l| l.len() + 1).sum());
+        let mut ends = Vec::with_capacity(rest.len());
+        for l in rest {
+            text.push_str(l);
+            text.push('\n');
+            ends.push(text.len());
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = mpsc::channel();
+        let not_before = self.last_edit.map(|t| t + EDIT_DEBOUNCE);
+        let src = JobText {
+            syntax,
+            from,
+            text,
+            ends,
+            cancel: cancel.clone(),
+        };
+        let spawned = std::thread::Builder::new()
+            .name("meld-highlight".into())
+            .spawn(move || run_job(src, state, tx, not_before));
+        match spawned {
+            Ok(_) => {
+                self.job = Some(Job {
+                    total: lines.len(),
+                    rx,
+                    cancel,
+                });
+            }
+            Err(err) => {
+                log::warn!("cannot start background highlighting: {err}");
+                self.no_jobs = true;
+            }
+        }
+    }
+
     fn spans_for(&self, line: usize) -> Option<&[StyleSpan]> {
         if line >= self.valid
             && let Some((start, spans)) = &self.approx
@@ -611,6 +816,240 @@ impl Inner {
     }
 }
 
+/// A running background parse of lines `from..total` of a snapshot.
+/// Dropping it cancels the job.
+struct Job {
+    total: usize,
+    rx: Receiver<Piece>,
+    cancel: Arc<AtomicBool>,
+}
+
+impl Drop for Job {
+    fn drop(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Exact spans for lines `start..start + spans.len()`, plus the parse
+/// states at the start of some lines in `start + 1..=start + spans.len()`
+/// (always including the last).
+struct Piece {
+    start: usize,
+    spans: Vec<Box<[StyleSpan]>>,
+    checkpoints: Vec<(usize, State)>,
+}
+
+/// The snapshot a background job parses: lines `from..` of the buffer,
+/// each followed by `'\n'`, in one string.
+struct JobText {
+    syntax: &'static SyntaxReference,
+    from: usize,
+    text: String,
+    /// Byte offset just past each line's `'\n'`.
+    ends: Vec<usize>,
+    cancel: Arc<AtomicBool>,
+}
+
+impl JobText {
+    fn line(&self, i: usize) -> &str {
+        let start = i.checked_sub(1).map_or(0, |p| self.ends[p]);
+        &self.text[start..self.ends[i]]
+    }
+
+    fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
+
+    /// Parses snapshot lines `range` from `state`, returning their spans
+    /// and checkpoints (absolute line numbers) at multiples of
+    /// [`CHECKPOINT_INTERVAL`] inside the range. `None` if cancelled.
+    fn parse(&self, range: Range<usize>, state: &mut State) -> Option<Run> {
+        let set = syntax_set();
+        let mut run = Run {
+            spans: Vec::with_capacity(range.len()),
+            checkpoints: Vec::new(),
+        };
+        for i in range.clone() {
+            if i.is_multiple_of(64) && self.cancelled() {
+                return None;
+            }
+            run.spans.push(parse_text(self.line(i), state, set));
+            if (i + 1).is_multiple_of(CHECKPOINT_INTERVAL) && i + 1 < range.end {
+                run.checkpoints.push((self.from + i + 1, state.clone()));
+            }
+        }
+        Some(run)
+    }
+}
+
+struct Run {
+    spans: Vec<Box<[StyleSpan]>>,
+    checkpoints: Vec<(usize, State)>,
+}
+
+fn worker_threads() -> usize {
+    tuning().threads.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map_or(1, |n| n.get().saturating_sub(1))
+            .clamp(1, 8)
+    })
+}
+
+/// Background job body. The snapshot is split into chunks; all but the
+/// first are parsed in parallel from a fresh state (speculatively). The
+/// first is parsed exactly from `state` and streamed back in pieces; each
+/// following chunk is then re-parsed from the true state at its start
+/// until that state converges with the speculative parse, which for
+/// ordinary code takes a few lines, and the rest of the speculative
+/// results are exact.
+fn run_job(src: JobText, mut state: State, tx: Sender<Piece>, not_before: Option<Instant>) {
+    if let Some(t) = not_before {
+        while Instant::now() < t {
+            if src.cancelled() {
+                return;
+            }
+            std::thread::sleep(
+                Duration::from_millis(10).min(t.saturating_duration_since(Instant::now())),
+            );
+        }
+    }
+    let Tuning {
+        min_chunk, piece, ..
+    } = tuning();
+    let n = src.ends.len();
+    let k = n.div_ceil(min_chunk).clamp(1, worker_threads());
+    let chunk = n.div_ceil(k).next_multiple_of(CHECKPOINT_INTERVAL);
+    let chunks: Vec<Range<usize>> = (0..n)
+        .step_by(chunk.max(1))
+        .map(|a| a..(a + chunk).min(n))
+        .collect();
+    let src = &src;
+    let send = |piece: Piece| {
+        let ok = tx.send(piece).is_ok();
+        if !ok {
+            src.cancel.store(true, Ordering::Relaxed);
+        }
+        ok
+    };
+    std::thread::scope(|s| {
+        let speculative: Vec<_> = chunks
+            .iter()
+            .skip(1)
+            .map(|r| {
+                let r = r.clone();
+                s.spawn(move || {
+                    let mut state = State::new(src.syntax);
+                    src.parse(r, &mut state).map(|run| (run, state))
+                })
+            })
+            .collect();
+
+        // The first chunk is exact; stream it so the top shows up early.
+        let Some(first) = chunks.first() else {
+            return;
+        };
+        for a in first.clone().step_by(piece) {
+            let b = (a + piece).min(first.end);
+            let Some(mut run) = src.parse(a..b, &mut state) else {
+                return;
+            };
+            run.checkpoints.push((src.from + b, state.clone()));
+            if !send(make_piece(src, a, run)) {
+                return;
+            }
+        }
+
+        for (r, handle) in chunks.iter().skip(1).zip(speculative) {
+            let Ok(Some((spec, spec_end))) = handle.join() else {
+                src.cancel.store(true, Ordering::Relaxed);
+                return;
+            };
+            if !fix_up(src, r.clone(), &mut state, spec, spec_end, &send) {
+                return;
+            }
+        }
+    });
+}
+
+fn make_piece(src: &JobText, start: usize, run: Run) -> Piece {
+    Piece {
+        start: src.from + start,
+        spans: run.spans,
+        checkpoints: run.checkpoints,
+    }
+}
+
+/// Re-parses chunk `r` from its true start `state` until it converges
+/// with the speculative parse `spec`, streaming the exact result.
+fn fix_up(
+    src: &JobText,
+    r: Range<usize>,
+    state: &mut State,
+    mut spec: Run,
+    spec_end: State,
+    send: &impl Fn(Piece) -> bool,
+) -> bool {
+    let set = syntax_set();
+    let mut out = Run {
+        spans: Vec::new(),
+        checkpoints: Vec::new(),
+    };
+    let mut start = r.start;
+    let mut spec_cps = std::mem::take(&mut spec.checkpoints).into_iter().peekable();
+    let mut line = r.start;
+    let mut converged = false;
+    while line < r.end {
+        if line > r.start {
+            let abs = src.from + line;
+            while spec_cps.next_if(|(l, _)| *l < abs).is_some() {}
+            if spec_cps
+                .peek()
+                .is_some_and(|(l, s)| *l == abs && s == state)
+            {
+                converged = true;
+                break;
+            }
+        }
+        if line.is_multiple_of(64) && src.cancelled() {
+            return false;
+        }
+        out.spans.push(parse_text(src.line(line), state, set));
+        line += 1;
+        if line.is_multiple_of(CHECKPOINT_INTERVAL) && line < r.end {
+            out.checkpoints.push((src.from + line, state.clone()));
+        }
+        if out.spans.len() >= tuning().piece && line < r.end {
+            out.checkpoints.push((src.from + line, state.clone()));
+            out.checkpoints.dedup_by(|a, b| a.0 == b.0);
+            let done = std::mem::replace(
+                &mut out,
+                Run {
+                    spans: Vec::new(),
+                    checkpoints: Vec::new(),
+                },
+            );
+            if !send(make_piece(src, start, done)) {
+                return false;
+            }
+            start = line;
+        }
+    }
+    if converged {
+        out.spans.extend(spec.spans.drain(line - r.start..));
+        out.checkpoints.extend(spec_cps);
+        *state = spec_end;
+    }
+    out.checkpoints.push((src.from + r.end, state.clone()));
+    out.checkpoints.dedup_by(|a, b| a.0 == b.0);
+    send(make_piece(src, start, out))
+}
+
+thread_local! {
+    /// Style of each scope seen so far on this thread.
+    static STYLE_CACHE: RefCell<HashMap<Scope, Option<SyntaxStyle>>> =
+        RefCell::new(HashMap::new());
+}
+
 fn parse_line(
     buf: &mut String,
     line: &str,
@@ -623,7 +1062,16 @@ fn parse_line(
     buf.clear();
     buf.push_str(line);
     buf.push('\n');
-    let ops = match state.parse.parse_line(buf, set) {
+    parse_text(buf, state, set)
+}
+
+/// Parses one line; `text` is the line followed by `'\n'`.
+fn parse_text(text: &str, state: &mut State, set: &SyntaxSet) -> Box<[StyleSpan]> {
+    let line = text.strip_suffix('\n').unwrap_or(text);
+    if line.len() > MAX_LINE_BYTES {
+        return Box::default();
+    }
+    let ops = match state.parse.parse_line(text, set) {
         Ok(ops) => ops,
         Err(err) => {
             log::debug!("syntax parse error: {err}");
@@ -664,28 +1112,33 @@ fn parse_line(
         });
     };
 
-    let mut current = current_style(&state.scopes);
-    let mut pos = 0;
-    for (at, op) in ops {
-        if at > pos {
-            push(pos, at, current);
-            pos = at;
+    STYLE_CACHE.with_borrow_mut(|cache| {
+        let mut current = current_style(&state.scopes, cache);
+        let mut pos = 0;
+        for (at, op) in ops {
+            if at > pos {
+                push(pos, at, current);
+                pos = at;
+            }
+            if state.scopes.apply(&op).is_err() {
+                log::debug!("scope stack error");
+            }
+            current = current_style(&state.scopes, cache);
         }
-        if state.scopes.apply(&op).is_err() {
-            log::debug!("scope stack error");
-        }
-        current = current_style(&state.scopes);
-    }
-    push(pos, line.len(), current);
+        push(pos, line.len(), current);
+    });
     spans.into_boxed_slice()
 }
 
-fn current_style(scopes: &ScopeStack) -> Option<SyntaxStyle> {
-    scopes
-        .as_slice()
-        .iter()
-        .rev()
-        .find_map(|scope| style_for_scope(&scope.build_string()))
+fn current_style(
+    scopes: &ScopeStack,
+    cache: &mut HashMap<Scope, Option<SyntaxStyle>>,
+) -> Option<SyntaxStyle> {
+    scopes.as_slice().iter().rev().find_map(|scope| {
+        *cache
+            .entry(*scope)
+            .or_insert_with(|| style_for_scope(&scope.build_string()))
+    })
 }
 
 #[cfg(test)]
@@ -908,6 +1361,139 @@ mod tests {
         assert!(h.is_valid_through(big.len()));
     }
 
+    /// Draws `vis` like a pane would until the background job has made
+    /// the whole buffer exact.
+    fn finish_in_background(h: &Highlighter, l: &[String], vis: Range<usize>) {
+        let t = Instant::now();
+        while !h.is_valid_through(l.len()) {
+            h.highlight_visible(l, vis.clone(), Some(Duration::from_micros(50)));
+            assert!(
+                t.elapsed() < Duration::from_secs(60),
+                "background job stalled"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn spans_of(h: &Highlighter, len: usize) -> Vec<Vec<StyleSpan>> {
+        (0..len).map(|i| h.line_spans(i).unwrap()).collect()
+    }
+
+    fn job_running(h: &Highlighter) -> bool {
+        h.inner.borrow().job.is_some()
+    }
+
+    fn big8() -> Vec<String> {
+        (0..8).flat_map(|_| big_python()).collect()
+    }
+
+    #[test]
+    fn background_matches_sync() {
+        let l = big8();
+        let h = Highlighter::for_language("python3");
+        assert!(h.highlight_visible(&l, 0..40, None));
+        assert!(job_running(&h));
+        finish_in_background(&h, &l, 0..40);
+        assert!(!job_running(&h));
+        assert_eq!(spans_of(&h, l.len()), fresh("python3", &l));
+    }
+
+    #[test]
+    fn background_far_viewport() {
+        let l = big8();
+        let h = Highlighter::for_language("python3");
+        let vis = l.len() - 40..l.len();
+        assert!(!h.highlight_visible(&l, vis.clone(), Some(Duration::from_micros(1))));
+        assert!(job_running(&h));
+        finish_in_background(&h, &l, vis.clone());
+        assert!(h.highlight_visible(&l, vis, Some(Duration::from_micros(1))));
+        assert_eq!(spans_of(&h, l.len()), fresh("python3", &l));
+    }
+
+    #[test]
+    fn background_strings_across_chunks() {
+        // A docstring spanning several chunks: their speculative parses
+        // are wrong and only converge after it closes.
+        let mut l = big8();
+        l.insert(100, "\"\"\"".to_owned());
+        l.insert(3000, "\"\"\"".to_owned());
+        let h = Highlighter::for_language("python3");
+        h.highlight_visible(&l, 0..40, None);
+        finish_in_background(&h, &l, 0..40);
+        assert_eq!(spans_of(&h, l.len()), fresh("python3", &l));
+        // Never converges: everything after line 10 is a string.
+        let mut l = big8();
+        l.insert(10, "\"\"\"".to_owned());
+        let h = Highlighter::for_language("python3");
+        h.highlight_visible(&l, 0..40, None);
+        finish_in_background(&h, &l, 0..40);
+        assert_eq!(spans_of(&h, l.len()), fresh("python3", &l));
+    }
+
+    #[test]
+    fn background_states_with_captures() {
+        // Rust raw strings and bash heredocs keep regex captures in the
+        // parse state, which then crosses threads.
+        let mut l = Vec::new();
+        for i in 0..600 {
+            l.push(format!("fn f{i}() -> &'static str {{ r##\"start"));
+            l.push("  \"# still raw".to_owned());
+            l.push(format!("end\"## }} // {i}"));
+        }
+        let h = Highlighter::for_language("rust");
+        h.highlight_visible(&l, 0..40, None);
+        finish_in_background(&h, &l, 0..40);
+        assert_eq!(spans_of(&h, l.len()), fresh("rust", &l));
+        let mut l = Vec::new();
+        for i in 0..600 {
+            l.push(format!("cat <<EOF{i}"));
+            l.push("if then fi".to_owned());
+            l.push(format!("EOF{i}"));
+        }
+        let h = Highlighter::for_language("sh");
+        h.highlight_visible(&l, 0..40, None);
+        finish_in_background(&h, &l, 0..40);
+        assert_eq!(spans_of(&h, l.len()), fresh("sh", &l));
+    }
+
+    #[test]
+    fn edits_during_and_after_background() {
+        let mut l = big8();
+        let mut h = Highlighter::for_language("python3");
+        h.highlight_visible(&l, 0..40, None);
+        assert!(job_running(&h));
+        l.insert(500, "\"\"\"".to_owned());
+        h.lines_changed(500, 0, 1);
+        assert!(!job_running(&h));
+        finish_in_background(&h, &l, 480..520);
+        assert_eq!(spans_of(&h, l.len()), fresh("python3", &l));
+        // Incremental re-highlighting relies on the job's checkpoints.
+        l.insert(4000, "\"\"\"".to_owned());
+        h.lines_changed(4000, 0, 1);
+        assert_eq!(full(&h, &l), fresh("python3", &l));
+        l.remove(500);
+        h.lines_changed(500, 1, 0);
+        assert_eq!(full(&h, &l), fresh("python3", &l));
+        l[2000] = "x = 1".to_owned();
+        h.lines_changed(2000, 1, 1);
+        assert!(h.highlight(&l, 2001, None));
+        assert!(h.is_valid_through(l.len()));
+        assert_eq!(spans_of(&h, l.len()), fresh("python3", &l));
+    }
+
+    #[test]
+    fn replaced_buffer_drops_job() {
+        let l = big8();
+        let h = Highlighter::for_language("python3");
+        h.highlight_visible(&l, 0..40, None);
+        assert!(job_running(&h));
+        // Different length without an edit notification: never apply.
+        let short = l[..100].to_vec();
+        h.highlight(&short, short.len(), None);
+        assert!(!job_running(&h));
+        assert!(h.is_valid_through(short.len()));
+    }
+
     #[test]
     fn plain_has_no_spans() {
         let h = Highlighter::plain();
@@ -939,10 +1525,7 @@ mod tests {
 mod bench {
     use super::*;
 
-    /// `cargo test --release -p meld-widgets highlight_speed -- --ignored --nocapture`
-    #[test]
-    #[ignore]
-    fn highlight_speed() {
+    fn python_lines() -> Vec<String> {
         let mut l = Vec::new();
         for i in 0..20_000 {
             l.push(format!("def function_{i}(value, scale=2):"));
@@ -953,21 +1536,120 @@ mod bench {
             l.push("    return result".to_owned());
             l.push(String::new());
         }
-        let h = Highlighter::for_language("python3");
-        let t = Instant::now();
-        h.highlight(&l, l.len(), None);
-        let el = t.elapsed();
-        println!(
-            "{} lines in {:?} ({:.0} lines/s)",
-            l.len(),
-            el,
-            l.len() as f64 / el.as_secs_f64()
-        );
-        let mut calls = 0;
-        let h = Highlighter::for_language("python3");
-        while !h.highlight(&l, l.len(), Some(Duration::from_millis(8))) {
-            calls += 1;
+        l
+    }
+
+    fn rust_lines() -> Vec<String> {
+        let src = include_str!("text_pane.rs");
+        let mut l = Vec::new();
+        while l.len() < 140_000 {
+            l.extend(src.lines().map(str::to_owned));
         }
-        println!("budgeted: {calls} calls");
+        l
+    }
+
+    fn rate(n: usize, d: Duration) -> String {
+        format!("{d:.2?} ({:.0} lines/s)", n as f64 / d.as_secs_f64())
+    }
+
+    /// Calls `highlight_visible` like a pane drawing frames until `vis`
+    /// is exact; returns (time, frames, slowest call).
+    fn frames(h: &Highlighter, l: &[String], vis: Range<usize>) -> (Duration, usize, Duration) {
+        let t = Instant::now();
+        let mut slowest = Duration::ZERO;
+        let mut n = 0;
+        loop {
+            n += 1;
+            let c = Instant::now();
+            let exact = h.highlight_visible(l, vis.clone(), Some(Duration::from_millis(8)));
+            slowest = slowest.max(c.elapsed());
+            if exact {
+                return (t.elapsed(), n, slowest);
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn run(name: &str, id: &str, l: &[String]) {
+        println!(
+            "--- {name}: {} lines, {} worker threads",
+            l.len(),
+            worker_threads()
+        );
+        let set = syntax_set();
+        let syntax = find_language(id).unwrap();
+        let mut raw = Duration::MAX;
+        let mut sync = Duration::MAX;
+        for _ in 0..2 {
+            let mut ps = ParseState::new(syntax);
+            let mut buf = String::new();
+            let t = Instant::now();
+            for line in l {
+                buf.clear();
+                buf.push_str(line);
+                buf.push('\n');
+                let _ = ps.parse_line(&buf, set);
+            }
+            raw = raw.min(t.elapsed());
+            let h = Highlighter::for_language(id);
+            let t = Instant::now();
+            h.highlight(l, l.len(), None);
+            sync = sync.min(t.elapsed());
+        }
+        println!("raw syntect parse:      {}", rate(l.len(), raw));
+        println!("sync full highlight:    {}", rate(l.len(), sync));
+
+        let top = 0..60;
+        let end = l.len() - 60..l.len();
+        let h = Highlighter::for_language(id);
+        let (d, n, slow) = frames(&h, l, top.clone());
+        println!("open at top: exact in {d:.2?} ({n} frames, slowest call {slow:.2?})");
+        let t = Instant::now();
+        let mut slowest = Duration::ZERO;
+        while !h.is_valid_through(l.len()) {
+            let c = Instant::now();
+            h.highlight_visible(l, top.clone(), Some(Duration::from_millis(8)));
+            slowest = slowest.max(c.elapsed());
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        println!(
+            "background whole file:  {} after opening (slowest call {slowest:.2?})",
+            rate(l.len(), t.elapsed() + d)
+        );
+
+        let h = Highlighter::for_language(id);
+        frames(&h, l, top.clone());
+        let (d, n, slow) = frames(&h, l, end.clone());
+        println!(
+            "jump to end right after opening: exact in {d:.2?} ({n} frames, slowest call {slow:.2?})"
+        );
+
+        let mut l = l.to_vec();
+        let mut h = Highlighter::for_language(id);
+        frames(&h, &l, end.clone());
+        while !h.is_valid_through(l.len()) {
+            h.highlight_visible(&l, end.clone(), None);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        // Insert a string/comment opener near the top; in Rust (`/*`) the
+        // rest of the file changes and is re-parsed in the background.
+        let opener = if id == "rust" { "/*" } else { "\"\"\"" };
+        l.insert(10, opener.to_owned());
+        h.lines_changed(10, 0, 1);
+        let (d, _, slow) = frames(&h, &l, 0..60);
+        println!(
+            "opener {opener} inserted at top: visible exact in {d:.2?} (slowest call {slow:.2?})"
+        );
+        let (d, n, slow) = frames(&h, &l, l.len() - 60..l.len());
+        println!("  then jump to end: exact in {d:.2?} ({n} frames, slowest call {slow:.2?})");
+    }
+
+    /// `cargo test --release -p meld-widgets highlight_speed -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn highlight_speed() {
+        REAL_TUNING.store(true, Ordering::Relaxed);
+        run("python (synthetic)", "python3", &python_lines());
+        run("rust (text_pane.rs repeated)", "rust", &rust_lines());
     }
 }
