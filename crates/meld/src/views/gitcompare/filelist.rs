@@ -4,10 +4,11 @@
 
 use std::collections::HashSet;
 
-use iced::widget::{button, column, container, mouse_area, row, scrollable, text, tooltip};
+use iced::widget::{button, column, container, row, scrollable, text, tooltip};
 use iced::{Color, Element, Length, Theme};
 use meld_ailens::{FileEntry, FileRow, GitFileChange};
 
+use super::ellipsis::{Mode, ellipsized};
 use crate::ui;
 
 /// How many pixels each tree level is indented.
@@ -178,6 +179,31 @@ pub fn row_height(spacing: f32) -> f32 {
     ROW_TEXT_HEIGHT + 2.0 * spacing
 }
 
+/// The rows' spacing from `ailens-file-row-spacing`, within its range.
+pub fn row_spacing(setting: i32) -> f32 {
+    let (lo, hi) = meld_config::settings::AILENS_FILE_ROW_SPACING_RANGE;
+    setting.clamp(lo, hi) as f32
+}
+
+/// Where to scroll the list (offset `offset`, `height` high) so that row
+/// `index` shows; `None` if it does already. Above the first file only
+/// folders are listed: scrolling to the top keeps them in view.
+pub fn scroll_target(rows: &[ListRow], index: usize, row_height: f32, offset: f32, height: f32) -> Option<f32> {
+    // The list's padding below the last row
+    const PADDING: f32 = 4.0;
+    let top = index as f32 * row_height;
+    let first_file = rows[..index.min(rows.len())]
+        .iter()
+        .all(|r| matches!(r.kind, RowKind::Folder { .. }));
+    if top < offset {
+        Some(if first_file { 0.0 } else { top })
+    } else if top + row_height + PADDING > offset + height {
+        Some((top + row_height + PADDING - height).max(0.0))
+    } else {
+        None
+    }
+}
+
 /// What clicking rows does.
 pub struct Callbacks<M> {
     pub select: fn(FileEntry) -> M,
@@ -202,9 +228,8 @@ pub fn view<'a, M: Clone + 'a>(
                 let arrow = if *expanded { "⏷" } else { "⏵" };
                 let body = row![
                     text(arrow).size(11).width(12).style(ui::dim_text),
-                    text(list_row.name.as_str())
+                    ellipsized(list_row.name.as_str(), Mode::Middle)
                         .size(13)
-                        .wrapping(text::Wrapping::None)
                         .width(Length::Fill),
                 ]
                 .spacing(4)
@@ -223,12 +248,16 @@ pub fn view<'a, M: Clone + 'a>(
             RowKind::File(entry) => {
                 let code = status_code(&entry.change);
                 let selected = current == Some(entry);
+                // The name gives way, so that the counts and the status
+                // stay readable
                 let body = row![
-                    text(list_row.name.as_str())
+                    ellipsized(list_row.name.as_str(), Mode::Middle)
                         .size(13)
-                        .wrapping(text::Wrapping::None)
                         .width(Length::Fill),
-                    text(stats_text(entry)).size(11).style(ui::dim_text),
+                    text(stats_text(entry))
+                        .size(11)
+                        .style(ui::dim_text)
+                        .wrapping(text::Wrapping::None),
                     text(code.to_string())
                         .size(13)
                         .font(iced::Font {
@@ -285,23 +314,6 @@ fn row_style(selected: bool) -> impl Fn(&Theme, button::Status) -> button::Style
         }
         style
     }
-}
-
-/// A vertical divider to drag (`on_press` starts the drag) with a resize
-/// cursor; double-clicking it may reset the width.
-pub fn divider<'a, M: Clone + 'a>(on_press: M, on_double_click: Option<M>) -> Element<'a, M> {
-    let mut area = mouse_area(
-        container(ui::separator(true))
-            .width(5)
-            .height(Length::Fill)
-            .align_x(iced::alignment::Horizontal::Center),
-    )
-    .on_press(on_press)
-    .interaction(iced::mouse::Interaction::ResizingHorizontally);
-    if let Some(m) = on_double_click {
-        area = area.on_double_click(m);
-    }
-    area.into()
 }
 
 #[cfg(test)]
@@ -366,6 +378,19 @@ mod tests {
         let tree = sample();
         assert_eq!(ancestor_keys(&tree, &entry("src/a/b/two.rs")), ["src", "src/a/b"]);
         assert!(ancestor_keys(&tree, &entry("README.md")).is_empty());
+    }
+
+    #[test]
+    fn scrolling_reveals_rows_and_the_folders_above_the_first_file() {
+        let rows = visible_rows(&sample(), &HashSet::new());
+        // Rows are 20 px high; the list shows 100 px from y = 60
+        assert_eq!(scroll_target(&rows, 4, 20.0, 60.0, 100.0), None);
+        assert_eq!(scroll_target(&rows, 2, 20.0, 60.0, 100.0), Some(40.0));
+        assert_eq!(scroll_target(&rows, 7, 20.0, 60.0, 100.0), Some(64.0));
+        // guide.md follows only its folder: the top of the list
+        assert_eq!(scroll_target(&rows, 1, 20.0, 30.0, 100.0), Some(0.0));
+        assert_eq!(row_spacing(40), 16.0);
+        assert_eq!(row_spacing(-3), 0.0);
     }
 
     #[test]

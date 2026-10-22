@@ -15,6 +15,7 @@ use iced::{Element, Length, Theme};
 use meld_ailens::picker::{EntryKind, filter_entries};
 use meld_ailens::{PickerEntry, PickerSide, Revision, RevisionKind};
 
+use super::ellipsis::{Mode, ellipsized};
 use super::popover::popover;
 use crate::ui;
 
@@ -23,6 +24,9 @@ pub const MAX_ROWS: usize = 400;
 
 /// How long typing must pause before searching the whole history.
 pub const SEARCH_DELAY: Duration = Duration::from_millis(300);
+
+/// The widest a picker's label gets (`set_max_width_chars(28)`).
+const LABEL_WIDTH: f32 = 220.0;
 
 pub struct Picker {
     pub side: PickerSide,
@@ -214,14 +218,13 @@ impl Picker {
     ) -> Element<'a, M> {
         let face = row![
             text(self.title()).size(13).style(ui::dim_text),
-            text(self.label.as_str())
-                .size(14)
-                .wrapping(text::Wrapping::None),
+            // Long refs and commit subjects keep both ends
+            ellipsized(self.label.as_str(), Mode::Middle).size(14).max_width(LABEL_WIDTH),
             text("▾").size(12),
         ]
         .spacing(6)
         .align_y(iced::Center);
-        let anchor = button(container(face).max_width(260).clip(true))
+        let anchor = button(face)
             .padding([4, 10])
             .style(picker_button(open))
             .on_press(on_toggle);
@@ -274,7 +277,7 @@ impl Picker {
                 );
                 section = Some(entry.section.as_str());
             }
-            list = list.push(entry_row(entry, index == self.selected).on_press(map(Message::Pick(index))));
+            list = list.push(entry_row(entry, index == self.selected, map(Message::Pick(index))));
         }
         if self.rows.is_empty() {
             list = list.push(
@@ -324,23 +327,29 @@ pub fn icon(entry: &PickerEntry) -> &'static str {
     }
 }
 
-fn entry_row<'a, M: Clone + 'a>(entry: &'a PickerEntry, selected: bool) -> button::Button<'a, M> {
-    let mut texts = column![text(entry.label.as_str()).size(14).wrapping(text::Wrapping::None)];
+/// A row's tooltip: its label and description in full.
+pub fn entry_tooltip(entry: &PickerEntry) -> String {
+    if entry.description.is_empty() {
+        entry.label.clone()
+    } else {
+        format!("{}\n{}", entry.label, entry.description)
+    }
+}
+
+fn entry_row<'a, M: Clone + 'a>(entry: &'a PickerEntry, selected: bool, on_press: M) -> Element<'a, M> {
+    let mut texts = column![ellipsized(entry.label.as_str(), Mode::End).size(14).width(Length::Fill)];
     if !entry.description.is_empty() {
         texts = texts.push(
-            text(entry.description.as_str())
+            ellipsized(entry.description.as_str(), Mode::End)
                 .size(11)
                 .style(ui::dim_text)
-                .wrapping(text::Wrapping::None),
+                .width(Length::Fill),
         );
     }
-    button(
-        row![
-            text(icon(entry)).size(14).width(18).center(),
-            container(texts).clip(true).width(Length::Fill)
-        ]
-        .spacing(8)
-        .align_y(iced::Center),
+    let row = button(
+        row![text(icon(entry)).size(14).width(18).center(), texts.width(Length::Fill)]
+            .spacing(8)
+            .align_y(iced::Center),
     )
     .width(Length::Fill)
     .padding([3, 6])
@@ -351,6 +360,17 @@ fn entry_row<'a, M: Clone + 'a>(entry: &'a PickerEntry, selected: bool) -> butto
         }
         style
     })
+    .on_press(on_press);
+    iced::widget::tooltip(
+        row,
+        container(text(entry_tooltip(entry)).size(12))
+            .max_width(480)
+            .padding([4, 8])
+            .style(ui::tooltip_box),
+        iced::widget::tooltip::Position::FollowCursor,
+    )
+    .delay(Duration::from_millis(700))
+    .into()
 }
 
 fn picker_button(open: bool) -> impl Fn(&Theme, button::Status) -> button::Style {
@@ -494,6 +514,17 @@ mod tests {
         };
         assert_eq!(entry, p.rows()[2]);
         assert_eq!(p.update(Message::Pick(10_000)), Outcome::None);
+    }
+
+    #[test]
+    fn rows_tooltips_show_label_and_description() {
+        let p = picker();
+        let head = &p.rows()[0];
+        assert_eq!(head.label, "HEAD");
+        assert_eq!(entry_tooltip(head), format!("HEAD\n{}", head.description));
+        let mut bare = head.clone();
+        bare.description.clear();
+        assert_eq!(entry_tooltip(&bare), "HEAD");
     }
 
     #[test]

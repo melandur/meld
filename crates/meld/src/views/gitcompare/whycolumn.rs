@@ -21,6 +21,7 @@ use meld_ailens::picker::{parse_iso_date, relative_date};
 use meld_ailens::{Card, CardKind, ExplainAction, ExplanationSource, Side};
 
 use super::diffhost::PaneGeometry;
+use super::ellipsis::{Mode, ellipsized};
 use crate::ui;
 
 /// Number of commit colors (`.ailens-color-N` in style.css).
@@ -96,6 +97,34 @@ pub fn place_cards(wanted: &[f32], heights: &[f32], gap: f32) -> Vec<f32> {
         tops[index] = top;
     }
     tops
+}
+
+/// A Unix time in local time, e.g. `Tue 21 Oct 2026 17:08:48` (the
+/// date's tooltip, `strftime("%c")` in Python).
+pub fn local_date(timestamp: f64) -> Option<String> {
+    const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    if !timestamp.is_finite() {
+        return None;
+    }
+    let t = timestamp.floor() as libc::time_t;
+    // SAFETY: localtime_r only writes into the provided struct.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
+        return None;
+    }
+    Some(format!(
+        "{} {:02} {} {} {:02}:{:02}:{:02}",
+        DAYS.get(tm.tm_wday as usize)?,
+        tm.tm_mday,
+        MONTHS.get(tm.tm_mon as usize)?,
+        tm.tm_year + 1900,
+        tm.tm_hour,
+        tm.tm_min,
+        tm.tm_sec
+    ))
 }
 
 /// `text` cut at a word boundary near `limit` characters, with an ellipsis.
@@ -242,23 +271,20 @@ pub fn card_view<'a, M: Clone + 'a>(
                 .style(ui::tooltip_box),
             tooltip::Position::Bottom,
         ));
-        if !card.agent_model.is_empty() {
-            header = header.push(
-                container(text(card.agent_model.as_str()).size(12).style(dim).wrapping(text::Wrapping::None))
-                    .clip(true),
-            );
-        }
-    } else if !card.author.is_empty() {
-        header = header.push(
-            container(text(card.author.as_str()).size(12).style(dim).wrapping(text::Wrapping::None))
-                .clip(true),
-        );
+    }
+    // The model or author gives way to the date
+    let who = if card.agent() { &card.agent_model } else { &card.author };
+    let filled = !who.is_empty();
+    if filled {
+        header = header.push(ellipsized(who.as_str(), Mode::End).size(12).style(dim).width(Length::Fill));
     }
     if let Some(date) = parse_iso_date(&card.date).filter(|_| !card.date.is_empty()) {
-        header = header.push(space::horizontal());
+        if !filled {
+            header = header.push(space::horizontal());
+        }
         header = header.push(tooltip(
             text(relative_date(date, now)).size(12).style(dim).wrapping(text::Wrapping::None),
-            container(text(card.date.as_str()).size(12))
+            container(text(local_date(date).unwrap_or_else(|| card.date.clone())).size(12))
                 .padding([4, 8])
                 .style(ui::tooltip_box),
             tooltip::Position::Bottom,
@@ -663,6 +689,15 @@ mod tests {
         assert_eq!(card_color(&c, text), text.scale_alpha(0.3));
         c.kind = CardKind::Staged;
         assert_eq!(card_color(&c, text), hex(0x2ec27e));
+    }
+
+    #[test]
+    fn dates_are_shown_in_local_time() {
+        // Mid-month and mid-year, so that no time zone changes the month
+        let date = local_date(1_784_548_800.0).unwrap();
+        assert!(date.contains(" Jul 2026 "), "{date}");
+        assert_eq!(date.len(), "Wed 15 Jul 2026 12:00:00".len());
+        assert_eq!(local_date(f64::NAN), None);
     }
 
     #[test]

@@ -6,8 +6,20 @@
 //! ([`whycolumn`]). The header has the searchable Base and Target pickers
 //! ([`picker`]). All git and Claude Code work runs on background threads
 //! ([`jobs`]) and comes back as messages; nothing here blocks the UI.
+//!
+//! Labels that may not fit (file names, revisions, the repository) are
+//! shortened with “…” like GTK's ellipsizing labels ([`ellipsis`]); the
+//! file list and the Why column are resized with [`divider`]s.
+//!
+//! The comparison follows the repository when it involves uncommitted
+//! changes or refs by name: the repository's refs and index (and the open
+//! working-tree file) are checked every [`POLL_INTERVAL`], files that other
+//! tabs save are reported through [`GitCompare::file_changed`], and a
+//! change during a comparison compares again once it finished.
 
 mod diffhost;
+mod divider;
+mod ellipsis;
 mod filelist;
 mod jobs;
 mod picker;
@@ -19,7 +31,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use iced::widget::{button, column, container, row, scrollable, space, text, tooltip};
+use iced::widget::{button, column, container, row, scrollable, space, text, text_editor, tooltip};
 use iced::{Background, Element, Length, Subscription, Task, Theme};
 use meld_ailens::picker::{apply_pick, revisions_from_args};
 use meld_ailens::{
@@ -29,6 +41,8 @@ use meld_ailens::{
 use meld_config::Settings;
 
 use self::diffhost::{DiffHost, EmbeddedFile};
+use self::divider::divider;
+use self::ellipsis::{Mode, ellipsized};
 use self::filelist::ListRow;
 use self::jobs::{Jobs, Opaque, Ticket};
 use self::picker::Picker;
@@ -96,8 +110,30 @@ pub enum DragTarget {
 struct Drag {
     target: DragTarget,
     start_width: f32,
-    origin_x: Option<f32>,
+    /// Where the pointer pressed the divider.
+    origin_x: f32,
     moved: bool,
+}
+
+/// The width of the panel `target` while its divider, pressed at
+/// `origin_x` when the panel was `start_width` wide, is dragged to `x`. The
+/// file list is left of its divider; the Why column right of its own.
+fn dragged_width(target: DragTarget, start_width: f32, origin_x: f32, x: f32) -> f32 {
+    let dx = x - origin_x;
+    match target {
+        DragTarget::FileList => {
+            let (lo, hi) = meld_config::settings::AILENS_FILE_LIST_WIDTH_RANGE;
+            (start_width + dx).round().clamp(lo as f32, hi as f32)
+        }
+        DragTarget::WhyColumn => (start_width - dx).clamp(whycolumn::MIN_WIDTH, whycolumn::MAX_WIDTH),
+    }
+}
+
+/// A commit's full message, shown when its card's SHA is clicked.
+struct CommitPopup {
+    sha: String,
+    /// Read-only, but selectable and copyable.
+    message: text_editor::Content,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,7 +173,7 @@ pub struct GitCompare {
     temp: Option<tempfile::TempDir>,
     temp_count: u64,
     cards: CardStates,
-    commit: Option<(String, String)>,
+    commit: Option<CommitPopup>,
     why_width: f32,
     drag: Option<Drag>,
     files_scroll_id: iced::widget::Id,
@@ -145,6 +181,11 @@ pub struct GitCompare {
     /// `ailens-file-row-spacing`, for scrolling rows into view
     row_spacing_cache: f32,
     scroll_pending: bool,
+    /// The repository changed while a comparison was running: compare
+    /// again once it finished.
+    reload_queued: bool,
+    /// Another tab saved a file of the repository.
+    changed_elsewhere: bool,
     watch: Vec<PathBuf>,
     watch_signature: Option<Vec<Option<(SystemTime, u64)>>>,
     disk_signature: Option<(PathBuf, Option<(SystemTime, u64)>)>,
@@ -190,12 +231,13 @@ pub enum Message {
     FilesScrolled(scrollable::Viewport),
     ExplainCard(String),
     ShowCommit(String),
+    CommitAction(text_editor::Action),
     CloseCommit,
     CompareWithParent(String),
     OpenBuild(String),
     HoverCard(Option<String>),
     ExpandCard(String),
-    StartDrag(DragTarget),
+    StartDrag(DragTarget, f32),
     DragMove(f32),
     DragEnd,
     ResetWhyWidth,
@@ -273,8 +315,10 @@ impl GitCompare {
             drag: None,
             files_scroll_id: iced::widget::Id::unique(),
             files_viewport: (0.0, 0.0),
-            row_spacing_cache: shared.settings.ailens_file_row_spacing as f32,
+            row_spacing_cache: filelist::row_spacing(shared.settings.ailens_file_row_spacing),
             scroll_pending: false,
+            reload_queued: false,
+            changed_elsewhere: false,
             watch: Vec::new(),
             watch_signature: None,
             disk_signature: None,
@@ -286,7 +330,7 @@ impl GitCompare {
             }
             Err(err) => tab.show_banner(BannerKind::Error, err, None),
         }
-        tab.update_picker_labels();
+        tab.update_picker_labels(false);
         let task = if location.as_os_str().is_empty() {
             tab.show_no_repository(None);
             Task::none()
@@ -373,9 +417,12 @@ impl GitCompare {
             return Task::none();
         };
         self.config = config_from_settings(&shared.settings);
+        self.reload_queued = false;
         let keep = self.current.as_ref().map(|e| e.change.path.clone());
         let (base, target, config) = (self.base.clone(), self.target.clone(), self.config.clone());
-        self.update_picker_labels();
+        // Until the comparison resolves them, the pickers show what was
+        // picked, not the previous comparison's revisions
+        self.update_picker_labels(false);
         self.busy = Some("Comparing…".into());
         self.run(
             "compare",
@@ -389,8 +436,10 @@ impl GitCompare {
         )
     }
 
-    fn update_picker_labels(&mut self) {
-        match &self.session {
+    /// The pickers' labels and the relation text: from the comparison if
+    /// `resolved`, else from the picked revisions.
+    fn update_picker_labels(&mut self, resolved: bool) {
+        match self.session.as_ref().filter(|_| resolved) {
             None => {
                 self.base_picker.set_label(picker::describe_revision(&self.base), None);
                 self.target_picker.set_label(picker::describe_revision(&self.target), None);
@@ -484,24 +533,15 @@ impl GitCompare {
         if height <= 0.0 {
             return Task::none();
         }
-        let row_height = filelist::row_height(self.row_spacing_value());
-        let top = index as f32 * row_height;
-        let y = if top < offset {
-            top
-        } else if top + row_height + 4.0 > offset + height {
-            top + row_height + 4.0 - height
-        } else {
-            return Task::none();
-        };
-        iced::widget::operation::scroll_to(
-            self.files_scroll_id.clone(),
-            scrollable::AbsoluteOffset { x: None, y: Some(y.max(0.0)) },
-        )
-    }
-
-    fn row_spacing_value(&self) -> f32 {
-        // Cached from the last view; settings live in Shared
-        self.row_spacing_cache
+        // The spacing is cached from the settings, which live in Shared
+        let row_height = filelist::row_height(self.row_spacing_cache);
+        match filelist::scroll_target(&self.rows, index, row_height, offset, height) {
+            Some(y) => iced::widget::operation::scroll_to(
+                self.files_scroll_id.clone(),
+                scrollable::AbsoluteOffset { x: None, y: Some(y) },
+            ),
+            None => Task::none(),
+        }
     }
 
     fn load_file(&mut self, entry: FileEntry) -> Task<Message> {
@@ -671,12 +711,16 @@ impl GitCompare {
             }
             Outcome::Compared(keep, Ok((session, entries))) => {
                 self.session = Some(session.0);
-                self.update_picker_labels();
+                self.update_picker_labels(true);
                 self.busy = None;
                 if self.banner.as_ref().is_some_and(|b| b.kind == BannerKind::Error) {
                     self.banner = None;
                 }
-                self.set_entries(entries, keep, shared)
+                let task = self.set_entries(entries, keep, shared);
+                if self.reload_queued {
+                    return Task::batch([task, self.reload(shared)]);
+                }
+                task
             }
             Outcome::Compared(_, Err(err)) => {
                 if err.is_cancelled() {
@@ -784,7 +828,10 @@ impl GitCompare {
                         // The dialog covers the card, which then never
                         // sees the pointer leave
                         self.hover_card(None);
-                        self.commit = Some((sha, message));
+                        self.commit = Some(CommitPopup {
+                            sha,
+                            message: text_editor::Content::with_text(message.trim_end()),
+                        });
                     }
                     Err(err) if !err.is_cancelled() => self.show_error(&err),
                     Err(_) => {}
@@ -993,6 +1040,7 @@ impl GitCompare {
             .is_some_and(|s| s.follows_repository_changes());
         let signature = self.signature();
         let mut changed = self.watch_signature.as_ref() != Some(&signature);
+        changed |= std::mem::take(&mut self.changed_elsewhere);
         self.watch_signature = Some(signature);
         if let Some((path, previous)) = &self.disk_signature {
             let now = file_signature(path);
@@ -1001,8 +1049,24 @@ impl GitCompare {
                 self.disk_signature = Some((path.clone(), now));
             }
         }
-        if changed && follows && !self.jobs.is_running("compare") {
-            return self.reload(shared);
+        if changed && follows {
+            if self.jobs.is_running("compare") {
+                // What the running comparison read may be out of date
+                self.reload_queued = true;
+            } else {
+                return self.reload(shared);
+            }
+        }
+        Task::none()
+    }
+
+    /// Another tab saved `path` (`on_file_changed()`): if it is in the
+    /// repository, the next check compares again (when the comparison
+    /// follows the repository's changes).
+    #[allow(dead_code)] // for `Tab::file_changed`
+    pub fn file_changed(&mut self, path: &Path) -> Task<Message> {
+        if self.info.as_ref().is_some_and(|info| path.starts_with(&info.root)) {
+            self.changed_elsewhere = true;
         }
         Task::none()
     }
@@ -1010,7 +1074,7 @@ impl GitCompare {
     // -- the tab interface --
 
     pub fn update(&mut self, message: Message, shared: &mut Shared, events: &mut Vec<Event>) -> Task<Message> {
-        self.row_spacing_cache = shared.settings.ailens_file_row_spacing as f32;
+        self.row_spacing_cache = filelist::row_spacing(shared.settings.ailens_file_row_spacing);
         match message {
             Message::Job(ticket, outcome) => {
                 if !self.jobs.finish(&ticket) {
@@ -1057,7 +1121,7 @@ impl GitCompare {
                 self.rows.clear();
                 self.current = None;
                 self.view = None;
-                self.update_picker_labels();
+                self.update_picker_labels(false);
                 self.set_location(path)
             }
             Message::RepositoryChosen(None) => Task::none(),
@@ -1196,6 +1260,14 @@ impl GitCompare {
                     move |result| Outcome::CommitMessage(for_result.clone(), result),
                 )
             }
+            Message::CommitAction(action) => {
+                if let Some(commit) = &mut self.commit
+                    && !action.is_edit()
+                {
+                    commit.message.perform(action);
+                }
+                Task::none()
+            }
             Message::CloseCommit => {
                 self.commit = None;
                 Task::none()
@@ -1225,15 +1297,11 @@ impl GitCompare {
                 }
                 Task::none()
             }
-            Message::StartDrag(target) => {
+            Message::StartDrag(target, origin_x) => {
                 let start_width = match target {
                     DragTarget::FileList => shared.settings.ailens_file_list_width as f32,
                     DragTarget::WhyColumn => self.why_width,
                 };
-                // The file list starts at the window's left edge, so its
-                // divider is where the pointer pressed; the Why column's
-                // divider position is taken from the first pointer move
-                let origin_x = (target == DragTarget::FileList).then_some(start_width + 2.0);
                 self.drag = Some(Drag {
                     target,
                     start_width,
@@ -1245,18 +1313,10 @@ impl GitCompare {
             Message::DragMove(x) => {
                 if let Some(drag) = &mut self.drag {
                     drag.moved = true;
-                    let origin = *drag.origin_x.get_or_insert(x);
-                    let dx = x - origin;
+                    let width = dragged_width(drag.target, drag.start_width, drag.origin_x, x);
                     match drag.target {
-                        DragTarget::FileList => {
-                            let (lo, hi) = meld_config::settings::AILENS_FILE_LIST_WIDTH_RANGE;
-                            let width = (drag.start_width + dx).round() as i32;
-                            shared.settings.ailens_file_list_width = width.clamp(lo, hi);
-                        }
-                        DragTarget::WhyColumn => {
-                            self.why_width =
-                                (drag.start_width - dx).clamp(whycolumn::MIN_WIDTH, whycolumn::MAX_WIDTH);
-                        }
+                        DragTarget::FileList => shared.settings.ailens_file_list_width = width as i32,
+                        DragTarget::WhyColumn => self.why_width = width,
                     }
                 }
                 Task::none()
@@ -1310,7 +1370,7 @@ impl GitCompare {
 
     pub fn settings_changed(&mut self, shared: &Shared) -> Task<Message> {
         self.config = config_from_settings(&shared.settings);
-        self.row_spacing_cache = shared.settings.ailens_file_row_spacing as f32;
+        self.row_spacing_cache = filelist::row_spacing(shared.settings.ailens_file_row_spacing);
         self.diff.settings_changed(shared).map(Message::Diff)
     }
 
@@ -1393,25 +1453,22 @@ impl GitCompare {
         let files_width = shared.settings.ailens_file_list_width as f32;
         let body = row![
             container(self.file_panel(shared)).width(files_width).height(Length::Fill),
-            filelist::divider(Message::StartDrag(DragTarget::FileList), None),
+            divider(|x| Message::StartDrag(DragTarget::FileList, x), None),
             self.content_view(shared),
         ]
         .height(Length::Fill);
         let page: Element<'a, Message> = page.push(body).into();
 
         match &self.commit {
-            Some((sha, message)) => ui::modal::modal(page, commit_dialog(sha, message), Message::CloseCommit),
+            Some(commit) => ui::modal::modal(page, commit_dialog(commit), Message::CloseCommit),
             None => page,
         }
     }
 
     fn header(&self) -> Element<'_, Message> {
         let repo = tooltip(
-            button(
-                container(text(self.repo_label.as_str()).size(14).wrapping(text::Wrapping::None))
-                    .max_width(200)
-                    .clip(true),
-            )
+            // The end of a path tells most (`set_ellipsize(START)`)
+            button(ellipsized(self.repo_label.as_str(), Mode::Start).size(14).max_width(200.0))
             .padding([4, 8])
             .style(ui::flat_button)
             .on_press(Message::ChooseRepository),
@@ -1435,14 +1492,29 @@ impl GitCompare {
         let has_session = self.session.is_some();
         let idle = self.busy.is_none();
         let status: Element<'_, Message> = match &self.busy {
-            Some(busy) => row![text("⏳").size(13), text(busy.as_str()).size(13).style(ui::dim_text).wrapping(text::Wrapping::None)]
-                .spacing(6)
-                .into(),
-            None => text(self.relation.as_str())
-                .size(13)
-                .style(ui::dim_text)
-                .wrapping(text::Wrapping::None)
-                .into(),
+            Some(busy) => row![
+                text("⏳").size(13),
+                ellipsized(busy.as_str(), Mode::End)
+                    .size(13)
+                    .style(ui::dim_text)
+                    .width(Length::Fill)
+            ]
+            .spacing(6)
+            .align_y(iced::Center)
+            .into(),
+            None if self.relation.is_empty() => space::horizontal().into(),
+            None => tooltip(
+                ellipsized(self.relation.as_str(), Mode::End)
+                    .size(13)
+                    .style(ui::dim_text)
+                    .width(Length::Fill),
+                container(text(self.relation.as_str()).size(12))
+                    .padding([4, 8])
+                    .style(ui::tooltip_box),
+                tooltip::Position::Bottom,
+            )
+            .delay(Duration::from_millis(600))
+            .into(),
         };
         let mut bar = row![
             repo,
@@ -1528,14 +1600,13 @@ impl GitCompare {
 
     fn file_panel<'a>(&'a self, shared: &'a Shared) -> Element<'a, Message> {
         let title = container(
-            text(self.files_title.as_str())
+            ellipsized(self.files_title.as_str(), Mode::End)
                 .size(13)
                 .font(ui::bold())
-                .wrapping(text::Wrapping::None),
+                .width(Length::Fill),
         )
-        .clip(true)
         .padding([4, 8]);
-        let spacing = shared.settings.ailens_file_row_spacing.max(0) as f32;
+        let spacing = filelist::row_spacing(shared.settings.ailens_file_row_spacing);
         let list = filelist::view(
             &self.rows,
             self.current.as_ref(),
@@ -1580,7 +1651,7 @@ impl GitCompare {
             }
             Content::Diff => row![
                 container(self.diff.view(shared).map(Message::Diff)).width(Length::Fill).height(Length::Fill),
-                filelist::divider(Message::StartDrag(DragTarget::WhyColumn), Some(Message::ResetWhyWidth)),
+                divider(|x| Message::StartDrag(DragTarget::WhyColumn, x), Some(Message::ResetWhyWidth)),
                 self.why_panel(),
             ]
             .height(Length::Fill)
@@ -1631,21 +1702,29 @@ impl GitCompare {
     }
 }
 
-fn commit_dialog<'a>(sha: &'a str, message: &'a str) -> Element<'a, Message> {
-    let short = meld_ailens::picker::short_sha(sha);
-    ui::modal::dialog(
+fn commit_dialog(commit: &CommitPopup) -> Element<'_, Message> {
+    let short = meld_ailens::picker::short_sha(&commit.sha);
+    // An editor that ignores edits: the message can be selected and copied
+    let message = text_editor(&commit.message)
+        .on_action(Message::CommitAction)
+        .font(iced::Font::MONOSPACE)
+        .size(13)
+        .padding(8)
+        .max_height(420)
+        .wrapping(text::Wrapping::WordOrGlyph);
+    let dialog = ui::modal::dialog(
         format!("Commit {short}"),
-        container(scrollable(text(message).size(13).font(iced::Font::MONOSPACE)).width(Length::Fill))
-            .width(600)
-            .max_height(420),
+        container(message).width(600),
         vec![
             button(text("Compare with Parent"))
                 .style(button::secondary)
-                .on_press(Message::CompareWithParent(sha.to_string()))
+                .on_press(Message::CompareWithParent(commit.sha.clone()))
                 .into(),
             button(text("Close")).on_press(Message::CloseCommit).into(),
         ],
-    )
+    );
+    // As wide as the message and the dialog's padding, not the window
+    container(dialog).max_width(640).into()
 }
 
 fn map_item<M, N>(item: menu::Item<M>, f: impl Fn(M) -> N) -> menu::Item<N> {
@@ -1728,6 +1807,19 @@ mod tests {
         let (first, rest) = condense("git notes failed\n\n*** Please tell me who you are.\n\nRun\n  git config");
         assert_eq!(first, "git notes failed");
         assert_eq!(rest.as_deref(), Some("*** Please tell me who you are. Run git config"));
+    }
+
+    #[test]
+    fn dividers_follow_the_pointer_from_where_it_pressed() {
+        // No move yet: no jump
+        assert_eq!(dragged_width(DragTarget::WhyColumn, 300.0, 1203.0, 1203.0), 300.0);
+        assert_eq!(dragged_width(DragTarget::FileList, 300.0, 301.5, 301.5), 300.0);
+        // The Why column is right of its divider: dragging left widens it
+        assert_eq!(dragged_width(DragTarget::WhyColumn, 300.0, 1203.0, 1190.0), 313.0);
+        assert_eq!(dragged_width(DragTarget::FileList, 300.0, 301.0, 341.0), 340.0);
+        // Within their ranges
+        assert_eq!(dragged_width(DragTarget::WhyColumn, 300.0, 1000.0, 1500.0), whycolumn::MIN_WIDTH);
+        assert_eq!(dragged_width(DragTarget::FileList, 300.0, 300.0, 0.0), 120.0);
     }
 
     #[test]

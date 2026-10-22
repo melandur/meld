@@ -277,11 +277,27 @@ impl<'a, M: Clone + 'a> overlay::Overlay<M, Theme, Renderer> for Popup<'a, '_, M
         }
     }
 
-    fn mouse_interaction(&self, layout: Layout<'_>, cursor: mouse::Cursor, renderer: &Renderer) -> mouse::Interaction {
+    /// Overlays of the popup's own widgets: tooltips of the picker's rows.
+    fn overlay<'c>(&'c mut self, layout: Layout<'c>, renderer: &Renderer) -> Option<overlay::Element<'c, M, Theme, Renderer>> {
         let bounds = layout.bounds();
         self.popup
+            .as_widget_mut()
+            .overlay(self.tree, layout, renderer, &bounds, Vector::ZERO)
+    }
+
+    fn mouse_interaction(&self, layout: Layout<'_>, cursor: mouse::Cursor, renderer: &Renderer) -> mouse::Interaction {
+        let bounds = layout.bounds();
+        let interaction = self
+            .popup
             .as_widget()
-            .mouse_interaction(self.tree, layout, cursor, &bounds, renderer)
+            .mouse_interaction(self.tree, layout, cursor, &bounds, renderer);
+        // Anything but `None` hides the pointer from the widgets below, so
+        // that they don't light up or show their tooltips through the popup
+        if interaction == mouse::Interaction::None && cursor.is_over(bounds) {
+            mouse::Interaction::Idle
+        } else {
+            interaction
+        }
     }
 }
 
