@@ -76,17 +76,23 @@ pub mod session;
 pub mod syncpoints;
 pub mod undo;
 
-pub use actions::{copy_chunk, delete_chunk, replace_chunk, ChunkAction};
-pub use buffer::{splitlines, AppliedEdit, FilteredLines, LineChange, Position, TextBuffer, TextEdit};
-pub use chunk::{opcodes_from_blocks, Chunk, MatchingBlock, Tag};
-pub use differ::{consume_blank_lines, merged_chunk_order, ChunkLocation, Differ, DiffsChanged, MergedChunk};
-pub use difflib::{unified_diff, unified_diff_lines, SequenceMatcher, UnifiedDiffOptions};
+pub use actions::{ChunkAction, copy_chunk, delete_chunk, replace_chunk};
+pub use buffer::{
+    AppliedEdit, FilteredLines, LineChange, Position, TextBuffer, TextEdit, splitlines,
+};
+pub use chunk::{Chunk, MatchingBlock, Tag, opcodes_from_blocks};
+pub use differ::{
+    ChunkLocation, Differ, DiffsChanged, MergedChunk, consume_blank_lines, merged_chunk_order,
+};
+pub use difflib::{SequenceMatcher, UnifiedDiffOptions, unified_diff, unified_diff_lines};
 pub use error::DiffError;
-pub use filters::{apply_text_filters, filter_line, filter_lines, merge_intervals, FilteredText};
-pub use inline::{exceeds_inline_limit, highlight_ranges, inline_highlights, InlineCache, INLINE_LIMIT};
-pub use merge::{auto_merge, merge_2_files, merge_3_files, Merged, CONFLICT_MARKER};
-pub use myers::{inline_opcodes, MatcherKind, MyersSequenceMatcher};
-pub use patch::{make_patch, patch_lines, patch_names, PatchSide};
+pub use filters::{FilteredText, apply_text_filters, filter_line, filter_lines, merge_intervals};
+pub use inline::{
+    INLINE_LIMIT, InlineCache, exceeds_inline_limit, highlight_ranges, inline_highlights,
+};
+pub use merge::{CONFLICT_MARKER, Merged, auto_merge, merge_2_files, merge_3_files};
+pub use myers::{MatcherKind, MyersSequenceMatcher, inline_opcodes};
+pub use patch::{PatchSide, make_patch, patch_lines, patch_names};
 pub use session::{EditOutcome, FileComparison, InlineHighlight, InlineHighlights};
 pub use syncpoints::{PaneState, SyncpointAction, Syncpoints};
 pub use undo::{UndoAction, UndoEvent, UndoSequence};
