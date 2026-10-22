@@ -10,7 +10,7 @@ name = "meld"
 path = "src/main.rs"
 
 [dependencies]
-# meld-diff.workspace = true
+meld-diff.workspace = true
 meld-files.workspace = true
 meld-config.workspace = true
 meld-vc.workspace = true
