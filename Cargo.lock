@@ -2331,6 +2331,7 @@ name = "meld"
 version = "4.0.0-alpha.1"
 dependencies = [
  "clap",
+ "encoding_rs",
  "env_logger",
  "iced",
  "image",
@@ -2343,6 +2344,7 @@ dependencies = [
  "meld-vc",
  "meld-widgets",
  "open",
+ "regex",
  "rfd",
  "tempfile",
  "tokio",

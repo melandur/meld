@@ -533,10 +533,17 @@ impl Buffer {
             cursor_before,
             cursor_after,
         };
+        // The cursor only "moves" (and is revealed by the pane) when it
+        // was inside the replaced lines; otherwise it keeps its place in
+        // the unaffected text, as a GtkTextBuffer mark would.
+        let in_range = |p: Position| p.line >= start && p.line < end;
+        let moved = in_range(self.cursor) || self.anchor.is_some_and(in_range);
         self.splice(start..end, lines);
         self.cursor = self.clamp(cursor_after);
         self.anchor = anchor_after.map(|a| self.clamp(a));
-        self.bump_cursor();
+        if moved {
+            self.bump_cursor();
+        }
         Edit {
             cursor_after: self.cursor,
             ..edit
