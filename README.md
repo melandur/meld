@@ -5,10 +5,17 @@ About Meld
 Meld is a visual diff and merge tool targeted at developers. Meld helps you
 compare files, directories, and version controlled projects. It provides
 two- and three-way comparison of both files and directories, and supports
-many version control systems including Git, Mercurial, Bazaar, CVS and Subversion.
+many version control systems including Git, Mercurial, Bazaar, CVS, Darcs
+and Subversion.
 
 Meld helps you review code changes, understand patches, and makes enormous
-merge conflicts slightly less painful.
+merge conflicts slightly less painful. Git Compare compares any two
+revisions of a Git repository, with a Why column saying which commit made
+each change, why, and why it is the right change (AI Lens).
+
+This is a rewrite of Meld in Rust with an [iced](https://iced.rs) user
+interface. The original Python and GTK version lives on upstream; its last
+state in this repository is commit 29d59e07.
 
 Meld is licensed under the GPL v2 or later.
 
@@ -16,100 +23,73 @@ Meld is licensed under the GPL v2 or later.
 Requirements
 ------------
 
-* Python 3.10
-* pycairo (Python3 bindings for cairo without GObject layer)
-* PyGObject 3.38 (Python3 bindings for GObject introspection)
-* gsettings-desktop-schemas
-
-And following packages with GObject introspection:
-
-* GLib 2.66
-* Pango
-* PangoCairo
-* GTK+ 3.24
-* GtkSourceView 4.0
+* Rust 1.88 or later (the workspace is developed with 1.98.1)
+* A C compiler (for the bundled Oniguruma regular expression library)
+* A GPU driver with Vulkan, Metal, DirectX 12 or OpenGL support
+* At run time, optionally: `git` and other version control tools, `gh` and
+  `glab` for pull requests, and Claude Code (`claude`) for AI Lens
+  explanations
 
 
-Build requirements
-------------------
-
-* Python 3.10
-* Meson 1.11
-* Ninja
-* gettext
-* GLib 2.66 and its development utilities such as `glib-compile-schemas`
-
-For Windows build requirements, see `mingw-dist` section of `.gitlab-ci.yml`
-
-
-Running
--------
-
-You *do not* need to build Meld in order to run it. Meld can be run directly
-from this source directory by running:
+Building and running
+--------------------
 
 ```sh
-$ bin/meld
+$ cargo run --release -p meld -- [arguments]
 ```
 
-Unix users should get Meld from their distribution package manager, or from
-[Flathub](https://flathub.org/).
-
-Windows users should download the provided MSIs on the
-[Meld home page](https://meld.app/).
-
-OSX users can install Meld using Homebrew (or Macports, Fink, etc.), or there
-are unofficial native builds available from the
-[Meld for OSX](https://yousseb.github.io/meld/) project.
-
-
-Building
---------
-
-Meld uses [meson](https://mesonbuild.com/) build system. Use the following
-commands to build Meld from the source directory:
+for example:
 
 ```sh
-$ meson setup _build
-$ cd _build
-$ ninja
+$ cargo run --release -p meld -- file1 file2           # compare files
+$ cargo run --release -p meld -- dir1 dir2 dir3        # compare folders
+$ cargo run --release -p meld -- .                     # version control view
+$ cargo run --release -p meld -- --git --base main     # Git Compare
+$ cargo run --release -p meld -- --auto-merge local base remote -o merged
 ```
 
-You can then install Meld system-wide by running:
+`meld --help` lists all options. They match the Python version's, so Meld
+still works as a `git mergetool` or `git difftool`.
 
-```sh
-$ ninja install
-```
+To install a desktop entry and icon for your user, build a release binary
+and run `crates/meld/data/install-desktop.sh`.
 
-For building a Windows version, the `.gitlab-ci.yml` script is the most
-reliable reference.
+Settings are stored in `$XDG_CONFIG_HOME/meld/settings.toml` and recent
+comparisons in `$XDG_DATA_HOME/meld/recent.toml`.
 
 
 Developing
 ----------
 
-It's easy to get started developing Meld. From a git checkout, just run
-`bin/meld`.
+The workspace is split into crates:
 
-You'll need to have installed everything listed in the Requirements section
-above, and also GLib development tools (for `glib-compile-resources`).
+| Crate          | Contents                                                         |
+|----------------|------------------------------------------------------------------|
+| `meld-diff`    | diff and merge engine: matchers, chunks, merging, patches, undo  |
+| `meld-files`   | text loading and encodings, languages, filters, folder comparison|
+| `meld-config`  | settings, recent comparisons, style schemes, diff palettes       |
+| `meld-vc`      | Git, Mercurial, Subversion, Bazaar, CVS and Darcs backends       |
+| `meld-ailens`  | Git Compare core: attribution, explanations, Claude Code client  |
+| `meld-widgets` | iced widgets: text panes, link and chunk maps, highlighting      |
+| `meld`         | the application                                                  |
 
-We also support development using Flatpak via GNOME Builder. At the Builder
-"Clone..." dialog, enter https://gitlab.gnome.org/GNOME/meld.git, and the
-default build + run development flow using Flatpak should work.
+```sh
+$ cargo test --workspace
+```
+
+`crates/PORTING.md` describes the conventions. The version control
+integration tests skip tools that aren't installed.
 
 
 Contributing
 ------------
 
-Meld uses GNOME's GitLab to track bugs, and user questions and development
-discussions happen on the Meld mailing list. The development team is small,
-and new contributors are always welcome!
+Upstream Meld uses GNOME's GitLab to track bugs, and user questions and
+development discussions happen on the GNOME Discourse.
 
 List of issues: https://gitlab.gnome.org/GNOME/meld/issues
 
 Support forum:  https://discourse.gnome.org/tag/meld
-
 
 
 Links
@@ -118,5 +98,3 @@ Links
 Home page:      https://meld.app/
 
 Documentation:  https://meld.app/help/
-
-Wiki:           https://gitlab.gnome.org/GNOME/meld/-/wikis/home

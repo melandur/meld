@@ -1,8 +1,9 @@
 # Meld in Rust: porting guide
 
-Meld is being rewritten in Rust with an [iced](https://iced.rs) 0.14 front end.
-The Python sources under `meld/` stay in the tree as the reference until the
-Rust version reaches parity; behaviour, defaults and file formats follow them.
+Meld is rewritten in Rust with an [iced](https://iced.rs) 0.14 front end.
+Behaviour, defaults and file formats follow the Python version, which was
+removed from the tree after commit 29d59e07; check that commit out (e.g.
+`git show 29d59e07:meld/filediff.py`) to read the original code.
 
 ## Running
 

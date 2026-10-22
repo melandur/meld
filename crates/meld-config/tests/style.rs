@@ -8,15 +8,15 @@ use meld_config::{
     SchemeManager, StyleAttr, StyleScheme, Theme, Underline, Variant, get_diff_palette,
 };
 
-const BASE_XML: &str = include_str!("../../../data/styles/meld-base.style-scheme.xml");
+const BASE_XML: &str = include_str!("../../../data/styles/meld-base.style-scheme.xml.in");
 
 fn scheme_xml(id: &str) -> &'static str {
     match id {
         "meld-base" => BASE_XML,
-        "meld-dark" => include_str!("../../../data/styles/meld-dark.style-scheme.xml"),
-        "meld-lens-light" => include_str!("../../../data/styles/meld-lens-light.style-scheme.xml"),
-        "meld-lens-dark" => include_str!("../../../data/styles/meld-lens-dark.style-scheme.xml"),
-        "meld-monokai" => include_str!("../../../data/styles/meld-monokai.style-scheme.xml"),
+        "meld-dark" => include_str!("../../../data/styles/meld-dark.style-scheme.xml.in"),
+        "meld-lens-light" => include_str!("../../../data/styles/meld-lens-light.style-scheme.xml.in"),
+        "meld-lens-dark" => include_str!("../../../data/styles/meld-lens-dark.style-scheme.xml.in"),
+        "meld-monokai" => include_str!("../../../data/styles/meld-monokai.style-scheme.xml.in"),
         _ => unreachable!(),
     }
 }

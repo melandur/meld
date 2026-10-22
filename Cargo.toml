@@ -14,7 +14,7 @@ members = [
 version = "4.0.0-alpha.1"
 edition = "2024"
 license = "GPL-2.0-or-later"
-rust-version = "1.85"
+rust-version = "1.88"
 authors = ["The Meld developers"]
 
 [workspace.dependencies]

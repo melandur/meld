@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Generate differential-test fixtures for meld-diff from the Python Meld code.
 
-Run from the repository root:
+It imports the Python Meld modules, which are no longer in the tree: run it
+from a checkout of commit 29d59e07 (the last one with them), from the
+repository root:
 
     PYTHONPATH=. python3 crates/meld-diff/tests/data/generate.py
 
