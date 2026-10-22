@@ -151,10 +151,7 @@ fn statuses() {
     // Git has no rename detection here: old name removed, new name added
     assert_eq!(st("renamed.txt"), State::Removed);
     assert_eq!(st("renamed2.txt"), State::New);
-    assert_eq!(
-        entry("renamed2.txt").options,
-        "Mode changed from 000000 to 100644; Staged"
-    );
+    assert_eq!(entry("renamed2.txt").options, "Staged");
     assert_eq!(st("new.txt"), State::New);
     assert_eq!(st("untracked.txt"), State::Unversioned);
     assert_eq!(st("quote\"d ü.txt"), State::Unversioned);

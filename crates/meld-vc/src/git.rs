@@ -152,7 +152,10 @@ pub fn apply_status(
         cache.states.insert(path.clone(), state);
         // Git entries can't be MISSING; that's just an unstaged REMOVED
         cache.add_missing_entry(&path, state);
-        if d.old_mode != d.new_mode {
+        // A mode of 000000 means the file was added or removed, not that
+        // its mode changed (Python Meld reported those too).
+        let is_zero = |mode: &str| mode.bytes().all(|b| b == b'0');
+        if d.old_mode != d.new_mode && !is_zero(&d.old_mode) && !is_zero(&d.new_mode) {
             meta.entry(path.clone()).or_default().push(format!(
                 "Mode changed from {} to {}",
                 d.old_mode, d.new_mode
@@ -537,10 +540,7 @@ mod tests {
         assert_eq!(st("/repo/x.log"), State::Ignored);
         assert_eq!(st("/repo/ü.txt"), State::Unversioned);
         assert_eq!(st("/repo/other"), State::Normal);
-        assert_eq!(
-            cache.meta(Path::new("/repo/r n.txt")),
-            "Mode changed from 000000 to 100644; Staged"
-        );
+        assert_eq!(cache.meta(Path::new("/repo/r n.txt")), "Staged");
         assert_eq!(
             cache.meta(Path::new("/repo/m.txt")),
             "Mode changed from 100644 to 100755"
