@@ -2338,6 +2338,7 @@ dependencies = [
  "meld-diff",
  "meld-files",
  "meld-vc",
+ "meld-widgets",
  "open",
  "rfd",
  "tempfile",
