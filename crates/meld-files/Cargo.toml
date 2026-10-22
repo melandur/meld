@@ -7,12 +7,14 @@ license.workspace = true
 
 [dependencies]
 regex.workspace = true
-globset.workspace = true
 thiserror.workspace = true
 encoding_rs.workspace = true
 chardetng.workspace = true
 tempfile.workspace = true
 log.workspace = true
+fancy-regex = "0.16"
+libc = "0.2"
+unicode-normalization = "0.1"
 
 [dev-dependencies]
 tempfile.workspace = true

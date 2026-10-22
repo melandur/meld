@@ -9,3 +9,5 @@ license.workspace = true
 iced.workspace = true
 syntect.workspace = true
 log.workspace = true
+thiserror.workspace = true
+unicode-segmentation = "1.12"

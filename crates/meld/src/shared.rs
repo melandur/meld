@@ -50,7 +50,10 @@ impl Shared {
 
     pub fn initial_window_size() -> iced::Size {
         let state = Settings::load().window_state;
-        iced::Size::new(state.width.max(500) as f32, state.height.max(350) as f32)
+        let size = |value: i32, default: f32, min: f32| {
+            if value > 0 { (value as f32).max(min) } else { default }
+        };
+        iced::Size::new(size(state.width, 1000.0, 500.0), size(state.height, 750.0, 350.0))
     }
 
     pub fn save_settings(&self) {
