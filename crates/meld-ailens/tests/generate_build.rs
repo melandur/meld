@@ -62,6 +62,7 @@ fn make_facts() -> BuildFacts {
                 agent_name: Some("Claude Opus 5.5".into()),
                 what: "Moves and extends the module".into(),
                 why: Some("The module grew past its old name.".into()),
+                justification: None,
                 why_source: ExplanationSource::Commit,
                 inferred_by: None,
                 changes_inferred_by: Some("claude-sonnet-5-5".into()),
@@ -76,6 +77,7 @@ fn make_facts() -> BuildFacts {
                 agent_name: None,
                 what: "tweak".into(),
                 why: None,
+                justification: None,
                 why_source: ExplanationSource::Commit,
                 inferred_by: None,
                 changes_inferred_by: None,
@@ -111,6 +113,7 @@ fn make_facts() -> BuildFacts {
                         changes: Some(vec![BuildChange {
                             what: "Adds a closing line".into(),
                             why: "Marks where the agent work ends.".into(),
+                            justification: None,
                         }]),
                     },
                 ],

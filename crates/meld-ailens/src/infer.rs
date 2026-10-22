@@ -29,10 +29,16 @@ The diff's hunks are numbered: each hunk header starts with "[change N]".
 Reply with JSON matching the schema:
 - "what": one plain sentence saying what the commit changed.
 - "why": one to three plain sentences on why: the problem it solves or the goal it serves.
+- "justification": one to three plain sentences on why this is the right change: the evidence for it in the diff,
+  the commit message and the code around it, and which alternatives or simpler fixes it rules out.
 - "changes": one entry for every numbered change in the diff, with its number as "change", and
   - "what": one short plain sentence saying what that change does.
   - "why": one or two plain sentences on why that change is needed: its part in the commit, specific to it.
     Don't repeat the commit's overall reason.
+  - "justification": one to three plain sentences on why that change is the right one: the evidence for it in the
+    diff and the code around it, and which alternatives or simpler fixes it rules out.
+A justification uses only the evidence you are given; if that evidence is thin, say so plainly instead of inventing
+support.
 Base the answer only on the commit message and diff you are given. If a reason is not evident, give the most
 likely one and say that it is a guess. No markdown, no headings, no lists."#;
 
@@ -43,6 +49,9 @@ Reply with JSON matching the schema: "changes" has one entry for every numbered 
 number as "change", and
 - "what": one short plain sentence saying what that change does.
 - "why": one or two plain sentences on why that change is likely needed, specific to it.
+- "justification": one to three plain sentences on why that change is the right one: the evidence for it in the diff
+  and the code around it, and which alternatives or simpler fixes it rules out. Use only the evidence you are given;
+  if that evidence is thin, say so plainly instead of inventing support.
 If a reason is not evident, give the most likely one and say that it is a guess. No markdown, no headings, no lists."#;
 
 fn changes_schema() -> Value {
@@ -54,8 +63,9 @@ fn changes_schema() -> Value {
                 "change": {"type": "integer"},
                 "what": {"type": "string"},
                 "why": {"type": "string"},
+                "justification": {"type": "string"},
             },
-            "required": ["change", "what", "why"],
+            "required": ["change", "what", "why", "justification"],
             "additionalProperties": false,
         },
     })
@@ -68,9 +78,10 @@ pub static SCHEMA: LazyLock<Value> = LazyLock::new(|| {
         "properties": {
             "what": {"type": "string"},
             "why": {"type": "string"},
+            "justification": {"type": "string"},
             "changes": changes_schema(),
         },
-        "required": ["what", "why", "changes"],
+        "required": ["what", "why", "justification", "changes"],
         "additionalProperties": false,
     })
 });
@@ -183,6 +194,13 @@ pub fn infer_explanation(
         return Err(no_explanation());
     }
     let what = what.trim();
+    // Optional: an answer without one still explains the commit
+    let justification = output
+        .and_then(|o| o.get("justification"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|j| !j.is_empty())
+        .map(str::to_string);
 
     Ok(InferredExplanation {
         explanation: CommitExplanation {
@@ -192,6 +210,7 @@ pub fn infer_explanation(
                 what.to_string()
             },
             why: Some(why.trim().to_string()),
+            justification,
             source: ExplanationSource::Inferred,
             model: Some(response.model.clone()),
         },
@@ -216,6 +235,7 @@ pub fn compose_inferred_note(
         format_note(
             &inferred.explanation.what,
             &why,
+            inferred.explanation.justification.as_deref(),
             ExplanationSource::Inferred,
             Some(&inferred.model),
         )
@@ -306,12 +326,13 @@ pub fn infer_uncommitted_explanation(
 
 /// The answer's explanations of numbered hunks, in diff order
 ///
-/// Unknown numbers, repeated numbers and empty explanations are dropped.
+/// Unknown numbers, repeated numbers and empty explanations are dropped. A
+/// missing or empty justification is None; the change is still kept.
 pub fn parse_changes(answer: Option<&Value>, hunks: &[CommitHunk]) -> Vec<ChangeExplanation> {
     let Some(Value::Array(items)) = answer else {
         return Vec::new();
     };
-    let mut by_hunk: HashMap<i64, (String, String)> = HashMap::new();
+    let mut by_hunk: HashMap<i64, (String, String, Option<String>)> = HashMap::new();
     for item in items {
         let Some(item) = item.as_object() else {
             continue;
@@ -332,18 +353,32 @@ pub fn parse_changes(answer: Option<&Value>, hunks: &[CommitHunk]) -> Vec<Change
         if why.trim().is_empty() || by_hunk.contains_key(&number) {
             continue;
         }
-        by_hunk.insert(number, (what.trim().to_string(), why.trim().to_string()));
+        let justification = item
+            .get("justification")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|j| !j.is_empty())
+            .map(str::to_string);
+        by_hunk.insert(
+            number,
+            (
+                what.trim().to_string(),
+                why.trim().to_string(),
+                justification,
+            ),
+        );
     }
 
     hunks
         .iter()
         .enumerate()
         .filter_map(|(index, hunk)| {
-            let (what, why) = by_hunk.get(&(index as i64 + 1))?;
+            let (what, why, justification) = by_hunk.remove(&(index as i64 + 1))?;
             Some(ChangeExplanation {
                 hunk: hunk.clone(),
-                what: what.clone(),
-                why: why.clone(),
+                what,
+                why,
+                justification,
             })
         })
         .collect()

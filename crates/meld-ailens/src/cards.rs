@@ -49,6 +49,10 @@ pub struct Card {
     pub agent_model: String,
     pub what: String,
     pub why: String,
+    /// Why the commit is the right change: its evidence and the
+    /// alternatives it rules out; empty when not given. From the same
+    /// source as `why`
+    pub justification: String,
     pub source: Option<ExplanationSource>,
     /// Model that inferred `why`, for `Inferred`
     pub inferred_by: String,
@@ -56,6 +60,8 @@ pub struct Card {
     /// inferred
     pub change_what: String,
     pub change_why: String,
+    /// Why this change is the right one; empty when not given
+    pub change_justification: String,
     pub change_model: String,
     /// The explain button, if any
     pub explain: Option<ExplainAction>,

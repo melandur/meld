@@ -12,11 +12,13 @@ use crate::models::{ChangeExplanation, CommitHunk, GitDiffHunk, GitFileDiff, Unc
 
 pub const MAX_ENTRIES: usize = 2000;
 
-/// What an uncommitted hunk does and why, and the model that inferred it
+/// What an uncommitted hunk does, why, why it is the right change, and the
+/// model that inferred it
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HunkExplanation {
     pub what: String,
     pub why: String,
+    pub justification: Option<String>,
     pub model: String,
 }
 
@@ -26,6 +28,7 @@ pub struct PlacedExplanation {
     pub hunk: CommitHunk,
     pub what: String,
     pub why: String,
+    pub justification: Option<String>,
     pub model: String,
 }
 
@@ -35,6 +38,7 @@ impl PlacedExplanation {
             hunk: self.hunk.clone(),
             what: self.what.clone(),
             why: self.why.clone(),
+            justification: self.justification.clone(),
         }
     }
 }
@@ -177,6 +181,7 @@ impl UncommittedExplanations {
                     HunkExplanation {
                         what: change.what.clone(),
                         why: change.why.clone(),
+                        justification: change.justification.clone(),
                         model: model.to_string(),
                     },
                 );
@@ -216,6 +221,7 @@ impl UncommittedExplanations {
                     },
                     what: found.what,
                     why: found.why,
+                    justification: found.justification,
                     model: found.model,
                 });
             }

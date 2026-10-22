@@ -65,6 +65,7 @@ fn explained() -> HunkExplanation {
     HunkExplanation {
         what: "Shouts nine.".into(),
         why: "Louder.".into(),
+        justification: None,
         model: "claude-sonnet-5-5".into(),
     }
 }
@@ -142,6 +143,7 @@ fn place_puts_explanations_where_the_hunks_are_now() {
             hunk: commit_hunk("a.ts", 19, 1, 21, 1, Some("old.ts")),
             what: "Shouts nine.".into(),
             why: "Louder.".into(),
+            justification: None,
             model: "claude-sonnet-5-5".into(),
         }]
     );
@@ -196,12 +198,14 @@ fn remember_keeps_a_models_answers_by_hunk_position() {
             hunk: commit_hunk("a.ts", 9, 1, 9, 1, None),
             what: "Shouts nine.".into(),
             why: "Louder.".into(),
+            justification: None,
         },
         // Matches no hunk of the diff
         ChangeExplanation {
             hunk: commit_hunk("a.ts", 50, 1, 50, 1, None),
             what: "Gone".into(),
             why: "Stale.".into(),
+            justification: None,
         },
     ];
     assert_eq!(cache.remember(Staged, &diff(), &changes, "claude-x"), 1);
@@ -210,6 +214,7 @@ fn remember_keeps_a_models_answers_by_hunk_position() {
         Some(HunkExplanation {
             what: "Shouts nine.".into(),
             why: "Louder.".into(),
+            justification: None,
             model: "claude-x".into(),
         })
     );
@@ -222,6 +227,7 @@ fn remember_keeps_a_models_answers_by_hunk_position() {
             hunk: commit_hunk("a.ts", 1, 1, 1, 1, None),
             what: "w".into(),
             why: "y".into(),
+            justification: None,
         }],
         "claude-x",
     );
@@ -235,6 +241,7 @@ fn setting_again_replaces_and_refreshes() {
     let first = HunkExplanation {
         what: "1".into(),
         why: "1".into(),
+        justification: None,
         model: "m".into(),
     };
     cache.set(Staged, &diff(), &top(), first.clone());
@@ -322,4 +329,31 @@ fn is_safe_to_share_between_threads() {
     }
 
     assert_eq!(cache.len(), 400);
+}
+
+#[test]
+fn justifications_are_kept_and_placed() {
+    let cache = UncommittedExplanations::default();
+    let changes = [ChangeExplanation {
+        hunk: commit_hunk("a.ts", 9, 1, 9, 1, None),
+        what: "Shouts nine.".into(),
+        why: "Louder.".into(),
+        justification: Some("Nothing else is loud enough.".into()),
+    }];
+    assert_eq!(cache.remember(Staged, &diff(), &changes, "claude-x"), 1);
+    assert_eq!(
+        cache
+            .get(Staged, &diff(), &bottom())
+            .unwrap()
+            .justification
+            .as_deref(),
+        Some("Nothing else is loud enough.")
+    );
+    let placed = cache.place(Staged, &[diff()]);
+    assert_eq!(placed.len(), 1);
+    assert_eq!(
+        placed[0].justification.as_deref(),
+        Some("Nothing else is loud enough.")
+    );
+    assert_eq!(placed[0].as_change(), changes[0]);
 }

@@ -240,6 +240,7 @@ fn sends_the_message_and_diff_leaving_out_ignored_and_generated_files() {
         CommitExplanation {
             what: "Changes a.".into(),
             why: Some("Because.".into()),
+            justification: None,
             source: ExplanationSource::Inferred,
             model: Some("claude-sonnet-5-5".into()),
         }
@@ -251,6 +252,7 @@ fn sends_the_message_and_diff_leaving_out_ignored_and_generated_files() {
             hunk: hunk_ref("src/a.ts", 1, 1, 1, 1),
             what: "Swaps one for two.".into(),
             why: "Two is right.".into(),
+            justification: None,
         }]
     );
 
@@ -324,6 +326,7 @@ fn uses_the_subject_for_an_empty_what_and_the_model_that_answered() {
         CommitExplanation {
             what: "Subj".into(),
             why: Some("Y".into()),
+            justification: None,
             source: ExplanationSource::Inferred,
             model: Some("claude-x".into()),
         }
@@ -663,6 +666,7 @@ fn inferred_note_for_a_commit_without_a_why() {
             &format_note(
                 "Adds X",
                 "Because.",
+                None,
                 ExplanationSource::Inferred,
                 Some("claude-x")
             ),
@@ -705,6 +709,7 @@ fn inferred_note_replaces_an_older_inferred_explanation() {
     let old = format_note(
         "Old",
         "Old why.",
+        None,
         ExplanationSource::Inferred,
         Some("claude-old"),
     );
@@ -756,6 +761,7 @@ fn explains_each_hunk_from_the_patch_alone() {
             hunk: hunk_ref("a.ts", 9, 1, 9, 1),
             what: "Shouts nine.".into(),
             why: "Louder.".into(),
+            justification: None,
         }]
     );
 }
@@ -916,4 +922,152 @@ fn an_untracked_file_is_an_addition() {
             .contains("--- /dev/null\n+++ b/new.txt\n[change 1] @@ -0,0 +1 @@\n+hello")
     );
     assert_eq!(explained.changes[0].hunk, hunk_ref("new.txt", 0, 0, 1, 1));
+}
+
+// -- justifications --
+
+#[test]
+fn reads_the_justifications_of_the_commit_and_its_changes() {
+    let files = vec![modified(
+        "a.py",
+        vec![
+            hunk(1, 1, &["-a", "+b"]),
+            hunk(10, 10, &["-c", "+d"]),
+            hunk(20, 20, &["+e"]),
+        ],
+    )];
+    let run = FakeClaude::new(json!({
+        "what": "W",
+        "why": "Y",
+        "justification": " The diff shows it; a flag would not do. ",
+        "changes": [
+            {"change": 1, "what": "a", "why": "ya", "justification": " Ja. "},
+            // Missing, empty or not a string: the change is kept without one
+            {"change": 2, "what": "b", "why": "yb"},
+            {"change": 3, "what": "c", "why": "yc", "justification": "  "},
+        ],
+    }));
+    let explanation =
+        infer_explanation(&commit(), &files, &options("m", run.runner()), &never()).unwrap();
+    assert_eq!(
+        explanation.explanation.justification.as_deref(),
+        Some("The diff shows it; a flag would not do.")
+    );
+    let justifications: Vec<Option<&str>> = explanation
+        .changes
+        .iter()
+        .map(|c| c.justification.as_deref())
+        .collect();
+    assert_eq!(justifications, [Some("Ja."), None, None]);
+
+    let note = compose_inferred_note(
+        &commit_with("Changes a", ""),
+        &explanation,
+        &MessageFormat::default(),
+    );
+    assert!(
+        note.contains("Why: Y\nJustification: The diff shows it; a flag would not do.\n"),
+        "{note}"
+    );
+    assert!(note.contains("Why: ya\nJustification: Ja.\n"), "{note}");
+    let parsed = parse_note(&note);
+    assert_eq!(
+        parsed.justification.as_deref(),
+        Some("The diff shows it; a flag would not do.")
+    );
+    assert_eq!(parsed.changes, explanation.changes);
+}
+
+#[test]
+fn an_answer_without_justifications_still_explains() {
+    for justification in [Value::Null, json!(""), json!(7)] {
+        let mut output = json!({
+            "what": "W",
+            "why": "Y",
+            "changes": [{"change": 1, "what": "w", "why": "y", "justification": justification}],
+        });
+        output["justification"] = justification.clone();
+        let run = FakeClaude::new(output);
+        let explanation = infer_explanation(
+            &commit(),
+            &[added("a.ts", &["a"])],
+            &options("m", run.runner()),
+            &never(),
+        )
+        .unwrap();
+        assert_eq!(explanation.explanation.why.as_deref(), Some("Y"));
+        assert_eq!(explanation.explanation.justification, None);
+        assert_eq!(explanation.changes.len(), 1);
+        assert_eq!(explanation.changes[0].justification, None);
+        // The note is written as it was before justifications
+        let note = compose_inferred_note(
+            &commit_with("S", ""),
+            &explanation,
+            &MessageFormat::default(),
+        );
+        assert!(!note.contains("Justification"), "{note}");
+    }
+}
+
+#[test]
+fn uncommitted_answers_carry_justifications() {
+    let run = FakeClaude::new(json!({"changes": [
+        {"change": 1, "what": "w", "why": "y", "justification": " Only this fixes it. "},
+    ]}));
+    let result = infer_uncommitted_explanation(
+        UncommittedLayer::Unstaged,
+        &diff(
+            Some("a.ts"),
+            Some("a.ts"),
+            false,
+            vec![hunk(1, 1, &["-a", "+b"])],
+        ),
+        &options("m", run.runner()),
+        &never(),
+    )
+    .unwrap();
+    assert_eq!(
+        result.changes[0].justification.as_deref(),
+        Some("Only this fixes it.")
+    );
+
+    let run = FakeClaude::new(json!({"changes": [{"change": 1, "what": "w", "why": "y"}]}));
+    let result = infer_uncommitted_explanation(
+        UncommittedLayer::Unstaged,
+        &diff(
+            Some("a.ts"),
+            Some("a.ts"),
+            false,
+            vec![hunk(1, 1, &["-a", "+b"])],
+        ),
+        &options("m", run.runner()),
+        &never(),
+    )
+    .unwrap();
+    assert_eq!(result.changes[0].justification, None);
+}
+
+#[test]
+fn the_prompts_and_schemas_ask_for_justifications() {
+    for prompt in [SYSTEM_PROMPT, meld_ailens::infer::UNCOMMITTED_SYSTEM_PROMPT] {
+        assert!(prompt.contains("\"justification\": one to three plain sentences"));
+        assert!(prompt.contains("which alternatives or simpler fixes it rules out"));
+        assert!(prompt.contains("if that evidence is thin, say so plainly"));
+        assert!(prompt.ends_with("No markdown, no headings, no lists."));
+    }
+    assert_eq!(
+        SCHEMA["required"],
+        json!(["what", "why", "justification", "changes"])
+    );
+    for schema in [&*SCHEMA, &*UNCOMMITTED_SCHEMA] {
+        let items = &schema["properties"]["changes"]["items"];
+        assert_eq!(
+            items["properties"]["justification"],
+            json!({"type": "string"})
+        );
+        assert_eq!(
+            items["required"],
+            json!(["change", "what", "why", "justification"])
+        );
+    }
 }

@@ -46,6 +46,8 @@ pub struct BuildCommit {
     pub agent_name: Option<String>,
     pub what: String,
     pub why: Option<String>,
+    /// Why the commit is the right change, from the same source as `why`
+    pub justification: Option<String>,
     pub why_source: ExplanationSource,
     /// Model that inferred the Why, for `Inferred`
     pub inferred_by: Option<String>,
@@ -58,6 +60,8 @@ pub struct BuildCommit {
 pub struct BuildChange {
     pub what: String,
     pub why: String,
+    /// Why the change is the right one, when the model gave one
+    pub justification: Option<String>,
 }
 
 /// The lines of a file one commit is credited with

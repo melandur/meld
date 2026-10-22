@@ -922,6 +922,9 @@ impl CompareSession {
                 },
                 change_what: join_texts(changes.iter().map(|c| c.what.as_str())),
                 change_why: join_texts(changes.iter().map(|c| c.why.as_str())),
+                change_justification: join_texts(
+                    changes.iter().filter_map(|c| c.justification.as_deref()),
+                ),
                 change_model: changes.first().map(|c| c.model.clone()).unwrap_or_default(),
                 explain: (infer && !explained).then_some(ExplainAction::Uncommitted),
                 ..common
@@ -975,10 +978,14 @@ impl CompareSession {
                 .unwrap_or_default(),
             what: explanation.what.clone(),
             why: explanation.why.clone().unwrap_or_default(),
+            justification: explanation.justification.clone().unwrap_or_default(),
             source: Some(explanation.source),
             inferred_by: explanation.model.clone().unwrap_or_default(),
             change_what: join_texts(changes.iter().map(|c| c.what.as_str())),
             change_why: join_texts(changes.iter().map(|c| c.why.as_str())),
+            change_justification: join_texts(
+                changes.iter().filter_map(|c| c.justification.as_deref()),
+            ),
             change_model: match &note {
                 Some(note) if !changes.is_empty() => note.change_model.clone().unwrap_or_default(),
                 _ => String::new(),
@@ -1223,6 +1230,8 @@ impl CompareSession {
                             vec![BuildChange {
                                 what: card.change_what.clone(),
                                 why: card.change_why.clone(),
+                                justification: (!card.change_justification.is_empty())
+                                    .then(|| card.change_justification.clone()),
                             }]
                         });
                     let position = file_entries
@@ -1292,6 +1301,7 @@ impl CompareSession {
                 agent_name: agent.as_ref().map(|a| a.display_name.clone()),
                 what: explanation.what.clone(),
                 why: explanation.why.clone(),
+                justification: explanation.justification.clone(),
                 why_source: explanation.source,
                 inferred_by: if explanation.source == ExplanationSource::Inferred {
                     explanation.model.clone()

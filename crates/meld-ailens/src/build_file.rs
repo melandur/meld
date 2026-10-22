@@ -249,9 +249,20 @@ fn render_commit(commit: &BuildCommit) -> Vec<String> {
     ];
     match &commit.why {
         None => lines.push("- Why: not recorded.".into()),
-        Some(why) => lines.extend(render_why(&label, why, "")),
+        Some(why) => {
+            lines.extend(render_why(&label, why, ""));
+            lines.extend(render_justification(commit.justification.as_deref(), ""));
+        }
     }
     lines
+}
+
+/// The Justification under a Why, when there is one
+fn render_justification(justification: Option<&str>, indent: &str) -> Vec<String> {
+    match justification.filter(|j| !js_trim(j).is_empty()) {
+        Some(justification) => render_why("Justification", justification, indent),
+        None => Vec::new(),
+    }
 }
 
 fn render_entry(entry: &BuildFileEntry, commits: &HashMap<&str, &BuildCommit>) -> Vec<String> {
@@ -284,6 +295,7 @@ fn render_entry(entry: &BuildFileEntry, commits: &HashMap<&str, &BuildCommit>) -
     for change in entry.changes.iter().flatten() {
         lines.push(format!("  - What: {}", one_line(&change.what)));
         lines.extend(render_why(&label, &change.why, "  "));
+        lines.extend(render_justification(change.justification.as_deref(), "  "));
     }
     lines
 }
@@ -331,7 +343,7 @@ fn is_structured(text: &str) -> bool {
     false
 }
 
-/// The Why as list items
+/// The Why (or Justification) as list items
 ///
 /// Hard-wrapped prose joins into one line; a Why with its own lists or
 /// paragraphs keeps them, indented under the label so it stays part of the

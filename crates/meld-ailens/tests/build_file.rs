@@ -61,6 +61,7 @@ fn make_facts() -> BuildFacts {
                 agent_name: Some("Claude Opus 5.5".into()),
                 what: "Makes load async".into(),
                 why: Some("The cache reads\nfrom disk.".into()),
+                justification: None,
                 why_source: ExplanationSource::Commit,
                 inferred_by: None,
                 changes_inferred_by: None,
@@ -75,6 +76,7 @@ fn make_facts() -> BuildFacts {
                 agent_name: None,
                 what: "Backs off".into(),
                 why: Some("- Rate limits.\n- Fewer retries.".into()),
+                justification: None,
                 why_source: ExplanationSource::Inferred,
                 inferred_by: Some("claude-sonnet-5-5".into()),
                 changes_inferred_by: Some("claude-sonnet-5-5".into()),
@@ -93,6 +95,7 @@ fn make_facts() -> BuildFacts {
                         changes: Some(vec![BuildChange {
                             what: "Drops the fixed retry".into(),
                             why: "A fixed retry\nhit the limit again.".into(),
+                            justification: None,
                         }]),
                     },
                 ],
@@ -807,4 +810,43 @@ fn merge_ranges_joins_overlaps_and_neighbours() {
         merge_ranges(&[range(4, 4), range(6, 6)]),
         [range(4, 4), range(6, 6)]
     );
+}
+
+// -- justifications --
+
+#[test]
+fn justifications_follow_their_whys() {
+    let mut facts = make_facts();
+    facts.commits[0].justification = Some("The profile shows\nthe stall.".into());
+    facts.commits[1].justification = Some("- Logs show 429s.\n- Retries doubled.".into());
+    if let Some(changes) = facts.files[0].entries[2].changes.as_mut() {
+        changes[0].justification = Some("Only a backoff\nclears the limit.".into());
+    }
+    let text = render_facts(&facts);
+    assert!(text.contains(
+        "- Why: The cache reads from disk.\n- Justification: The profile shows the stall.\n\n### `ddddddd`"
+    ));
+    assert!(text.contains(
+        "  - Fewer retries.\n- Justification:\n  - Logs show 429s.\n  - Retries doubled.\n\n## Changes"
+    ));
+    assert!(text.contains(
+        "  - Why (inferred by claude-sonnet-5-5, not the author’s words): A fixed retry hit the limit again.\n  - Justification: Only a backoff clears the limit.\n"
+    ));
+    // Nothing else changes
+    let without: Vec<&str> = text
+        .lines()
+        .filter(|line| {
+            !line.contains("Justification")
+                && !line.contains("Logs show")
+                && !line.contains("Retries doubled")
+        })
+        .collect();
+    assert_eq!(without.join("\n") + "\n", render());
+}
+
+#[test]
+fn empty_justifications_are_left_out() {
+    let mut facts = make_facts();
+    facts.commits[0].justification = Some("  ".into());
+    assert_eq!(render_facts(&facts), render());
 }

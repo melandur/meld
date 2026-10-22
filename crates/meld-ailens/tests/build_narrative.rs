@@ -48,6 +48,7 @@ fn make_facts() -> BuildFacts {
                 agent_name: Some("Claude Opus 5.5".into()),
                 what: "Adds X".into(),
                 why: Some("Needed\nfor Y.".into()),
+                justification: None,
                 why_source: ExplanationSource::Commit,
                 inferred_by: None,
                 changes_inferred_by: None,
@@ -62,6 +63,7 @@ fn make_facts() -> BuildFacts {
                 agent_name: None,
                 what: "tweak".into(),
                 why: None,
+                justification: None,
                 why_source: ExplanationSource::Commit,
                 inferred_by: None,
                 changes_inferred_by: None,
@@ -442,14 +444,16 @@ fn schema_and_version() {
     assert!(SYSTEM_PROMPT.ends_with("Plain text, no markdown."));
 }
 
-// -- The prompts and schemas are byte-identical to the Python ones --
+// -- The prompts and schemas are pinned: the build ones are byte-identical
+// to the Python ones; the infer ones are too, plus the justification --
 
 fn sha1(text: &str) -> String {
     sha1_smol::Sha1::from(text.as_bytes()).digest().to_string()
 }
 
-/// SHA-1s of the Python constants (`meld/ailens/infer.py`,
-/// `build_narrative.py`), so a stray edit to a prompt is caught
+/// SHA-1s of the prompts, so a stray edit to one is caught: the Python
+/// constant of `build_narrative.py`, and those of `meld/ailens/infer.py`
+/// with the justification added
 #[test]
 fn prompts_match_python() {
     assert_eq!(
@@ -458,16 +462,17 @@ fn prompts_match_python() {
     );
     assert_eq!(
         sha1(infer::SYSTEM_PROMPT),
-        "f02fcc3240377c63ad9dc6e72112fc5f89f8619b"
+        "0f7eb926c8095987a34361a526222d332baf63bc"
     );
     assert_eq!(
         sha1(infer::UNCOMMITTED_SYSTEM_PROMPT),
-        "c4badc9c354ad2b094a58e118a319ebe78c36eef"
+        "6754f9d28383d8019375d6a3ac237cac2e60b58f"
     );
 }
 
-/// `json.dumps(schema, separators=(",", ":"))` of the Python schemas, as
-/// passed to `claude --json-schema`
+/// `json.dumps(schema, separators=(",", ":"))` of the Python schemas (the
+/// infer ones with a required `justification`), as passed to
+/// `claude --json-schema`
 #[test]
 fn schemas_match_python() {
     assert_eq!(
@@ -476,10 +481,31 @@ fn schemas_match_python() {
     );
     assert_eq!(
         infer::SCHEMA.to_string(),
-        r#"{"type":"object","properties":{"what":{"type":"string"},"why":{"type":"string"},"changes":{"type":"array","items":{"type":"object","properties":{"change":{"type":"integer"},"what":{"type":"string"},"why":{"type":"string"}},"required":["change","what","why"],"additionalProperties":false}}},"required":["what","why","changes"],"additionalProperties":false}"#
+        r#"{"type":"object","properties":{"what":{"type":"string"},"why":{"type":"string"},"justification":{"type":"string"},"changes":{"type":"array","items":{"type":"object","properties":{"change":{"type":"integer"},"what":{"type":"string"},"why":{"type":"string"},"justification":{"type":"string"}},"required":["change","what","why","justification"],"additionalProperties":false}}},"required":["what","why","justification","changes"],"additionalProperties":false}"#
     );
     assert_eq!(
         infer::UNCOMMITTED_SCHEMA.to_string(),
-        r#"{"type":"object","properties":{"changes":{"type":"array","items":{"type":"object","properties":{"change":{"type":"integer"},"what":{"type":"string"},"why":{"type":"string"}},"required":["change","what","why"],"additionalProperties":false}}},"required":["changes"],"additionalProperties":false}"#
+        r#"{"type":"object","properties":{"changes":{"type":"array","items":{"type":"object","properties":{"change":{"type":"integer"},"what":{"type":"string"},"why":{"type":"string"},"justification":{"type":"string"}},"required":["change","what","why","justification"],"additionalProperties":false}}},"required":["changes"],"additionalProperties":false}"#
     );
+}
+
+#[test]
+fn prompt_gives_justifications_after_whys() {
+    let mut facts = make_facts();
+    facts.commits[0].justification = Some("The issue\nshows it.".into());
+    facts.commits[1].justification = Some("Not used without a Why.".into());
+    let prompt = build_narrative_prompt(&facts);
+    assert!(prompt.contains(
+        "- ccccccc · Claude Opus 5.5 with Jane · What: Adds X · Why: Needed for Y. · Justification: The issue shows it.\n"
+    ));
+    assert!(prompt.contains("· Why: not recorded\n"));
+    assert!(!prompt.contains("Not used without a Why."));
+
+    facts.commits[0].why_source = ExplanationSource::Inferred;
+    facts.commits[0].justification = Some("x".repeat(MAX_WHY_CHARS + 5));
+    let prompt = build_narrative_prompt(&facts);
+    assert!(prompt.contains(&format!(
+        "· Justification (inferred, not the author’s words): {}…\n",
+        "x".repeat(MAX_WHY_CHARS - 1)
+    )));
 }

@@ -29,16 +29,20 @@ static CHANGE_LINE: LazyLock<Regex> =
     LazyLock::new(|| regex(r"\AChange: -([0-9]+)(?:,([0-9]+))? \+([0-9]+)(?:,([0-9]+))? (.+)\z"));
 static CHANGE_FIELD: LazyLock<Regex> =
     LazyLock::new(|| regex(r"\A(Change-From|What|Why):[ \t]*(.*)\z"));
+static JUSTIFICATION_LINE: LazyLock<Regex> =
+    LazyLock::new(|| regex(r"(?i)\AJustification:[ \t]*(.*)\z"));
 static TRAILER_LINE: LazyLock<Regex> = LazyLock::new(|| regex(r"\A[A-Za-z0-9][A-Za-z0-9_-]*:\s"));
 static PARAGRAPH_BREAK: LazyLock<Regex> = LazyLock::new(|| regex(r"\n\s*\n"));
 
-/// Which labels mark What and Why in a commit message
+/// Which labels mark What, Why and Justification in a commit message
 ///
 /// Either as trailers (`Why: …`) or as body paragraphs starting with them.
+/// A Justification line inside a Why paragraph ends the Why.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageFormat {
     pub what_keys: Vec<String>,
     pub why_keys: Vec<String>,
+    pub justification_keys: Vec<String>,
 }
 
 impl Default for MessageFormat {
@@ -46,8 +50,17 @@ impl Default for MessageFormat {
         Self {
             what_keys: vec!["What".into(), "Agent-What".into()],
             why_keys: vec!["Why".into(), "Agent-Why".into()],
+            justification_keys: vec!["Justification".into(), "Agent-Justification".into()],
         }
     }
+}
+
+/// What a commit message labels
+#[derive(Debug, Default)]
+struct Labeled {
+    what: Option<String>,
+    why: Option<String>,
+    justification: Option<String>,
 }
 
 fn normalize(text: &str) -> String {
@@ -67,11 +80,16 @@ fn some_if_nonempty(text: String) -> Option<String> {
 ///
 /// A result without a Why can be inferred.
 pub fn explain_commit(commit: &GitCommit, format: &MessageFormat) -> CommitExplanation {
-    let (what, why) = parse_labeled_message(commit, format);
+    let Labeled {
+        what,
+        why,
+        justification,
+    } = parse_labeled_message(commit, format);
     if let Some(why) = why {
         return CommitExplanation {
             what: what.unwrap_or_else(|| commit.subject.clone()),
             why: Some(why),
+            justification,
             source: ExplanationSource::Commit,
             model: None,
         };
@@ -83,6 +101,7 @@ pub fn explain_commit(commit: &GitCommit, format: &MessageFormat) -> CommitExpla
             return CommitExplanation {
                 what: note.what.unwrap_or_else(|| commit.subject.clone()),
                 why: note.why,
+                justification: note.justification,
                 source: note.source,
                 model: note.model,
             };
@@ -93,28 +112,30 @@ pub fn explain_commit(commit: &GitCommit, format: &MessageFormat) -> CommitExpla
     CommitExplanation {
         what: what.unwrap_or_else(|| commit.subject.clone()),
         why: some_if_nonempty(body.trim().to_string()),
+        justification: None,
         source: ExplanationSource::Commit,
         model: None,
     }
 }
 
-/// What/Why from trailers with the format's keys, or from body paragraphs
-/// that start with `<key>:`; empty values count as missing
-fn parse_labeled_message(
-    commit: &GitCommit,
-    format: &MessageFormat,
-) -> (Option<String>, Option<String>) {
-    let what_keys: HashSet<String> = format.what_keys.iter().map(|k| k.to_lowercase()).collect();
-    let why_keys: HashSet<String> = format.why_keys.iter().map(|k| k.to_lowercase()).collect();
+/// What/Why/Justification from trailers with the format's keys, or from
+/// body paragraphs that start with `<key>:`; empty values count as missing
+fn parse_labeled_message(commit: &GitCommit, format: &MessageFormat) -> Labeled {
+    let keys =
+        |keys: &[String]| -> HashSet<String> { keys.iter().map(|k| k.to_lowercase()).collect() };
+    let what_keys = keys(&format.what_keys);
+    let why_keys = keys(&format.why_keys);
+    let justification_keys = keys(&format.justification_keys);
 
-    let mut what: Option<String> = None;
-    let mut why: Option<String> = None;
+    let mut found = Labeled::default();
     for trailer in &commit.trailers {
         let key = trailer.key.to_lowercase();
-        if what.is_none() && what_keys.contains(&key) {
-            what = Some(trailer.value.clone());
-        } else if why.is_none() && why_keys.contains(&key) {
-            why = Some(trailer.value.clone());
+        if found.what.is_none() && what_keys.contains(&key) {
+            found.what = Some(trailer.value.clone());
+        } else if found.why.is_none() && why_keys.contains(&key) {
+            found.why = Some(trailer.value.clone());
+        } else if found.justification.is_none() && justification_keys.contains(&key) {
+            found.justification = Some(trailer.value.clone());
         }
     }
 
@@ -124,17 +145,61 @@ fn parse_labeled_message(
             continue;
         };
         let key = captures[1].to_lowercase();
-        if what.is_none() && what_keys.contains(&key) {
-            what = Some(captures[2].trim().to_string());
-        } else if why.is_none() && why_keys.contains(&key) {
-            why = Some(captures[2].trim().to_string());
+        if found.what.is_none() && what_keys.contains(&key) {
+            found.what = Some(captures[2].trim().to_string());
+        } else if found.why.is_none() && why_keys.contains(&key) {
+            // A Justification line in the Why's paragraph ends the Why
+            let (why, justification) = split_justification(&captures[2], |line| {
+                HEAD_LINE
+                    .captures(line)
+                    .filter(|c| justification_keys.contains(&c[1].to_lowercase()))
+                    .map(|c| c.get(2).map_or("", |m| m.as_str()))
+            });
+            found.why = Some(why);
+            if found.justification.is_none() {
+                found.justification = justification;
+            }
+        } else if found.justification.is_none() && justification_keys.contains(&key) {
+            found.justification = Some(captures[2].trim().to_string());
         }
     }
 
-    (
-        what.filter(|w| !w.is_empty()),
-        why.filter(|w| !w.is_empty()),
-    )
+    let nonempty = |text: Option<String>| text.filter(|t| !t.is_empty());
+    Labeled {
+        what: nonempty(found.what),
+        why: nonempty(found.why),
+        justification: nonempty(found.justification),
+    }
+}
+
+/// A Why that may run on into a Justification line: the Why before that
+/// line, and the Justification from it on (`label` gives a line's value
+/// after its label when it is a Justification line). Both trimmed; an
+/// empty Justification is None.
+fn split_justification<'a>(
+    text: &'a str,
+    label: impl Fn(&'a str) -> Option<&'a str>,
+) -> (String, Option<String>) {
+    let lines: Vec<&str> = text.split('\n').collect();
+    // The first line is the Why's own value
+    for (index, line) in lines.iter().enumerate().skip(1) {
+        if let Some(value) = label(line) {
+            let mut rest = vec![value];
+            rest.extend(&lines[index + 1..]);
+            return (
+                lines[..index].join("\n").trim().to_string(),
+                some_if_nonempty(rest.join("\n").trim().to_string()),
+            );
+        }
+    }
+    (text.trim().to_string(), None)
+}
+
+/// The value of a note's `Justification:` line; None for other lines
+fn note_justification(line: &str) -> Option<&str> {
+    JUSTIFICATION_LINE
+        .captures(line)
+        .map(|c| c.get(1).map_or("", |m| m.as_str()))
 }
 
 fn strip_trailer_block(body: &str, has_trailers: bool) -> String {
@@ -159,6 +224,8 @@ fn strip_trailer_block(body: &str, has_trailers: bool) -> String {
 pub struct ParsedNote {
     pub what: Option<String>,
     pub why: Option<String>,
+    /// Why the commit is the right change; None in notes without one
+    pub justification: Option<String>,
     /// `Note` or `Inferred`
     pub source: ExplanationSource,
     pub model: Option<String>,
@@ -182,13 +249,16 @@ impl ParsedNote {
 /// Parse an AI Lens note
 ///
 /// Notes are `Key: value` lines (`Source`, `Model`, `What`) and then
-/// `Why:`, which runs to the end. A note without `What:` or `Why:` is all
+/// `Why:`, which runs to a `Justification:` line or the end; the
+/// Justification runs to the end. A note without `What:` or `Why:` is all
 /// Why, so a plain `git notes add -m "…"` works too.
 ///
 /// Explanations of single changes come after, from a `Change-Model:` line
 /// on: each starts with `Change: -<old> +<new> <path>` (the hunk's ranges in
-/// the commit's own diff), then `Change-From:` for a rename, `What:`, and
-/// `Why:` up to the next `Change:`.
+/// the commit's own diff), then `Change-From:` for a rename, `What:`,
+/// `Why:`, and optionally `Justification:`, up to the next `Change:`. Notes
+/// written before justifications were asked for have none: they read as
+/// before, with every justification None.
 pub fn parse_note(text: &str) -> ParsedNote {
     let normalized = normalize(text);
     let all_lines: Vec<&str> = normalized.trim().split('\n').collect();
@@ -203,23 +273,29 @@ pub fn parse_note(text: &str) -> ParsedNote {
     let mut hunk: Option<CommitHunk> = None;
     let mut what = String::new();
     let mut why: Option<Vec<&str>> = None;
+    let mut justification: Option<Vec<&str>> = None;
 
     fn finish(
         note: &mut ParsedNote,
         hunk: &Option<CommitHunk>,
         what: &str,
         why: &Option<Vec<&str>>,
+        justification: &Option<Vec<&str>>,
     ) {
-        if let Some(hunk) = hunk {
-            let text = why
+        let joined = |lines: &Option<Vec<&str>>| {
+            lines
                 .as_ref()
                 .map(|lines| lines.join("\n").trim().to_string())
-                .unwrap_or_default();
+                .unwrap_or_default()
+        };
+        if let Some(hunk) = hunk {
+            let text = joined(why);
             if !text.is_empty() {
                 note.changes.push(ChangeExplanation {
                     hunk: hunk.clone(),
                     what: what.to_string(),
                     why: text,
+                    justification: some_if_nonempty(joined(justification)),
                 });
             }
         }
@@ -234,7 +310,7 @@ pub fn parse_note(text: &str) -> ParsedNote {
         }
 
         if let Some(captures) = CHANGE_LINE.captures(line) {
-            finish(&mut note, &hunk, &what, &why);
+            finish(&mut note, &hunk, &what, &why, &justification);
             let number = |index: usize| -> Option<usize> {
                 captures.get(index).map(|m| m.as_str().parse().unwrap_or(0))
             };
@@ -248,14 +324,22 @@ pub fn parse_note(text: &str) -> ParsedNote {
             });
             what.clear();
             why = None;
+            justification = None;
             continue;
         }
         let Some(current) = hunk.as_mut() else {
             continue;
         };
 
-        if let Some(lines) = why.as_mut() {
+        if let Some(lines) = justification.as_mut() {
             lines.push(line);
+            continue;
+        }
+        if let Some(lines) = why.as_mut() {
+            match note_justification(line) {
+                Some(value) => justification = Some(vec![value]),
+                None => lines.push(line),
+            }
             continue;
         }
 
@@ -269,7 +353,7 @@ pub fn parse_note(text: &str) -> ParsedNote {
             _ => why = Some(vec![value]),
         }
     }
-    finish(&mut note, &hunk, &what, &why);
+    finish(&mut note, &hunk, &what, &why, &justification);
     note
 }
 
@@ -277,6 +361,7 @@ fn parse_note_head(text: &str) -> ParsedNote {
     let mut note = ParsedNote {
         what: None,
         why: None,
+        justification: None,
         source: ExplanationSource::Note,
         model: None,
         change_model: None,
@@ -296,7 +381,10 @@ fn parse_note_head(text: &str) -> ParsedNote {
             "why" => {
                 let mut parts = vec![value.as_str()];
                 parts.extend(&lines[i + 1..]);
-                note.why = some_if_nonempty(parts.join("\n").trim().to_string());
+                let (why, justification) =
+                    split_justification(&parts.join("\n"), note_justification);
+                note.why = some_if_nonempty(why);
+                note.justification = justification;
                 return note;
             }
             "what" => note.what = some_if_nonempty(value),
@@ -321,10 +409,12 @@ fn parse_note_head(text: &str) -> ParsedNote {
 
 /// A note holding a commit's own explanation
 ///
-/// `source` is `Note` or `Inferred`.
+/// `source` is `Note` or `Inferred`. The Justification, when there is one,
+/// comes after the Why.
 pub fn format_note(
     what: &str,
     why: &str,
+    justification: Option<&str>,
     source: ExplanationSource,
     model: Option<&str>,
 ) -> String {
@@ -333,23 +423,33 @@ pub fn format_note(
         lines.push(format!("Model: {model}"));
     }
     lines.push(format!("What: {}", what.replace('\n', " ")));
-    lines.push(format!("Why: {why}"));
+    lines.push(format!("Why: {}", escape_lines(why, false, true)));
+    if let Some(justification) = justification.map(str::trim).filter(|j| !j.is_empty()) {
+        lines.push(format!(
+            "Justification: {}",
+            escape_lines(justification, true, false)
+        ));
+    }
     lines.push(String::new());
     lines.join("\n")
 }
 
-/// A line that looks like the next change's header would end a Why early:
-/// indent each such line by a space
-fn escape_change_headers(text: &str) -> String {
+/// Indent by a space each line that would end the text early when the note
+/// is read back: lines that look like the next change's header
+/// (`change_headers`) or like a `Justification:` line (`justifications`)
+fn escape_lines(text: &str, change_headers: bool, justifications: bool) -> String {
     let mut out = String::with_capacity(text.len());
     for (index, line) in text.split('\n').enumerate() {
         if index > 0 {
             out.push('\n');
         }
-        let header = line
-            .strip_prefix("Change: -")
-            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()));
-        if header {
+        let header = change_headers
+            && line
+                .strip_prefix("Change: -")
+                .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()));
+        // The Why's first line follows its label, so it can't be mistaken
+        let justification = justifications && index > 0 && JUSTIFICATION_LINE.is_match(line);
+        if header || justification {
             out.push(' ');
         }
         out.push_str(line);
@@ -375,7 +475,21 @@ pub fn compose_note(head: &str, model: &str, changes: &[ChangeExplanation]) -> S
             lines.push(format!("Change-From: {original}"));
         }
         lines.push(format!("What: {}", change.what.replace('\n', " ")));
-        lines.push(format!("Why: {}", escape_change_headers(change.why.trim())));
+        lines.push(format!(
+            "Why: {}",
+            escape_lines(change.why.trim(), true, true)
+        ));
+        if let Some(justification) = change
+            .justification
+            .as_deref()
+            .map(str::trim)
+            .filter(|j| !j.is_empty())
+        {
+            lines.push(format!(
+                "Justification: {}",
+                escape_lines(justification, true, false)
+            ));
+        }
         parts.push(lines.join("\n"));
     }
     parts.join("\n\n") + "\n"

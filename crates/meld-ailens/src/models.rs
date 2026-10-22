@@ -516,6 +516,10 @@ impl std::fmt::Display for ExplanationSource {
 pub struct CommitExplanation {
     pub what: String,
     pub why: Option<String>,
+    /// Why this change is the right one: the evidence for it and the
+    /// alternatives it rules out; from the same source as `why`, None when
+    /// not given (older notes, plain messages)
+    pub justification: Option<String>,
     pub source: ExplanationSource,
     /// Model that inferred it, for `Inferred`
     pub model: Option<String>,
@@ -540,6 +544,9 @@ pub struct ChangeExplanation {
     pub hunk: CommitHunk,
     pub what: String,
     pub why: String,
+    /// Why this change is the right one; None in notes written before
+    /// justifications were asked for
+    pub justification: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -220,8 +220,9 @@ fn link_button(theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
-/// One card: its commit, author or agent, What and Why, the change's own
-/// explanation, the explain button and the builds that cover it.
+/// One card: its commit, author or agent, What, Why and Justification, the
+/// change's own explanation, the explain button and the builds that cover
+/// it.
 pub fn card_view<'a, M: Clone + 'a>(
     card: &'a Card,
     states: &'a CardStates,
@@ -310,6 +311,9 @@ pub fn card_view<'a, M: Clone + 'a>(
         }
         body = body.push(long_text(reflow(&card.why), &format!("{key}:why"), states, callbacks.expand, false));
     }
+    if !card.justification.is_empty() {
+        body = body.push(justification(&card.justification, &format!("{key}:justification"), states, callbacks.expand));
+    }
 
     if !card.change_what.is_empty() || !card.change_why.is_empty() {
         let model = if card.change_model.is_empty() { "a model" } else { card.change_model.as_str() };
@@ -328,6 +332,14 @@ pub fn card_view<'a, M: Clone + 'a>(
                 states,
                 callbacks.expand,
                 false,
+            ));
+        }
+        if !card.change_justification.is_empty() {
+            change = change.push(justification(
+                &card.change_justification,
+                &format!("{key}:change-justification"),
+                states,
+                callbacks.expand,
             ));
         }
         body = body.push(change);
@@ -411,6 +423,22 @@ pub fn card_view<'a, M: Clone + 'a>(
         .on_enter((callbacks.hover)(Some(card.key.clone())))
         .on_exit((callbacks.hover)(None))
         .into()
+}
+
+/// Why the change is the right one, under its Why: a small label and the
+/// text, cut short like the Why until the card is expanded.
+fn justification<'a, M: Clone + 'a>(
+    body: &str,
+    key: &str,
+    states: &CardStates,
+    on_expand: fn(String) -> M,
+) -> Element<'a, M> {
+    column![
+        text("Justification").size(11).style(ui::dim_text),
+        long_text(reflow(body), key, states, on_expand, false),
+    ]
+    .spacing(1)
+    .into()
 }
 
 fn badge_line<'a, M: 'a>(label: String) -> Element<'a, M> {

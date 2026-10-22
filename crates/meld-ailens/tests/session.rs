@@ -55,12 +55,24 @@ impl FakeClaude {
         numbers.dedup();
         let changes: Vec<_> = numbers
             .iter()
-            .map(|n| json!({"change": n, "what": format!("Change {n} what"), "why": format!("Change {n} why")}))
+            .map(|n| {
+                json!({
+                    "change": n,
+                    "what": format!("Change {n} what"),
+                    "why": format!("Change {n} why"),
+                    "justification": format!("Change {n} justification"),
+                })
+            })
             .collect();
         let output = if properties.get("title").is_some() {
             json!({"title": "Fake build title", "summary": "Fake summary.", "decisions": [], "risks": ["Fake risk"]})
         } else if properties.get("what").is_some() {
-            json!({"what": "Inferred what", "why": "Inferred why", "changes": changes})
+            json!({
+                "what": "Inferred what",
+                "why": "Inferred why",
+                "justification": "Inferred justification",
+                "changes": changes,
+            })
         } else {
             json!({"changes": changes})
         };
@@ -225,10 +237,17 @@ fn explain_commit_saves_note_and_updates_cards() {
         .find(|c| c.sha.as_deref() == Some(&history.sha("agent")))
         .unwrap();
     assert_eq!(agent.why, "Inferred why");
+    assert_eq!(agent.justification, "Inferred justification");
     assert_eq!(agent.source, Some(ExplanationSource::Inferred));
     assert_eq!(agent.inferred_by, "fake-model");
     assert_eq!(agent.change_what, "Change 1 what");
+    assert_eq!(agent.change_justification, "Change 1 justification");
     assert_eq!(agent.explain, None);
+    assert!(
+        note.contains("Why: Inferred why\nJustification: Inferred justification\n")
+            && note.contains("Why: Change 1 why\nJustification: Change 1 justification"),
+        "{note}"
+    );
 }
 
 #[test]
@@ -247,7 +266,11 @@ fn explain_changes_keeps_the_commit_why() {
         .unwrap();
     assert_eq!(human.why, "Users could not hear it.");
     assert_eq!(human.source, Some(ExplanationSource::Commit));
+    // The message gives no justification, and an inferred one isn't put
+    // under the author's Why
+    assert_eq!(human.justification, "");
     assert_eq!(human.change_why, "Change 1 why");
+    assert_eq!(human.change_justification, "Change 1 justification");
     assert_eq!(human.explain, None);
 }
 
@@ -284,6 +307,14 @@ fn explain_all_and_build() {
     assert!(index.contains("Fake build title"));
     // Builds never contain diff text
     assert!(!text.contains("TWO"));
+    assert!(
+        text.contains("- Justification: Inferred justification\n"),
+        "{text}"
+    );
+    assert!(
+        text.contains("  - Justification: Change 1 justification\n"),
+        "{text}"
+    );
     // Cards now link to the build
     let entry = entry_for(&session, "app.py");
     let view = session.file_view(&entry.change, &never()).unwrap();
@@ -377,6 +408,7 @@ fn working_tree_layers() {
     let staged = cards.iter().find(|c| c.kind == CardKind::Staged).unwrap();
     let unstaged = cards.iter().find(|c| c.kind == CardKind::Unstaged).unwrap();
     assert_eq!(staged.change_what, "Change 1 what");
+    assert_eq!(staged.change_justification, "Change 1 justification");
     assert_eq!(staged.explain, None);
     assert_eq!(unstaged.explain, Some(ExplainAction::Uncommitted));
 

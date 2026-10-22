@@ -54,6 +54,7 @@ fn expl(
     CommitExplanation {
         what: what.into(),
         why: why.map(str::to_string),
+        justification: None,
         source,
         model: model.map(str::to_string),
     }
@@ -115,6 +116,7 @@ fn change(c: Ch<'_>) -> ChangeExplanation {
         ),
         what: c.what.into(),
         why: c.why.into(),
+        justification: None,
     }
 }
 
@@ -128,6 +130,7 @@ fn note(
     ParsedNote {
         what: what.map(str::to_string),
         why: why.map(str::to_string),
+        justification: None,
         source,
         model: model.map(str::to_string),
         change_model: None,
@@ -293,6 +296,7 @@ fn uses_labels_from_the_configured_format() {
     let format = MessageFormat {
         what_keys: vec!["Change".into()],
         why_keys: vec!["Reason".into()],
+        justification_keys: vec!["Evidence".into()],
     };
     let reason = commit(C {
         trailers: vec![GitTrailer::new("reason", "Because")],
@@ -316,6 +320,7 @@ fn default_format() {
         MessageFormat {
             what_keys: vec!["What".into(), "Agent-What".into()],
             why_keys: vec!["Why".into(), "Agent-Why".into()],
+            justification_keys: vec!["Justification".into(), "Agent-Justification".into()],
         }
     );
 }
@@ -433,6 +438,7 @@ fn round_trips_through_format_note_and_parse_note() {
     let text = format_note(
         "Adds X\nsecond line",
         "Because Y.\n\nAnd Z.",
+        None,
         Inferred,
         Some("claude-sonnet-5-5"),
     );
@@ -456,7 +462,7 @@ fn round_trips_through_format_note_and_parse_note() {
 #[test]
 fn format_note_without_a_model() {
     assert_eq!(
-        format_note("W", "Y", Note, None),
+        format_note("W", "Y", None, Note, None),
         "Source: note\nWhat: W\nWhy: Y\n"
     );
 }
@@ -513,6 +519,7 @@ fn keeps_the_explanations_of_single_changes_after_the_commits_own() {
                 ChangeExplanation {
                     hunk: changes[0].hunk.clone(),
                     what: "Awaits the load".into(),
+                    justification: None,
                     why: "The cache reads from disk.\n\n Change: -1,1 +1,1 x looks like a header."
                         .into(),
                 },
@@ -565,7 +572,13 @@ fn compose_note_flattens_what_and_skips_a_same_path_change_from() {
 
 #[test]
 fn round_trips_an_inferred_head_with_changes() {
-    let head = format_note("Adds X", "Because.", Inferred, Some("claude-opus-5-5"));
+    let head = format_note(
+        "Adds X",
+        "Because.",
+        None,
+        Inferred,
+        Some("claude-opus-5-5"),
+    );
     let changes = vec![change(Ch {
         old_start: 10,
         old_count: 3,
@@ -884,4 +897,253 @@ fn finds_each_change_once() {
         &[top()],
     );
     assert_eq!(result, [top()]);
+}
+
+// -- justifications --
+
+fn justified(c: Ch<'_>, justification: &str) -> ChangeExplanation {
+    ChangeExplanation {
+        justification: Some(justification.into()),
+        ..change(c)
+    }
+}
+
+#[test]
+fn format_note_writes_the_justification_after_the_why() {
+    let text = format_note(
+        "Adds X",
+        "Because Y.\n\nAnd Z.",
+        Some("  The diff shows Y.\nA flag would not do.  "),
+        Inferred,
+        Some("claude-sonnet-5-5"),
+    );
+    assert_eq!(
+        text,
+        "Source: inferred\nModel: claude-sonnet-5-5\nWhat: Adds X\nWhy: Because Y.\n\nAnd Z.\n\
+         Justification: The diff shows Y.\nA flag would not do.\n"
+    );
+    let parsed = parse_note(&text);
+    assert_eq!(parsed.why.as_deref(), Some("Because Y.\n\nAnd Z."));
+    assert_eq!(
+        parsed.justification.as_deref(),
+        Some("The diff shows Y.\nA flag would not do.")
+    );
+    assert_eq!(parsed.what.as_deref(), Some("Adds X"));
+    assert_eq!(parsed.source, Inferred);
+    assert_eq!(parsed.head, text.trim());
+}
+
+#[test]
+fn format_note_leaves_out_an_empty_justification() {
+    let plain = format_note("W", "Y", None, Note, None);
+    assert_eq!(format_note("W", "Y", Some("  "), Note, None), plain);
+    assert_eq!(parse_note(&plain).justification, None);
+}
+
+#[test]
+fn old_notes_without_a_justification_read_as_before() {
+    let old = "Source: inferred\nModel: m\nWhat: Adds X\nWhy: Because Y.\n\n\
+               Change-Model: m\n\nChange: -1,2 +1,3 a.ts\nWhat: w\nWhy: y\nmore y\n";
+    let parsed = parse_note(old);
+    assert_eq!(parsed.why.as_deref(), Some("Because Y."));
+    assert_eq!(parsed.justification, None);
+    assert_eq!(parsed.changes.len(), 1);
+    assert_eq!(parsed.changes[0].why, "y\nmore y");
+    assert_eq!(parsed.changes[0].justification, None);
+    assert_eq!(
+        explain(C {
+            note: Some(old),
+            ..Default::default()
+        }),
+        expl("Adds X", Some("Because Y."), Inferred, Some("m"))
+    );
+}
+
+#[test]
+fn a_hand_written_why_stops_at_a_justification_line() {
+    let parsed =
+        parse_note("Why: Users asked.\nTwice.\njustification:  The log shows it.\n\nMore.");
+    assert_eq!(parsed.why.as_deref(), Some("Users asked.\nTwice."));
+    assert_eq!(
+        parsed.justification.as_deref(),
+        Some("The log shows it.\n\nMore.")
+    );
+    // Only after the Why's own line, and only a line that starts with it
+    let parsed = parse_note("Why: Justification: is the word\n The Justification: indented");
+    assert_eq!(
+        parsed.why.as_deref(),
+        Some("Justification: is the word\n The Justification: indented")
+    );
+    assert_eq!(parsed.justification, None);
+    // An empty Justification is none
+    let parsed = parse_note("Why: W\nJustification:   \n");
+    assert_eq!(parsed.why.as_deref(), Some("W"));
+    assert_eq!(parsed.justification, None);
+}
+
+#[test]
+fn explain_commit_takes_the_justification_of_a_note() {
+    let explanation = explain(C {
+        note: Some("Source: inferred\nModel: m\nWhat: W\nWhy: Y\nJustification: J"),
+        ..Default::default()
+    });
+    assert_eq!(explanation.why.as_deref(), Some("Y"));
+    assert_eq!(explanation.justification.as_deref(), Some("J"));
+}
+
+#[test]
+fn a_why_line_shaped_like_a_justification_is_escaped() {
+    let text = format_note(
+        "W",
+        "First.\nJustification: is not one\nLast.",
+        Some("Real.\nChange: -1,1 +1,1 x.ts"),
+        Note,
+        None,
+    );
+    assert!(text.contains("\n Justification: is not one\n"), "{text}");
+    assert!(text.contains("\n Change: -1,1 +1,1 x.ts\n"), "{text}");
+    let parsed = parse_note(&text);
+    assert_eq!(
+        parsed.why.as_deref(),
+        Some("First.\n Justification: is not one\nLast.")
+    );
+    assert_eq!(
+        parsed.justification.as_deref(),
+        Some("Real.\n Change: -1,1 +1,1 x.ts")
+    );
+    assert!(parsed.changes.is_empty() && parsed.change_model.is_none());
+}
+
+#[test]
+fn compose_note_writes_each_changes_justification_after_its_why() {
+    let head = format_note("Adds X", "Because.", Some("Evidence."), Inferred, Some("m"));
+    let changes = vec![
+        justified(
+            Ch {
+                old_start: 3,
+                old_count: 2,
+                new_start: 3,
+                new_count: 4,
+                why: "Needed.\nJustification: in the Why",
+                ..Default::default()
+            },
+            "  The test fails without it.\nChange: -9,1 +9,1 a.ts looks like a header  ",
+        ),
+        // Written before justifications were asked for
+        change(Ch {
+            old_start: 20,
+            old_count: 1,
+            new_start: 22,
+            new_count: 1,
+            why: "Other.",
+            ..Default::default()
+        }),
+    ];
+    let text = compose_note(&head, "m", &changes);
+    assert_eq!(
+        text,
+        [
+            "Source: inferred",
+            "Model: m",
+            "What: Adds X",
+            "Why: Because.",
+            "Justification: Evidence.",
+            "",
+            "Change-Model: m",
+            "",
+            "Change: -3,2 +3,4 a.ts",
+            "What: w",
+            "Why: Needed.",
+            " Justification: in the Why",
+            "Justification: The test fails without it.",
+            " Change: -9,1 +9,1 a.ts looks like a header",
+            "",
+            "Change: -20,1 +22,1 a.ts",
+            "What: w",
+            "Why: Other.",
+            "",
+        ]
+        .join("\n")
+    );
+
+    let parsed = parse_note(&text);
+    assert_eq!(parsed.why.as_deref(), Some("Because."));
+    assert_eq!(parsed.justification.as_deref(), Some("Evidence."));
+    assert_eq!(parsed.changes.len(), 2);
+    assert_eq!(parsed.changes[0].why, "Needed.\n Justification: in the Why");
+    assert_eq!(
+        parsed.changes[0].justification.as_deref(),
+        Some("The test fails without it.\n Change: -9,1 +9,1 a.ts looks like a header")
+    );
+    assert_eq!(parsed.changes[1], changes[1]);
+    // Read back and written again, the note stays the same
+    assert_eq!(compose_note(&parsed.head, "m", &parsed.changes), text);
+}
+
+#[test]
+fn a_change_without_a_why_keeps_no_justification() {
+    let parsed = parse_note("Change-Model: m\n\nChange: -1 +1 a.ts\nWhat: w\nJustification: j\n");
+    assert!(parsed.changes.is_empty());
+}
+
+#[test]
+fn labeled_messages_can_carry_a_justification() {
+    // Body paragraphs
+    let explanation = explain(C {
+        body: "What: Adds X\n\nWhy: Users asked.\n\nJustification: The issue\nshows it.",
+        ..Default::default()
+    });
+    assert_eq!(explanation.why.as_deref(), Some("Users asked."));
+    assert_eq!(
+        explanation.justification.as_deref(),
+        Some("The issue\nshows it.")
+    );
+    assert_eq!(explanation.source, Commit);
+
+    // A Justification line in the Why's paragraph ends the Why
+    let explanation = explain(C {
+        body: "Why: Users asked.\nAgent-Justification: The issue shows it.",
+        ..Default::default()
+    });
+    assert_eq!(explanation.why.as_deref(), Some("Users asked."));
+    assert_eq!(
+        explanation.justification.as_deref(),
+        Some("The issue shows it.")
+    );
+
+    // Trailers, which beat paragraphs
+    let explanation = explain(C {
+        body: "Justification: from the body",
+        trailers: vec![
+            GitTrailer::new("Why", "Users asked."),
+            GitTrailer::new("justification", "From a trailer."),
+        ],
+        ..Default::default()
+    });
+    assert_eq!(
+        explanation.justification.as_deref(),
+        Some("From a trailer.")
+    );
+
+    // Without a Why there is nothing to justify from the message
+    let explanation = explain(C {
+        body: "Justification: alone",
+        ..Default::default()
+    });
+    assert_eq!(explanation.justification, None);
+    assert_eq!(explanation.why.as_deref(), Some("Justification: alone"));
+
+    // Configured labels
+    let format = MessageFormat {
+        what_keys: vec![],
+        why_keys: vec!["Reason".into()],
+        justification_keys: vec!["Evidence".into()],
+    };
+    let reason = commit(C {
+        body: "Reason: R\n\nEvidence: E\n\nJustification: ignored",
+        ..Default::default()
+    });
+    let explanation = explain_commit(&reason, &format);
+    assert_eq!(explanation.why.as_deref(), Some("R"));
+    assert_eq!(explanation.justification.as_deref(), Some("E"));
 }

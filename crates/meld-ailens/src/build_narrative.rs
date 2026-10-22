@@ -222,17 +222,26 @@ fn describe_commit(commit: &BuildCommit) -> String {
     } else {
         commit.author.clone()
     };
-    let why = match &commit.why {
-        None => "Why: not recorded".to_string(),
-        Some(why) => {
-            let label = if commit.why_source == ExplanationSource::Inferred {
-                "Why (inferred, not the author’s words)"
-            } else {
-                "Why"
-            };
-            format!("{label}: {}", truncate(&one_line(why), MAX_WHY_CHARS))
-        }
+    let inferred = if commit.why_source == ExplanationSource::Inferred {
+        " (inferred, not the author’s words)"
+    } else {
+        ""
     };
+    let mut why = match &commit.why {
+        None => "Why: not recorded".to_string(),
+        Some(why) => format!("Why{inferred}: {}", truncate(&one_line(why), MAX_WHY_CHARS)),
+    };
+    // A Justification only ever comes with a Why
+    if let Some(justification) = commit
+        .justification
+        .as_deref()
+        .filter(|j| commit.why.is_some() && !js_trim(j).is_empty())
+    {
+        why.push_str(&format!(
+            " · Justification{inferred}: {}",
+            truncate(&one_line(justification), MAX_WHY_CHARS)
+        ));
+    }
     format!(
         "- {} · {who} · What: {} · {why}",
         commit.short_sha,

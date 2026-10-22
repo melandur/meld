@@ -13,7 +13,9 @@
 //! Each change gets a card in a Why column saying which commit made it and
 //! why: from labeled commit messages, git notes in `refs/notes/ai-lens`, or
 //! the plain message. Explain asks Claude Code (`claude -p`) for missing
-//! reasons and saves them as notes; Explain & Build writes
+//! reasons, with a justification of each (why it is the right change: its
+//! evidence and the alternatives it rules out), and saves them as notes
+//! (`Justification:` after each `Why:`); Explain & Build writes
 //! `agent/<base>_<target>_build.md`. Notes and build files are byte-for-byte
 //! compatible with the AI Lens VS Code extension.
 //!
