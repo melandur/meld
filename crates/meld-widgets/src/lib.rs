@@ -27,11 +27,12 @@
 //!   [`classify`](action_gutter::classify).
 //! - [`highlight`]: incremental syntect [`Highlighter`]
 //!   (`for_language("python3")`, `for_file(name, first_line)`, `edit`,
-//!   `highlight`, `line_spans`) producing [`StyleSpan`]s named by
+//!   `highlight`, `highlight_visible`, `line_spans`) producing [`StyleSpan`]s named by
 //!   GtkSourceView style ([`SyntaxStyle::name`], `style_fallback`).
 //! - [`style`]: [`PaneStyle`] colours (text, gutter, selection, chunks,
 //!   inline, maps) with `syntax_style(name) -> Option<TextStyle>` lookup;
-//!   presets `light()`, `dark()`, `meld_classic()`.
+//!   presets `light()`, `dark()`, `meld_classic()`; `for_new_side()`
+//!   swaps insert/delete colours for the pane on the "new" side.
 //! - [`chunk`]: input types [`DiffChunk`], [`ChunkKind`], [`LineHighlight`],
 //!   [`InlineHighlight`], [`MapChunk`], and converters `line_highlights`,
 //!   `map_chunks`.
