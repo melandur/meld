@@ -2096,7 +2096,7 @@ msgstr "_Recargar"
 
 #: meld/filediff.py:1979
 msgid "File {} is being compared to itself"
-msgstr "El archivo {]} se está comparando consigo mismo"
+msgstr "El archivo {} se está comparando consigo mismo"
 
 #: meld/filediff.py:1988
 msgid "Files are identical"

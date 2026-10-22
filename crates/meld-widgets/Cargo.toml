@@ -1,0 +1,15 @@
+[package]
+name = "meld-widgets"
+description = "Custom iced widgets for Meld: diff text panes, link maps, chunk maps and syntax highlighting"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+iced.workspace = true
+syntect.workspace = true
+log.workspace = true
+thiserror.workspace = true
+unicode-segmentation = "1.12"
+unicode-width = "0.2"
+unicode-linebreak = "0.1"

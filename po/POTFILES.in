@@ -4,6 +4,9 @@ data/mime/org.gnome.Meld.xml.in
 data/org.gnome.Meld.gschema.xml
 data/styles/meld-base.style-scheme.xml.in
 data/styles/meld-dark.style-scheme.xml.in
+data/styles/meld-lens-dark.style-scheme.xml.in
+data/styles/meld-lens-light.style-scheme.xml.in
+data/styles/meld-monokai.style-scheme.xml.in
 meld/resources/data/org.gnome.Meld.metainfo.xml.in.in
 meld/resources/gtk/help-overlay.ui
 meld/resources/ui/appwindow.ui
@@ -29,11 +32,14 @@ meld/resources/ui/revert-dialog.ui
 meld/resources/ui/save-confirm-dialog.ui
 meld/resources/ui/statusbar-menu.ui
 meld/resources/ui/vcview.ui
+meld/ailens/picker.py
+meld/ailens/session.py
 meld/actiongutter.py
 meld/const.py
 meld/dirdiff.py
 meld/externalhelpers.py
 meld/filediff.py
+meld/gitcompare.py
 meld/gutterrendererchunk.py
 meld/imagediff.py
 meld/iohelpers.py
@@ -53,8 +59,10 @@ meld/ui/findbar.py
 meld/ui/historyentry.py
 meld/ui/msgarea.py
 meld/ui/pathlabel.py
+meld/ui/revisionpicker.py
 meld/ui/statusbar.py
 meld/ui/vcdialogs.py
+meld/ui/whycolumn.py
 meld/vc/git.py
 meld/vc/_null.py
 meld/vc/svn.py

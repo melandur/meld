@@ -41,3 +41,7 @@ data/mime/meld.xml
 data/org.gnome.Meld.gresource
 data/styles/meld-base.style-scheme.xml
 data/styles/meld-dark.style-scheme.xml
+data/styles/meld-lens-dark.style-scheme.xml
+data/styles/meld-lens-light.style-scheme.xml
+data/styles/meld-monokai.style-scheme.xml
+/target

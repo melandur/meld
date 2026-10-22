@@ -1,0 +1,13 @@
+[package]
+name = "meld-diff"
+description = "Meld's diff and merge engine: Myers matchers, chunk bookkeeping, two- and three-way merge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+regex.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Stand-in for GtkSourceView's built-in "classic-dark" scheme, used only
+  when no installed copy is found. GtkSourceView is LGPL-2.1-or-later.
+-->
+<style-scheme id="classic-dark" name="Classic Dark" version="1.0">
+  <author>GtkSourceView team</author>
+  <description>Classic color scheme, dark variant</description>
+  <metadata>
+    <property name="variant">dark</property>
+    <property name="light-variant">classic</property>
+  </metadata>
+
+  <style name="text"                    foreground="#deddda" background="#1e1e1e"/>
+  <style name="selection"               foreground="#ffffff" background="#1c71d8"/>
+  <style name="current-line"            background="#2a2a2a"/>
+  <style name="current-line-number"     background="#2a2a2a"/>
+  <style name="line-numbers"            foreground="#9a9996" background="#242424"/>
+  <style name="draw-spaces"             foreground="#5e5c64"/>
+  <style name="background-pattern"      background="#242424"/>
+  <style name="bracket-match"           foreground="#ffffff" background="#5e5c64" bold="true"/>
+  <style name="bracket-mismatch"        foreground="#ffffff" background="#c01c28" bold="true"/>
+  <style name="right-margin"            foreground="#ffffff" background="#ffffff"/>
+  <style name="search-match"            foreground="#000000" background="#f5c211"/>
+
+  <style name="def:comment"             foreground="#62a0ea"/>
+  <style name="def:shebang"             foreground="#a8a0ff" bold="true"/>
+  <style name="def:doc-comment-element" italic="true"/>
+  <style name="def:constant"            foreground="#ff7bff"/>
+  <style name="def:special-char"        foreground="#a8a0ff"/>
+  <style name="def:identifier"          foreground="#4ad7d7"/>
+  <style name="def:statement"           foreground="#ff8a7a" bold="true"/>
+  <style name="def:keyword"             foreground="#ff8a7a" bold="true"/>
+  <style name="def:type"                foreground="#57e389" bold="true"/>
+  <style name="def:preprocessor"        foreground="#dc8add"/>
+  <style name="def:error"               background="#c01c28" bold="true"/>
+  <style name="def:warning"             background="#c64600"/>
+  <style name="def:note"                foreground="#000000" background="#f5c211" bold="true"/>
+  <style name="def:net-address-in-comment" foreground="#62a0ea" italic="true" underline="single"/>
+  <style name="def:underlined"          italic="true" underline="single"/>
+  <style name="def:emphasis"            italic="true"/>
+  <style name="def:strong-emphasis"     bold="true"/>
+  <style name="def:heading"             bold="true"/>
+  <style name="def:insertion"           underline="single"/>
+  <style name="def:deletion"            strikethrough="true"/>
+
+  <style name="diff:added-line"         foreground="#4ad7d7"/>
+  <style name="diff:removed-line"       foreground="#a8a0ff"/>
+  <style name="diff:changed-line"       use-style="def:preprocessor"/>
+  <style name="diff:special-case"       use-style="def:constant"/>
+  <style name="diff:location"           use-style="def:statement"/>
+  <style name="diff:diff-file"          use-style="def:type"/>
+</style-scheme>

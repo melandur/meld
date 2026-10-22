@@ -1,0 +1,538 @@
+//! Maintenance tasks, run as `cargo xtask <task>`:
+//!
+//! - `pot`: extracts the messages marked with `tr!`, `trc!`, `trn!` and
+//!   `n_!` in `crates/meld/src` into `po/meld.pot`
+//! - `update-po`: `pot`, then brings each `po/<lang>.po` up to date with
+//!   `msgmerge` (if installed): messages are first rewritten into the Rust
+//!   app's syntax (no mnemonics, `{}` placeholders) so that existing
+//!   translations carry over exactly
+//! - `check`: reports badly marked messages (placeholders without
+//!   arguments, format specs)
+//! - `check-po`: translations with malformed placeholders (ignored by the
+//!   app, dropped by `update-po`)
+//! - `stats`: how many of the app's messages each language translates
+//! - `msgids [lang]`: the Python version's messages in the app's syntax,
+//!   with how many languages translate each, to reuse their wording
+
+#[allow(dead_code)]
+#[path = "../../crates/meld/src/i18n/plural.rs"]
+mod plural;
+#[allow(dead_code)]
+#[path = "../../crates/meld/src/i18n/po.rs"]
+mod po;
+
+mod extract;
+
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
+use extract::Message;
+
+fn root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("..")
+}
+
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    // A copy of the tree to work on instead, for trying `update-po` out
+    let root = std::env::var_os("XTASK_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(root);
+    let result = match args.first().map(String::as_str) {
+        Some("pot") => write_pot(&root).map(|n| println!("po/meld.pot: {n} messages")),
+        Some("update-po") => update_po(&root),
+        Some("check") => check(&root),
+        Some("check-po") => check_po(&root),
+        Some("stats") => stats(&root),
+        Some("msgids") => msgids(&root, args.get(1).map(String::as_str).unwrap_or("de")),
+        _ => Err(
+            "usage: cargo xtask pot | update-po | check | check-po | stats | msgids [lang]"
+                .to_string(),
+        ),
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("xtask: {err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn messages(root: &Path) -> Result<Vec<Message>, String> {
+    let src = root.join("crates/meld/src");
+    let mut files = Vec::new();
+    collect_rs(&src, &mut files);
+    files.sort();
+    let mut out = Vec::new();
+    for file in files {
+        let text =
+            std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+        let rel = file
+            .strip_prefix(root)
+            .unwrap_or(&file)
+            .display()
+            .to_string();
+        out.extend(extract::extract(&text, &rel).map_err(|e| format!("{rel}: {e}"))?);
+    }
+    Ok(out)
+}
+
+fn collect_rs(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rs(&path, out);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
+        }
+    }
+}
+
+/// The unique messages, in order of first use, with all their places.
+fn unique(messages: &[Message]) -> Vec<(Message, Vec<String>, Vec<String>)> {
+    let mut order: Vec<(Message, Vec<String>, Vec<String>)> = Vec::new();
+    let mut index: BTreeMap<(String, String), usize> = BTreeMap::new();
+    for m in messages {
+        let key = (m.context.clone().unwrap_or_default(), m.id.clone());
+        match index.get(&key) {
+            Some(&i) => {
+                order[i].1.push(m.location.clone());
+                for c in &m.comments {
+                    if !order[i].2.contains(c) {
+                        order[i].2.push(c.clone());
+                    }
+                }
+                if order[i].0.plural.is_none() {
+                    order[i].0.plural = m.plural.clone();
+                }
+            }
+            None => {
+                index.insert(key, order.len());
+                order.push((m.clone(), vec![m.location.clone()], m.comments.clone()));
+            }
+        }
+    }
+    order
+}
+
+fn has_format(s: &str) -> bool {
+    s.contains('{') || s.contains('}')
+}
+
+/// Writes `po/meld.pot`; returns the number of messages.
+fn write_pot(root: &Path) -> Result<usize, String> {
+    let messages = messages(root)?;
+    let problems = extract::problems(&messages);
+    if !problems.is_empty() {
+        return Err(format!("badly marked messages:\n{}", problems.join("\n")));
+    }
+    let unique = unique(&messages);
+    let mut out = String::new();
+    out.push_str(
+        "# Translation template for Meld.\n\
+         # This file is distributed under the same license as the meld package.\n\
+         # Generated by `cargo xtask pot` from crates/meld/src; do not edit.\n\
+         #\n\
+         #, fuzzy\n\
+         msgid \"\"\n\
+         msgstr \"\"\n\
+         \"Project-Id-Version: meld\\n\"\n\
+         \"Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/meld/issues\\n\"\n\
+         \"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\\n\"\n\
+         \"Last-Translator: FULL NAME <EMAIL@ADDRESS>\\n\"\n\
+         \"Language-Team: LANGUAGE <LL@li.org>\\n\"\n\
+         \"Language: \\n\"\n\
+         \"MIME-Version: 1.0\\n\"\n\
+         \"Content-Type: text/plain; charset=UTF-8\\n\"\n\
+         \"Content-Transfer-Encoding: 8bit\\n\"\n\
+         \"Plural-Forms: nplurals=INTEGER; plural=EXPRESSION;\\n\"\n",
+    );
+    for (m, locations, comments) in &unique {
+        out.push('\n');
+        for c in comments {
+            let _ = writeln!(out, "#. {c}");
+        }
+        let _ = writeln!(out, "#: {}", locations.join(" "));
+        if has_format(&m.id) || m.plural.as_deref().is_some_and(has_format) {
+            out.push_str("#, rust-format\n");
+        }
+        if let Some(ctx) = &m.context {
+            write_field(&mut out, "msgctxt", ctx);
+        }
+        write_field(&mut out, "msgid", &m.id);
+        match &m.plural {
+            Some(p) => {
+                write_field(&mut out, "msgid_plural", p);
+                out.push_str("msgstr[0] \"\"\nmsgstr[1] \"\"\n");
+            }
+            None => out.push_str("msgstr \"\"\n"),
+        }
+    }
+    std::fs::write(root.join("po/meld.pot"), out).map_err(|e| format!("po/meld.pot: {e}"))?;
+    Ok(unique.len())
+}
+
+/// `keyword "value"`, split after line breaks like xgettext does.
+fn write_field(out: &mut String, keyword: &str, value: &str) {
+    let lines: Vec<&str> = value.split_inclusive('\n').collect();
+    if lines.len() <= 1 {
+        let _ = writeln!(out, "{keyword} {}", po::quote(value));
+    } else {
+        let _ = writeln!(out, "{keyword} \"\"");
+        for l in lines {
+            let _ = writeln!(out, "{}", po::quote(l));
+        }
+    }
+}
+
+fn linguas(root: &Path) -> Vec<String> {
+    std::fs::read_to_string(root.join("po/LINGUAS"))
+        .unwrap_or_default()
+        .lines()
+        .map(|l| l.split('#').next().unwrap_or("").trim())
+        .flat_map(str::split_whitespace)
+        .map(str::to_string)
+        .collect()
+}
+
+fn load(root: &Path, lang: &str) -> Result<po::PoFile, String> {
+    let path = root.join(format!("po/{lang}.po"));
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    po::parse(&text).map_err(|e| format!("po/{lang}.po: {e}"))
+}
+
+/// `file` rewritten into the app's syntax, for `msgmerge`.
+fn migrated(file: &po::PoFile) -> String {
+    let mut out = String::new();
+    if let Some(h) = &file.header {
+        for c in &h.comments {
+            let _ = writeln!(out, "{c}");
+        }
+        if !h.flags.is_empty() {
+            let _ = writeln!(out, "#, {}", h.flags.join(", "));
+        }
+        out.push_str("msgid \"\"\n");
+        write_field(
+            &mut out,
+            "msgstr",
+            h.strs.first().map(String::as_str).unwrap_or(""),
+        );
+    }
+    // Spellings without a mnemonic may now collide; the entry that already
+    // had the spelling wins
+    let mut seen: BTreeMap<(String, String), bool> = BTreeMap::new();
+    let mut entries: Vec<po::Entry> = Vec::new();
+    for entry in &file.entries {
+        // A malformed translation is dropped (msgmerge may even crash on
+        // it); a malformed message too
+        let converted = po::convert(entry).or_else(|| {
+            let syntax = po::Syntax::of(entry);
+            let id = po::to_rust(&entry.id, syntax)?;
+            let plural = match &entry.id_plural {
+                Some(p) => Some(po::to_rust(p, syntax)?),
+                None => None,
+            };
+            Some((id, plural, vec![String::new(); entry.strs.len().max(1)]))
+        });
+        let Some((id, plural, strs)) = converted else {
+            continue;
+        };
+        let bare = po::strip_mnemonic(&id);
+        let exact = bare.is_none();
+        let id = po::canonical(&bare.unwrap_or(id));
+        let key = (entry.context.clone().unwrap_or_default(), id.clone());
+        match seen.get(&key) {
+            Some(true) => continue,
+            Some(false) if !exact => continue,
+            Some(false) => {
+                entries.retain(|e| (e.context.clone().unwrap_or_default(), e.id.clone()) != key)
+            }
+            None => {}
+        }
+        seen.insert(key, exact);
+        let ok = strs
+            .iter()
+            .all(|s| s.is_empty() || po::placeholders_match(&id, plural.as_deref(), s));
+        let mut flags: Vec<String> = entry
+            .flags
+            .iter()
+            .filter(|f| !f.ends_with("-format"))
+            .cloned()
+            .collect();
+        if !ok && !flags.iter().any(|f| f == "fuzzy") {
+            flags.push("fuzzy".into());
+        }
+        if has_format(&id) || plural.as_deref().is_some_and(has_format) {
+            flags.push("rust-format".into());
+        }
+        let converted = po::Entry {
+            context: entry.context.clone(),
+            id,
+            id_plural: plural,
+            strs,
+            flags,
+            comments: entry
+                .comments
+                .iter()
+                .filter(|c| !c.starts_with("#:") && !c.starts_with("#|"))
+                .cloned()
+                .collect(),
+        };
+        entries.push(converted);
+    }
+    for e in entries {
+        out.push('\n');
+        for c in &e.comments {
+            let _ = writeln!(out, "{c}");
+        }
+        if !e.flags.is_empty() {
+            let _ = writeln!(out, "#, {}", e.flags.join(", "));
+        }
+        if let Some(ctx) = &e.context {
+            write_field(&mut out, "msgctxt", ctx);
+        }
+        write_field(&mut out, "msgid", &e.id);
+        match &e.id_plural {
+            Some(p) => {
+                write_field(&mut out, "msgid_plural", p);
+                for (i, s) in e.strs.iter().enumerate() {
+                    write_field(&mut out, &format!("msgstr[{i}]"), s);
+                }
+            }
+            None => write_field(
+                &mut out,
+                "msgstr",
+                e.strs.first().map(String::as_str).unwrap_or(""),
+            ),
+        }
+    }
+    out
+}
+
+fn update_po(root: &Path) -> Result<(), String> {
+    let n = write_pot(root)?;
+    println!("po/meld.pot: {n} messages");
+    let msgmerge = std::process::Command::new("msgmerge")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    if !msgmerge {
+        println!("msgmerge not found: only po/meld.pot was regenerated");
+        return Ok(());
+    }
+    let tmp = std::env::temp_dir().join(format!("meld-xtask-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
+    for lang in linguas(root) {
+        let file = load(root, &lang)?;
+        let input = tmp.join(format!("{lang}.po"));
+        std::fs::write(&input, migrated(&file)).map_err(|e| e.to_string())?;
+        let target = root.join(format!("po/{lang}.po"));
+        let status = std::process::Command::new("msgmerge")
+            .args(["--quiet", "--previous", "--output-file"])
+            .arg(&target)
+            .arg(&input)
+            .arg(root.join("po/meld.pot"))
+            .status()
+            .map_err(|e| e.to_string())?;
+        if !status.success() {
+            return Err(format!("msgmerge failed for po/{lang}.po"));
+        }
+        println!("po/{lang}.po updated");
+    }
+    let _ = std::fs::remove_dir_all(&tmp);
+    Ok(())
+}
+
+fn check(root: &Path) -> Result<(), String> {
+    let messages = messages(root)?;
+    let problems = extract::problems(&messages);
+    if problems.is_empty() {
+        println!("{} marked messages, no problems", unique(&messages).len());
+        Ok(())
+    } else {
+        Err(problems.join("\n"))
+    }
+}
+
+/// Translations (fuzzy ones too) whose placeholders are malformed or don't
+/// match their message: the app ignores them, `update-po` drops them.
+fn malformed(root: &Path) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    for lang in linguas(root) {
+        let file = load(root, &lang)?;
+        for entry in &file.entries {
+            if entry.strs.iter().all(String::is_empty) {
+                continue;
+            }
+            let bad = match po::convert(entry) {
+                None => true,
+                Some((id, plural, strs)) => !strs
+                    .iter()
+                    .all(|s| s.is_empty() || po::placeholders_match(&id, plural.as_deref(), s)),
+            };
+            if bad {
+                let strs: Vec<String> = entry.strs.iter().map(|s| po::quote(s)).collect();
+                out.push(format!(
+                    "po/{lang}.po: {} → {}",
+                    po::quote(&entry.id),
+                    strs.join(" / ")
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn check_po(root: &Path) -> Result<(), String> {
+    let bad = malformed(root)?;
+    for line in &bad {
+        println!("{line}");
+    }
+    println!("{} malformed translations", bad.len());
+    Ok(())
+}
+
+/// Per language: how many of the app's messages it translates.
+pub fn coverage(root: &Path) -> Result<(usize, Vec<(String, usize)>), String> {
+    let unique = unique(&messages(root)?);
+    let mut rows = Vec::new();
+    for lang in linguas(root) {
+        let (catalog, _) = po::catalog(&load(root, &lang)?)?;
+        let keys: std::collections::BTreeSet<(&str, &str)> = catalog
+            .messages
+            .iter()
+            .map(|m| (m.context.as_str(), m.id.as_str()))
+            .collect();
+        let n = unique
+            .iter()
+            .filter(|(m, _, _)| keys.contains(&(m.context.as_deref().unwrap_or(""), m.id.as_str())))
+            .count();
+        rows.push((lang, n));
+    }
+    Ok((unique.len(), rows))
+}
+
+fn stats(root: &Path) -> Result<(), String> {
+    let (total, rows) = coverage(root)?;
+    println!("{total} messages");
+    for (lang, n) in rows {
+        println!(
+            "{lang:>12}: {n:>4} translated ({:.0}%)",
+            100.0 * n as f64 / total.max(1) as f64
+        );
+    }
+    Ok(())
+}
+
+fn msgids(root: &Path, lang: &str) -> Result<(), String> {
+    let file = load(root, lang)?;
+    // How many languages translate each message
+    let mut counts: BTreeMap<(String, String), usize> = BTreeMap::new();
+    for l in linguas(root) {
+        let (catalog, _) = po::catalog(&load(root, &l)?)?;
+        for m in catalog.messages {
+            *counts.entry((m.context, m.id)).or_default() += 1;
+        }
+    }
+    let used: std::collections::BTreeSet<(String, String)> = messages(root)?
+        .into_iter()
+        .map(|m| (m.context.unwrap_or_default(), m.id))
+        .collect();
+    for entry in &file.entries {
+        let Some((id, plural, _)) = po::convert(entry) else {
+            continue;
+        };
+        let id = po::canonical(&po::strip_mnemonic(&id).unwrap_or(id));
+        let ctx = entry.context.clone().unwrap_or_default();
+        let n = counts.get(&(ctx.clone(), id.clone())).copied().unwrap_or(0);
+        let refs: Vec<&str> = entry
+            .comments
+            .iter()
+            .filter_map(|c| c.strip_prefix("#:"))
+            .flat_map(str::split_whitespace)
+            .collect();
+        let mut line = String::new();
+        if used.contains(&(ctx.clone(), id.clone())) {
+            line.push_str("USED ");
+        } else {
+            line.push_str("     ");
+        }
+        if !ctx.is_empty() {
+            let _ = write!(line, "[{ctx}] ");
+        }
+        let _ = write!(line, "{}", po::quote(&id));
+        if let Some(p) = plural {
+            let _ = write!(line, " / {}", po::quote(&p));
+        }
+        let _ = write!(line, "   ({n} langs) {}", refs.join(" "));
+        println!("{line}");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every marked message in the app is well formed.
+    #[test]
+    fn app_messages_are_well_marked() {
+        let messages = messages(&root()).expect("extract");
+        let problems = extract::problems(&messages);
+        assert!(problems.is_empty(), "{}", problems.join("\n"));
+    }
+
+    #[test]
+    fn migrated_catalog_keeps_translations() {
+        let source = r#"msgid ""
+msgstr "Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+#: a.py:1
+msgid "_Save"
+msgstr "_Speichern"
+
+#, python-format
+msgid "%d file"
+msgid_plural "%d files"
+msgstr[0] "%d Datei"
+msgstr[1] "%d Dateien"
+
+#, python-format, fuzzy
+msgid "%s and %s"
+msgstr "%s und %s"
+
+#: meld/filediff.py:9
+msgid "File {} is being compared to itself"
+msgstr "El archivo {]} se compara"
+"#;
+        let file = po::parse(source).unwrap();
+        let text = migrated(&file);
+        assert!(
+            text.contains("msgid \"Save\"\nmsgstr \"Speichern\""),
+            "{text}"
+        );
+        assert!(text.contains("#, rust-format\nmsgid \"{} file\""), "{text}");
+        assert!(text.contains("msgstr[1] \"{} Dateien\""), "{text}");
+        assert!(
+            text.contains("#, fuzzy, rust-format\nmsgid \"{} and {}\""),
+            "{text}"
+        );
+        // A malformed placeholder (which crashes msgmerge 1.0) is dropped
+        assert!(
+            text.contains("msgid \"File {} is being compared to itself\"\nmsgstr \"\""),
+            "{text}"
+        );
+        // And reads back as the same catalog
+        let again = po::parse(&text).unwrap();
+        let original = po::catalog(&file).unwrap().0;
+        let messages = po::catalog(&again).unwrap().0.messages;
+        assert_eq!(messages.len(), 2);
+        assert!(messages.iter().all(|m| original.messages.contains(m)));
+    }
+}

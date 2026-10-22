@@ -1,0 +1,20 @@
+[package]
+name = "meld-ailens"
+description = "AI Lens core: git comparison, line attribution, commit explanations, Claude Code client and build files"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
+regex.workspace = true
+thiserror.workspace = true
+log.workspace = true
+sha1_smol = "1.0.1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.172"
+
+[dev-dependencies]
+tempfile.workspace = true

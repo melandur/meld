@@ -1,0 +1,60 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/meld-diff",
+    "crates/meld-files",
+    "crates/meld-config",
+    "crates/meld-vc",
+    "crates/meld-ailens",
+    "crates/meld-forge",
+    "crates/meld-widgets",
+    "crates/meld",
+    "xtask",
+]
+
+[workspace.package]
+version = "4.0.0-alpha.1"
+edition = "2024"
+license = "GPL-2.0-or-later"
+rust-version = "1.88"
+authors = ["The Meld developers"]
+
+[workspace.dependencies]
+meld-diff = { path = "crates/meld-diff" }
+meld-files = { path = "crates/meld-files" }
+meld-config = { path = "crates/meld-config" }
+meld-vc = { path = "crates/meld-vc" }
+meld-ailens = { path = "crates/meld-ailens" }
+meld-forge = { path = "crates/meld-forge" }
+meld-widgets = { path = "crates/meld-widgets" }
+
+iced = { version = "0.14", features = ["advanced", "canvas", "tokio", "image", "svg", "lazy"] }
+syntect = { version = "5.3", default-features = false, features = ["default-syntaxes", "regex-onig", "parsing"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+regex = "1"
+globset = "0.4"
+thiserror = "2"
+encoding_rs = "0.8"
+chardetng = "0.1"
+dirs = "6"
+quick-xml = "0.38"
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["process", "fs", "rt-multi-thread", "macros", "io-util", "sync", "time"] }
+rfd = "0.17"
+# Already built for iced (through mundy); probes the file chooser portal.
+zbus = { version = "5", default-features = false, features = ["async-io"] }
+tempfile = "3"
+open = "5"
+log = "0.4"
+env_logger = "0.11"
+
+# Dependencies (iced, wgpu, syntect) are slow unoptimized; keep debug
+# builds of Meld itself fast to compile but usable.
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
