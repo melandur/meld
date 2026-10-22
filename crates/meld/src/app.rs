@@ -594,21 +594,31 @@ impl Meld {
         for entry in &self.tabs {
             let selected = Some(entry.id) == self.active;
             let modified = !entry.tab.unsaved().is_empty();
+            // The title is clipped to a fixed width so the close button
+            // always keeps its place, whatever the title's length.
             let mut label = row![].spacing(6).align_y(iced::Center);
             if modified {
                 label = label.push(text(icon::MODIFIED).size(10));
             }
-            label = label.push(text(shorten_middle(&entry.tab.title(), 36)).size(14).wrapping(text::Wrapping::None));
             label = label.push(
-                button(text(icon::CLOSE).size(11))
-                    .padding([1, 5])
-                    .style(ui::flat_button)
-                    .on_press(Message::CloseTab(entry.id)),
+                container(text(shorten_middle(&entry.tab.title(), 30)).size(14).wrapping(text::Wrapping::None))
+                    .max_width(240)
+                    .clip(true),
             );
-            let tab_button = button(container(label).max_width(260))
-                .padding([4, 6])
-                .style(ui::tab_button(selected))
+            let select = button(label)
+                .padding(iced::Padding::from([4, 6]).right(2))
+                .style(ui::flat_button)
                 .on_press(Message::SelectTab(entry.id));
+            let close = button(text(icon::CLOSE).size(11))
+                .padding([1, 5])
+                .style(ui::flat_button)
+                .on_press(Message::CloseTab(entry.id));
+            let tab_button = iced::widget::mouse_area(
+                container(row![select, close].align_y(iced::Center))
+                    .padding(iced::Padding::ZERO.right(4))
+                    .style(ui::tab_container(selected)),
+            )
+            .on_middle_press(Message::CloseTab(entry.id));
             tabs = tabs.push(iced::widget::tooltip(
                 tab_button,
                 container(text(entry.tab.tooltip()).size(13)).padding([4, 8]).style(ui::tooltip_box),

@@ -97,6 +97,24 @@ pub fn tab_button(selected: bool) -> impl Fn(&Theme, button::Status) -> button::
     }
 }
 
+/// The frame of a tab in the tab strip: highlighted when selected.
+pub fn tab_container(selected: bool) -> impl Fn(&Theme) -> container::Style {
+    move |theme| {
+        let palette = theme.extended_palette();
+        if !selected {
+            return container::Style::default();
+        }
+        container::Style {
+            background: Some(Background::Color(palette.background.base.color)),
+            border: Border::default()
+                .rounded(6)
+                .width(1)
+                .color(palette.background.strong.color),
+            ..container::Style::default()
+        }
+    }
+}
+
 pub fn header_bar(theme: &Theme) -> container::Style {
     let palette = theme.extended_palette();
     container::Style {
