@@ -254,6 +254,13 @@ impl ParsedNote {
     pub fn changes_explained(&self) -> bool {
         self.change_model.is_some() || !self.changes.is_empty()
     }
+
+    /// Whether its changes were explained before they were read line by
+    /// line and scored (none of them has steps or a risk), so that they can
+    /// be explained again
+    pub fn changes_outdated(&self) -> bool {
+        !self.changes.is_empty() && !self.changes.iter().any(|c| c.guide.is_current())
+    }
 }
 
 /// Parse an AI Lens note

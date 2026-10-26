@@ -203,11 +203,14 @@ impl UncommittedExplanations {
     }
 
     /// Whether every change block of `diff` has an explanation
+    ///
+    /// Explanations from before steps and risks don't count (see
+    /// [`ChangeGuide::is_current`]): those hunks are explained again.
     pub fn is_explained(&self, layer: UncommittedLayer, diff: &GitFileDiff) -> bool {
-        diff.hunks
-            .iter()
-            .flat_map(GitDiffHunk::blocks)
-            .all(|hunk| self.get(layer, diff, &hunk).is_some())
+        diff.hunks.iter().flat_map(GitDiffHunk::blocks).all(|hunk| {
+            self.get(layer, diff, &hunk)
+                .is_some_and(|found| found.guide.is_current())
+        })
     }
 
     /// The explained hunks of a layer's diffs, where they are now

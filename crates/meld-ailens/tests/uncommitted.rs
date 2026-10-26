@@ -7,8 +7,8 @@ use meld_ailens::uncommitted::{
     HunkExplanation, MAX_ENTRIES, PlacedExplanation, UncommittedExplanations,
 };
 use meld_ailens::{
-    ChangeExplanation, CommitHunk, DiffLineKind, GitDiffHunk, GitDiffLine, GitFileDiff, LineOrigin,
-    Side, UncommittedLayer,
+    ChangeExplanation, ChangeGuide, CommitHunk, DiffLineKind, GitDiffHunk, GitDiffLine,
+    GitFileDiff, LineOrigin, Side, UncommittedLayer,
 };
 
 use UncommittedLayer::{Staged, Unstaged};
@@ -201,7 +201,7 @@ fn remember_keeps_a_models_answers_by_hunk_position() {
             what: "Shouts nine.".into(),
             why: "Louder.".into(),
             justification: None,
-            guide: Default::default(),
+            guide: current(),
         },
         // Matches no hunk of the diff
         ChangeExplanation {
@@ -220,7 +220,7 @@ fn remember_keeps_a_models_answers_by_hunk_position() {
             why: "Louder.".into(),
             justification: None,
             model: "claude-x".into(),
-            guide: Default::default(),
+            guide: current(),
         })
     );
     assert!(!cache.is_explained(Staged, &diff()));
@@ -233,12 +233,41 @@ fn remember_keeps_a_models_answers_by_hunk_position() {
             what: "w".into(),
             why: "y".into(),
             justification: None,
-            guide: Default::default(),
+            guide: current(),
         }],
         "claude-x",
     );
     assert!(cache.is_explained(Staged, &diff()));
     assert!(!cache.is_explained(Unstaged, &diff()));
+}
+
+/// A guide as explanations have them now: with a risk
+fn current() -> ChangeGuide {
+    ChangeGuide {
+        risk: Some(2),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn explanations_from_before_steps_and_risks_are_explained_again() {
+    let cache = UncommittedExplanations::default();
+    // Both hunks of the diff
+    let both = |guide: ChangeGuide| {
+        [1, 9].map(|line| ChangeExplanation {
+            hunk: commit_hunk("a.ts", line, 1, line, 1, None),
+            what: "w".into(),
+            why: "y".into(),
+            justification: None,
+            guide: guide.clone(),
+        })
+    };
+    cache.remember(Staged, &diff(), &both(Default::default()), "claude-x");
+    assert!(!cache.is_explained(Staged, &diff()));
+    // Still shown until then
+    assert_eq!(cache.place(Staged, &[diff()]).len(), 2);
+    cache.remember(Staged, &diff(), &both(current()), "claude-x");
+    assert!(cache.is_explained(Staged, &diff()));
 }
 
 #[test]
@@ -382,7 +411,7 @@ fn changes_git_joined_into_one_hunk_are_explained_apart() {
         what: what.into(),
         why: format!("Why {what}"),
         justification: None,
-        guide: Default::default(),
+        guide: current(),
     };
 
     let cache = UncommittedExplanations::default();

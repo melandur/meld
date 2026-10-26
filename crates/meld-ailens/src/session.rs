@@ -972,9 +972,9 @@ impl CompareSession {
         } else if explanation.why.is_none() {
             Some(ExplainAction::Commit)
         } else if !changes_explained
-            || note
-                .as_ref()
-                .is_some_and(|note| shares_a_joined_change(note, &changes, groups, index))
+            || note.as_ref().is_some_and(|note| {
+                note.changes_outdated() || shares_a_joined_change(note, &changes, groups, index)
+            })
         {
             Some(ExplainAction::Changes)
         } else {
@@ -1134,8 +1134,10 @@ impl CompareSession {
 
     fn commit_needs_explaining(&self, commit: &GitCommit) -> bool {
         let explanation = explain_commit(commit, &self.config.message_format);
-        let changes_explained = Self::note(commit).is_some_and(|note| note.changes_explained());
-        explanation.why.is_none() || !changes_explained
+        let note = Self::note(commit);
+        let changes_explained = note.as_ref().is_some_and(ParsedNote::changes_explained);
+        let outdated = note.as_ref().is_some_and(ParsedNote::changes_outdated);
+        explanation.why.is_none() || !changes_explained || outdated
     }
 
     /// Explain every commit and uncommitted hunk not explained yet

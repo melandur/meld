@@ -433,12 +433,39 @@ fn steps_on_lines_a_later_commit_rewrote_stay_without_lines() {
 }
 
 #[test]
-fn a_note_of_change_blocks_is_not_explained_again() {
-    // Two cards on one explanation, but the note says it is one change block
+fn notes_from_before_steps_and_risks_are_explained_again() {
+    // Change blocks, but neither steps nor a risk
     let note = JOINED_NOTE.replace(
         "Change-Model: old\n",
         "Change-Model: old\nChange-Unit: block\n",
     );
+    let history = joined_history(&note);
+    let session = base_main(&history, None);
+    let entry = entry_for(&session, "app.py");
+    let view = session.file_view(&entry.change, &never()).unwrap();
+    assert!(
+        view.cards
+            .iter()
+            .all(|c| c.explain == Some(ExplainAction::Changes))
+    );
+    // Explaining everything takes it too, and then it is current
+    assert_eq!(session.explain_all(&never(), None, false).unwrap(), 1);
+    let cards = session.cards(&view, &never()).unwrap();
+    assert!(cards.iter().all(|c| c.explain.is_none()));
+    assert!(cards.iter().all(|c| c.change_risk == Some(4)));
+    assert!(cards.iter().all(|c| !c.change_steps.is_empty()));
+    assert_eq!(session.explain_all(&never(), None, false).unwrap(), 0);
+}
+
+#[test]
+fn a_note_of_change_blocks_is_not_explained_again() {
+    // Two cards on one explanation, but the note says it is one change block
+    let note = JOINED_NOTE
+        .replace(
+            "Change-Model: old\n",
+            "Change-Model: old\nChange-Unit: block\n",
+        )
+        .replace("What: Both\n", "Risk: 2\nWhat: Both\n");
     let history = joined_history(&note);
     let session = base_main(&history, None);
     let entry = entry_for(&session, "app.py");

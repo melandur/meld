@@ -789,6 +789,13 @@ impl ChangeGuide {
     /// The range of [`ChangeGuide::risk`]
     pub const RISKS: std::ops::RangeInclusive<u8> = 1..=5;
 
+    /// Whether the change was explained line by line and scored, as
+    /// explanations are now; those written before steps and risks were
+    /// asked for have neither, and are offered to be explained again
+    pub fn is_current(&self) -> bool {
+        !self.steps.is_empty() || self.risk.is_some()
+    }
+
     /// A risk read from an answer or a note: None outside 1 to 5
     pub fn parse_risk(value: i64) -> Option<u8> {
         u8::try_from(value)
