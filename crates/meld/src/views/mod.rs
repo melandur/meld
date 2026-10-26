@@ -51,7 +51,7 @@ pub enum Event {
 }
 
 pub enum Tab {
-    New(newtab::NewTab),
+    New(Box<newtab::NewTab>),
     File(Box<filediff::FileDiff>),
     Folder(Box<dirdiff::DirDiff>),
     Vc(Box<vcview::VcView>),
@@ -161,7 +161,7 @@ impl Tab {
     }
 
     pub fn new_comparison(shared: &Shared) -> Tab {
-        Tab::New(newtab::NewTab::new(shared))
+        Tab::New(Box::new(newtab::NewTab::new(shared)))
     }
 
     pub fn title(&self) -> String {

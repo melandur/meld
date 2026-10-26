@@ -105,10 +105,13 @@ pub fn extra(options: &str) -> String {
         .join("; ")
 }
 
+/// Translates a label's base name into one of its forms.
+type Translate = fn(&str) -> String;
+
 /// A comparison's pane or tab label from `prepare_diff`: "a.txt — local",
 /// "a.txt (working, repository)"…
 pub fn diff_label(label: &str) -> String {
-    let forms: [(&str, fn(&str) -> String); 7] = [
+    let forms: [(&str, Translate); 7] = [
         (" — repository", |b| tr!("{} — repository", b)),
         (" — local", |b| tr!("{} — local", b)),
         (" — remote", |b| tr!("{} — remote", b)),

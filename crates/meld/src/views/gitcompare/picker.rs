@@ -75,7 +75,7 @@ pub enum Outcome {
     /// Search history for this text once the delay passed (generation).
     ScheduleSearch(u64),
     /// The user picked an entry.
-    Picked(PickerEntry),
+    Picked(Box<PickerEntry>),
     /// List the pull requests in this state.
     PrFilter(StateFilter),
     /// List the pull requests of this remote.
@@ -258,11 +258,11 @@ impl Picker {
                 }
             }
             Message::Submit => match self.rows.get(self.selected).or(self.rows.first()) {
-                Some(entry) => Outcome::Picked(entry.clone()),
+                Some(entry) => Outcome::Picked(Box::new(entry.clone())),
                 None => Outcome::None,
             },
             Message::Pick(index) => match self.rows.get(index) {
-                Some(entry) => Outcome::Picked(entry.clone()),
+                Some(entry) => Outcome::Picked(Box::new(entry.clone())),
                 None => Outcome::None,
             },
             Message::Move(step) => {
@@ -720,7 +720,7 @@ mod tests {
         let Outcome::Picked(entry) = p.update(Message::Submit) else {
             panic!("nothing picked");
         };
-        assert_eq!(entry, p.rows()[2]);
+        assert_eq!(*entry, p.rows()[2]);
         assert_eq!(p.update(Message::Pick(10_000)), Outcome::None);
     }
 
