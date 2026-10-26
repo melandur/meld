@@ -9,9 +9,9 @@ use common::{CommitOptions, FixtureRepo, co_authored_by_claude};
 use meld_ailens::claude::{ClaudeRequest, ClaudeResponse, RunClaude};
 use meld_ailens::session::MAX_FILE_BYTES;
 use meld_ailens::{
-    CancelToken, CardKind, CompareSession, Error, ExplainAction, ExplanationSource, FileEntry,
-    GitFileChange, GitFileStatus, PickerSide, RepositoryInfo, Revision, SessionConfig,
-    UncommittedLayer, build_file_tree,
+    CancelToken, CardKind, CardStep, CompareSession, Error, ExplainAction, ExplanationSource,
+    FileEntry, GitFileChange, GitFileStatus, LineRange, PickerSide, RepositoryInfo, Revision,
+    SessionConfig, Side, UncommittedLayer, build_file_tree,
 };
 use regex::Regex;
 use serde_json::json;
@@ -61,6 +61,9 @@ impl FakeClaude {
                     "what": format!("Change {n} what"),
                     "why": format!("Change {n} why"),
                     "justification": format!("Change {n} justification"),
+                    "steps": first_added_tag(&request.prompt, *n)
+                        .map(|tag| vec![json!({"lines": tag, "says": format!("Change {n} step")})])
+                        .unwrap_or_default(),
                 })
             })
             .collect();
@@ -83,6 +86,17 @@ impl FakeClaude {
         let fake = self.clone();
         Arc::new(move |request, cancel| fake.answer(request, cancel))
     }
+}
+
+/// The tag (`n4`) of the first added line of change `number` in a prompt
+fn first_added_tag(prompt: &str, number: u64) -> Option<String> {
+    let start = prompt.find(&format!("[change {number}]"))?;
+    let rest = &prompt[start..];
+    let end = rest[1..].find("[change ").map_or(rest.len(), |end| end + 1);
+    Regex::new(r"(?m)^(n\d+)\s+\+")
+        .unwrap()
+        .captures(&rest[..end])
+        .map(|c| c[1].to_string())
 }
 
 fn config_with(fake: Option<Arc<FakeClaude>>) -> SessionConfig {
@@ -243,6 +257,19 @@ fn explain_commit_saves_note_and_updates_cards() {
     assert_eq!(agent.change_what, "Change 1 what");
     assert_eq!(agent.change_justification, "Change 1 justification");
     assert_eq!(agent.explain, None);
+    // "four" is the 4th line of the commit's change block (from line 1) and
+    // of the comparison
+    assert!(
+        note.contains("Step: +4 Change 1 step\nWhy: Change 1 why"),
+        "{note}"
+    );
+    assert_eq!(
+        agent.change_steps,
+        [CardStep {
+            lines: Some((Side::New, LineRange::new(4, 4))),
+            text: "Change 1 step".into(),
+        }]
+    );
     assert!(
         note.contains("Why: Inferred why\nJustification: Inferred justification\n")
             && note.contains("Why: Change 1 why\nJustification: Change 1 justification"),
@@ -336,6 +363,68 @@ fn a_note_of_change_blocks_is_not_explained_again() {
     let view = session.file_view(&entry.change, &never()).unwrap();
     assert_eq!(view.cards.len(), 2);
     assert!(view.cards.iter().all(|c| c.explain.is_none()));
+}
+
+/// A commit whose lines a later commit moved down: its note numbers them
+/// in its own diff, the comparison two lines further down
+fn shifted_history(note: &str) -> FixtureRepo {
+    let mut repo = FixtureRepo::new();
+    repo.commit(
+        "Adds the app",
+        files![("app.py", "a\nb\nc\n")],
+        Some("base"),
+    );
+    repo.commit(
+        "Splits b\n\nWhy: Two steps read better.",
+        files![("app.py", "a\nB\nB2\nc\n")],
+        Some("split"),
+    );
+    repo.commit(
+        "Adds a header",
+        files![("app.py", "header\n\na\nB\nB2\nc\n")],
+        Some("header"),
+    );
+    repo.note("split", note, "ai-lens");
+    repo
+}
+
+#[test]
+fn note_steps_land_on_their_lines_in_the_comparison() {
+    let note = "Change-Model: m\nChange-Unit: block\n\n\
+         Change: -2,1 +2,2 app.py\n\
+         What: Splits b in two\n\
+         Step: +1 Uppercases b.\n\
+         Step: +2 Adds the second half.\n\
+         Step: -1 Drops the old b.\n\
+         Step: Keeps c as it was.\n\
+         Step: +9 Past the change.\n\
+         Why: Two steps read better.\n";
+    let history = shifted_history(note);
+    let session = base_main(&history, None);
+    let entry = entry_for(&session, "app.py");
+    let view = session.file_view(&entry.change, &never()).unwrap();
+    let split = view
+        .cards
+        .iter()
+        .find(|c| c.sha.as_deref() == Some(&history.sha("split")))
+        .unwrap();
+    let at = |side, start, end| Some((side, LineRange::new(start, end)));
+    let lines: Vec<_> = split.change_steps.iter().map(|s| s.lines).collect();
+    assert_eq!(
+        lines,
+        [
+            // B and B2 are lines 2 and 3 of the commit, 4 and 5 here
+            at(Side::New, 4, 4),
+            at(Side::New, 5, 5),
+            // b is line 2 of the base on both
+            at(Side::Old, 2, 2),
+            None,
+            // Not a line of this card
+            None,
+        ]
+    );
+    assert_eq!(split.change_steps[0].text, "Uppercases b.");
+    assert_eq!(split.change_what, "Splits b in two");
 }
 
 #[test]
@@ -473,6 +562,14 @@ fn working_tree_layers() {
     let unstaged = cards.iter().find(|c| c.kind == CardKind::Unstaged).unwrap();
     assert_eq!(staged.change_what, "Change 1 what");
     assert_eq!(staged.change_justification, "Change 1 justification");
+    // "zero", staged, is line 1 of the working tree too
+    assert_eq!(
+        staged.change_steps,
+        [CardStep {
+            lines: Some((Side::New, LineRange::new(1, 1))),
+            text: "Change 1 step".into(),
+        }]
+    );
     assert_eq!(staged.explain, None);
     assert_eq!(unstaged.explain, Some(ExplainAction::Uncommitted));
 

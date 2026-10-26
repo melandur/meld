@@ -2771,18 +2771,20 @@ impl GitCompare {
         let (font, size) = self.diff.text_font();
         let font = whycolumn::CardFont { font, size };
         let reading = whycolumn::reading_order(cards);
-        let mut elements: Vec<Element<'_, Message>> = cards
-            .iter()
-            .zip(reading)
-            .map(|(card, reading)| {
-                whycolumn::card_view(card, &self.cards, callbacks, now, font, reading)
-            })
-            .collect();
+        let panes = [self.diff.pane_geometry(0), self.diff.pane_geometry(1)];
+        let items =
+            whycolumn::explain_items(cards, &self.cards, callbacks, now, font, reading, panes);
+        let mut wanted = Vec::with_capacity(items.len());
+        let mut below = Vec::with_capacity(items.len());
+        let mut elements: Vec<Element<'_, Message>> = Vec::with_capacity(items.len());
+        for item in items {
+            wanted.push(item.y);
+            below.push(item.below);
+            elements.push(item.element);
+        }
         let summary = summary
             .then(|| whycolumn::commit_summary(cards, &self.cards, callbacks, now, font))
             .flatten();
-        let panes = [self.diff.pane_geometry(0), self.diff.pane_geometry(1)];
-        let mut wanted = whycolumn::wanted_tops(cards, panes);
         // The pull request's comments on this file, beside their lines
         let mut comments = 0;
         if let (Some(pr), Some(view), false) =
@@ -2791,7 +2793,11 @@ impl GitCompare {
             let change = view.change();
             for (top, card) in pr.cards(&change.path, change.original_path.as_deref(), panes) {
                 wanted.push(top);
-                elements.push(card.map(Message::Review));
+                elements.push(
+                    container(card.map(Message::Review))
+                        .padding(iced::Padding::default().top(whycolumn::CARD_GAP))
+                        .into(),
+                );
                 comments += 1;
             }
         }
@@ -2811,7 +2817,10 @@ impl GitCompare {
                 .center_x(Length::Fill)
                 .into()
             });
-        whycolumn::card_column(elements, wanted, placeholder, summary).into()
+        whycolumn::card_column(elements, wanted, placeholder, summary)
+            .below(below)
+            .gap(0.0)
+            .into()
     }
 }
 

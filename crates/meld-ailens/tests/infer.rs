@@ -1249,3 +1249,85 @@ fn prompt_lines_are_tagged_with_their_line_numbers() {
         prompt.text
     );
 }
+
+#[test]
+fn step_tags_are_read_leniently_but_only_as_lines_of_the_change() {
+    // Lines 10-14 new, 7-8 old
+    let hunks = [hunk_ref("a.rs", 7, 2, 10, 5)];
+    let steps = |tags: &[&str]| {
+        let steps: Vec<Value> = tags
+            .iter()
+            .map(|tag| json!({"lines": tag, "says": format!("at {tag}")}))
+            .collect();
+        let answer = json!([{"change": 1, "what": "w", "why": "y", "steps": steps}]);
+        parse_changes(Some(&answer), &hunks)[0]
+            .guide
+            .steps
+            .iter()
+            .map(|step| step.lines)
+            .collect::<Vec<_>>()
+    };
+    let at = |side, first, last| Some(StepLines { side, first, last });
+    assert_eq!(
+        steps(&["N11", "n13-11", "n12-14", "o7-8", " o8 ", "n14-n20"]),
+        [
+            at(Side::New, 2, 2),
+            // Backwards ranges are turned round
+            at(Side::New, 2, 4),
+            // The side may be given once
+            at(Side::New, 3, 5),
+            at(Side::Old, 1, 2),
+            at(Side::Old, 2, 2),
+            // Cut to the change's last line
+            at(Side::New, 5, 5),
+        ]
+    );
+    // No side, unknown side, not numbers, lines before or after the change
+    assert_eq!(
+        steps(&["12", "x12", "nope", "", "n9", "n15", "o9"]),
+        [None, None, None, None, None, None, None]
+    );
+    // A change without lines on a side has no lines there
+    let added = [hunk_ref("a.rs", 3, 0, 4, 1)];
+    let answer = json!([{"change": 1, "what": "w", "why": "y",
+        "steps": [{"lines": "o3", "says": "s"}, {"lines": "n4", "says": "t"}]}]);
+    let lines: Vec<_> = parse_changes(Some(&answer), &added)[0]
+        .guide
+        .steps
+        .iter()
+        .map(|s| s.lines)
+        .collect();
+    assert_eq!(lines, [None, at(Side::New, 1, 1)]);
+}
+
+#[test]
+fn malformed_steps_are_dropped_and_the_change_kept() {
+    let hunks = [hunk_ref("a.rs", 1, 1, 1, 1)];
+    let answer = json!([{
+        "change": 1, "what": "w", "why": "y",
+        "steps": [{"lines": "n1"}, {"says": "no lines"}, "text", {"lines": 1, "says": "numeric"}],
+    }]);
+    let changes = parse_changes(Some(&answer), &hunks);
+    assert_eq!(changes.len(), 1);
+    assert_eq!(
+        changes[0].guide.steps,
+        [
+            ChangeStep {
+                lines: None,
+                text: "no lines".into()
+            },
+            ChangeStep {
+                lines: None,
+                text: "numeric".into()
+            },
+        ]
+    );
+    // Steps that are not a list are none
+    let answer = json!([{"change": 1, "what": "w", "why": "y", "steps": "n1"}]);
+    assert!(
+        parse_changes(Some(&answer), &hunks)[0]
+            .guide
+            .steps
+            .is_empty()
+    );
+}

@@ -1226,3 +1226,73 @@ fn change_unit_says_whether_changes_are_change_blocks() {
         "By hand.\n\nChange-Unit: block"
     );
 }
+
+#[test]
+fn step_lines_labels_round_trip() {
+    let at = |side, first, last| StepLines { side, first, last };
+    for lines in [
+        at(Side::New, 1, 1),
+        at(Side::New, 3, 12),
+        at(Side::Old, 7, 7),
+        at(Side::Old, 2, 4),
+    ] {
+        assert_eq!(StepLines::parse(&lines.label()), Some(lines));
+    }
+    assert_eq!(at(Side::New, 3, 5).label(), "+3-5");
+    assert_eq!(at(Side::Old, 2, 2).label(), "-2");
+    for bad in ["", "3", "+", "+0", "+5-3", "+a", "-1-", "*2"] {
+        assert_eq!(StepLines::parse(bad), None, "{bad}");
+    }
+}
+
+#[test]
+fn step_lines_are_placed_in_their_hunk() {
+    let hunk = CommitHunk {
+        path: "a.rs".into(),
+        old_start: 7,
+        old_count: 2,
+        new_start: 10,
+        new_count: 5,
+        original_path: None,
+    };
+    let at = |side, first, last| StepLines { side, first, last };
+    assert_eq!(at(Side::New, 1, 3).in_hunk(&hunk), (10, 12));
+    assert_eq!(at(Side::Old, 2, 2).in_hunk(&hunk), (8, 8));
+}
+
+#[test]
+fn note_steps_without_text_or_with_odd_labels() {
+    let note = "Change-Model: m\nChange: -1 +1 a.rs\nWhat: W\n\
+        Step: +1\nStep:   \nStep: +x reads x\nStep: +2-1 backwards\nStep: -3  old\nWhy: Y\n\
+        Step: +1 in the Why";
+    let parsed = parse_note(note);
+    let steps = &parsed.changes[0].guide.steps;
+    assert_eq!(
+        steps,
+        &[
+            // A label alone is the text: there are no lines without text
+            ChangeStep {
+                lines: None,
+                text: "+1".into()
+            },
+            ChangeStep {
+                lines: None,
+                text: "+x reads x".into()
+            },
+            ChangeStep {
+                lines: None,
+                text: "+2-1 backwards".into()
+            },
+            ChangeStep {
+                lines: Some(StepLines {
+                    side: Side::Old,
+                    first: 3,
+                    last: 3
+                }),
+                text: "old".into()
+            },
+        ]
+    );
+    // A Step line after the Why is part of the Why
+    assert_eq!(parsed.changes[0].why, "Y\nStep: +1 in the Why");
+}

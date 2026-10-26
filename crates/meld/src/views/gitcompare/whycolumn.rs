@@ -24,7 +24,8 @@ use iced::{
     Background, Border, Color, Element, Event, Font, Length, Rectangle, Renderer, Size, Theme,
     Vector,
 };
-use meld_ailens::cards::{CARD_GAP, layout_cards, reflow};
+pub use meld_ailens::cards::CARD_GAP;
+use meld_ailens::cards::{layout_cards, reflow};
 use meld_ailens::picker::parse_iso_date;
 use meld_ailens::{Card, CardKind, CardStep, ChangeKind, ExplainAction, ExplanationSource, Side};
 
@@ -102,6 +103,109 @@ pub fn place_cards(wanted: &[f32], heights: &[f32], gap: f32) -> Vec<f32> {
         tops[index] = top;
     }
     tops
+}
+
+/// Final tops for cards of `heights` wanting `wanted`, without overlaps, and
+/// kept above `bottom` (the column's height) where that can be done.
+///
+/// [`place_cards`] only ever pushes cards down, so near the end of a file
+/// the last cards would hang below the column, where scrolling the panes
+/// can't bring them. Cards in view (`wanted` above `bottom`) are pulled
+/// back up just enough to end at `bottom`, the cards above them with them.
+/// A card whose line (`lines`, where it is anchored) is below `top` (the
+/// column's header) never goes above `top`, and pushes the cards after it
+/// down instead; one whose line scrolled up to or above `top` may stay
+/// there, partly hidden, so the cards after it keep their lines. Cards
+/// further down are left alone.
+pub fn fit_cards(
+    wanted: &[f32],
+    lines: &[f32],
+    heights: &[f32],
+    gap: f32,
+    top: f32,
+    bottom: f32,
+) -> Vec<f32> {
+    let mut tops = place_cards(wanted, heights, gap);
+    let mut order: Vec<usize> = (0..wanted.len()).collect();
+    order.sort_by(|&a, &b| tops[a].total_cmp(&tops[b]).then(a.cmp(&b)));
+    let in_view: Vec<usize> = order
+        .iter()
+        .copied()
+        .filter(|&i| wanted[i] < bottom)
+        .collect();
+    let floors: Vec<f32> = in_view
+        .iter()
+        .map(|&i| {
+            if lines[i] >= top {
+                top
+            } else {
+                tops[i].min(top)
+            }
+        })
+        .collect();
+    // From the bottom up: end each card above the one below it
+    let mut limit = bottom;
+    for &index in in_view.iter().rev() {
+        tops[index] = tops[index].min(limit - heights[index]);
+        limit = tops[index] - gap;
+    }
+    // From the top down: not above the header, and never overlapping
+    let mut floor = f32::NEG_INFINITY;
+    for (&index, &lowest) in in_view.iter().zip(&floors) {
+        tops[index] = tops[index].max(lowest).max(floor);
+        floor = tops[index] + heights[index] + gap;
+    }
+    tops
+}
+
+/// Where each card wants to start, and the line it is anchored at.
+///
+/// A card starts at its `wanted`, except a block's header (`below` set):
+/// it ends at its `wanted`, above its block, when there is room there, and
+/// otherwise starts at its `below`, under its block, so the block's steps
+/// stay level with their lines. There is no room above when the header
+/// would cover the cards before it, or, with its block in view (at or
+/// below the column's top), go above `top`, under the column's header.
+pub fn wanted_starts(
+    wanted: &[f32],
+    below: &[Option<f32>],
+    heights: &[f32],
+    gap: f32,
+    top: f32,
+) -> (Vec<f32>, Vec<f32>) {
+    let below = |index: usize| below.get(index).copied().flatten();
+    let mut starts: Vec<f32> = wanted
+        .iter()
+        .zip(heights)
+        .enumerate()
+        .map(|(index, (wanted, height))| match below(index) {
+            Some(_) => wanted - height,
+            None => *wanted,
+        })
+        .collect();
+    let mut lines = wanted.to_vec();
+    let mut order: Vec<usize> = (0..wanted.len()).collect();
+    order.sort_by(|&a, &b| starts[a].total_cmp(&starts[b]).then(a.cmp(&b)));
+    // Where the cards placed so far end, as place_cards will place them
+    let mut bottom = f32::NEG_INFINITY;
+    for index in order {
+        if let Some(after) = below(index) {
+            let floor = if wanted[index] >= 0.0 {
+                bottom.max(top)
+            } else {
+                bottom
+            };
+            if starts[index] < floor {
+                // Placed with the cards under its block
+                starts[index] = after;
+                lines[index] = after;
+                continue;
+            }
+        }
+        let placed = starts[index].max(bottom + gap);
+        bottom = bottom.max(placed + heights[index]);
+    }
+    (starts, lines)
 }
 
 /// A Unix time in local time, e.g. `Tue 21 Oct 2026 17:08:48` (the
@@ -309,6 +413,18 @@ fn rich<'a, M: Clone + 'a>(
     dim: bool,
     on_jump: fn(String) -> M,
 ) -> Element<'a, M> {
+    rich_with(body, size, font, dim, on_jump, None)
+}
+
+/// [`rich`] with lines `line_height` pixels apart, when given.
+fn rich_with<'a, M: Clone + 'a>(
+    body: &str,
+    size: f32,
+    font: Font,
+    dim: bool,
+    on_jump: fn(String) -> M,
+    line_height: Option<f32>,
+) -> Element<'a, M> {
     let spans: Vec<text::Span<'a, String, Font>> = split_code(body)
         .into_iter()
         .map(|(part, code)| {
@@ -331,6 +447,9 @@ fn rich<'a, M: Clone + 'a>(
         .wrapping(text::Wrapping::WordOrGlyph)
         .width(Length::Fill)
         .on_link_click(on_jump);
+    if let Some(height) = line_height {
+        t = t.line_height(text::LineHeight::Absolute(height.into()));
+    }
     if dim {
         t = t.style(ui::dim_text);
     }
@@ -455,57 +574,56 @@ fn before_after<'a, M: Clone + 'a>(
     .into()
 }
 
-/// A step's lines as a label: `12`, `12–14`, and `−7` for lines of the
-/// base version; `·` for a step without lines.
-pub fn step_label(step: &CardStep) -> String {
-    match step.lines {
-        Some((side, range)) => {
-            let sign = match side {
-                Side::Old => "−",
-                Side::New => "",
-            };
-            if range.start == range.end {
-                format!("{sign}{}", range.start)
-            } else {
-                format!("{sign}{}–{}", range.start, range.end)
-            }
-        }
-        None => "·".to_string(),
-    }
-}
-
-/// The change read line by line: each step's lines beside what they do.
-/// Hovering a step highlights its lines.
-fn steps_view<'a, M: Clone + 'a>(
+/// One step of a change, level with the lines it explains: the code's
+/// font, size and line height, so each of its lines is beside a line of
+/// code. Steps of changes to skim are dimmed; hovering one highlights its
+/// lines.
+fn step_view<'a, M: Clone + 'a>(
     card: &'a Card,
+    index: usize,
+    step: &'a CardStep,
+    states: &CardStates,
     callbacks: Callbacks<M>,
     font: CardFont,
+    line_height: f32,
 ) -> Element<'a, M> {
-    let labels: Vec<String> = card.change_steps.iter().map(step_label).collect();
-    let widest = labels.iter().map(|l| l.chars().count()).max().unwrap_or(1);
-    // Monospace digits are about 0.6 of the size wide
-    let width = (widest as f32 * 0.62 + 0.6) * font.smaller(2.0);
-    let mut steps = column![].spacing(2).width(Length::Fill);
-    for (index, (step, label)) in card.change_steps.iter().zip(labels).enumerate() {
-        let line = row![
-            text(label)
-                .size(font.smaller(2.0))
-                .font(font.font)
-                .style(ui::dim_text)
-                .width(width)
-                .align_x(iced::alignment::Horizontal::Right)
-                .wrapping(text::Wrapping::None),
-            rich(&step.text, font.size, font.font, false, callbacks.jump),
-        ]
-        .spacing(6)
-        .align_y(iced::Alignment::Start);
-        steps = steps.push(
-            mouse_area(line)
-                .on_enter((callbacks.hover_step)(card.key.clone(), Some(index)))
-                .on_exit((callbacks.hover_step)(card.key.clone(), None)),
-        );
-    }
-    steps.into()
+    let skim = card.change_kind.is_some_and(ChangeKind::skimmable);
+    let body = rich_with(
+        &step.text,
+        font.size,
+        font.font,
+        skim,
+        callbacks.jump,
+        Some(line_height),
+    );
+    let hovered = states.hovered.as_deref() == Some(card.key.as_str());
+    let color = card.clone();
+    let edge = container(space::vertical())
+        .width(2)
+        .height(Length::Fill)
+        .style(move |theme: &Theme| container::Style {
+            background: Some(Background::Color(
+                card_color(&color, theme.extended_palette().background.base.text).scale_alpha(0.6),
+            )),
+            ..container::Style::default()
+        });
+    let line = container(row![
+        edge,
+        container(body).padding([0, 6]).width(Length::Fill)
+    ])
+    .width(Length::Fill)
+    .style(move |theme: &Theme| {
+        let palette = theme.extended_palette();
+        container::Style {
+            background: hovered
+                .then(|| Background::Color(palette.primary.base.color.scale_alpha(0.08))),
+            ..container::Style::default()
+        }
+    });
+    mouse_area(container(line).padding([0, 6]))
+        .on_enter((callbacks.hover_step)(card.key.clone(), Some(index)))
+        .on_exit((callbacks.hover_step)(card.key.clone(), None))
+        .into()
 }
 
 /// The line that opens and closes a card: quiet until hovered.
@@ -691,6 +809,87 @@ fn build_links<'a, M: Clone + 'a>(
         .collect()
 }
 
+/// What the column shows, and where: each element wants to start at `y`;
+/// a block's header wants to end there, or when there is no room, to start
+/// at `below` ([`wanted_starts`]).
+pub struct Item<'a, M> {
+    pub element: Element<'a, M>,
+    pub y: f32,
+    pub below: Option<f32>,
+}
+
+/// The column laid out like the panes beside it: per change block its card
+/// as a header, ending where the block's first line starts (or under the
+/// block, when there is no room above it), then each step level with the
+/// first line it explains. Steps without lines start with the block; steps
+/// on deleted lines of a block that also adds lines come right after the
+/// block, so they don't push the steps of its added lines off their lines.
+/// For a [`card_column`] without a gap: the headers keep their own space
+/// above them.
+#[allow(clippy::too_many_arguments)]
+pub fn explain_items<'a, M: Clone + 'a>(
+    cards: &'a [Card],
+    states: &'a CardStates,
+    callbacks: Callbacks<M>,
+    now: f64,
+    font: CardFont,
+    reading: Vec<Option<(usize, usize)>>,
+    panes: [Option<PaneGeometry>; 2],
+) -> Vec<Item<'a, M>> {
+    let line_height = panes
+        .iter()
+        .flatten()
+        .map(|g| g.line_height)
+        .next()
+        .unwrap_or(font.size * 1.35);
+    let tops = wanted_tops(cards, panes);
+    let line_end = |side: Side, ranges: &[meld_ailens::LineRange]| {
+        let end = ranges.iter().map(|r| r.end).max()?;
+        let pane = match side {
+            Side::Old => 0,
+            Side::New => 1,
+        };
+        panes[pane].map(|g| g.line_y(end))
+    };
+    let mut items = Vec::new();
+    for ((card, reading), top) in cards.iter().zip(reading).zip(tops) {
+        // Under the block: after its added lines, else its deleted ones
+        let end = line_end(Side::New, &card.added)
+            .or_else(|| line_end(Side::Old, &card.deleted))
+            .unwrap_or(top);
+        // The space above the header is its own: steps sit on their lines
+        // with no gap between them
+        items.push(Item {
+            element: container(card_view(card, states, callbacks, now, font, reading))
+                .padding(iced::Padding::default().top(CARD_GAP))
+                .into(),
+            y: top,
+            below: Some(end),
+        });
+        for (index, step) in card.change_steps.iter().enumerate() {
+            let y = step
+                .lines
+                .and_then(|(side, range)| {
+                    if side == Side::Old && !card.added.is_empty() {
+                        return Some(end);
+                    }
+                    let pane = match side {
+                        Side::Old => 0,
+                        Side::New => 1,
+                    };
+                    panes[pane].map(|g| g.line_y(range.start.saturating_sub(1)))
+                })
+                .unwrap_or(top);
+            items.push(Item {
+                element: step_view(card, index, step, states, callbacks, font, line_height),
+                y,
+                below: None,
+            });
+        }
+    }
+    items
+}
+
 /// The card's headline: what its change does, else what its commit did.
 fn headline(card: &Card) -> &str {
     if !card.change_what.is_empty() {
@@ -705,12 +904,14 @@ fn has_change(card: &Card) -> bool {
     !card.change_what.is_empty() || !card.change_why.is_empty()
 }
 
-/// One card, read at a glance: the change's kind, its place in the reading
-/// order, a statement of what the changed code does, and then the code
-/// line by line (in notes from before steps, what it did before and does
-/// now). Open, it adds what to check, the Was and Now, the Why and
-/// Justification, who made the change and the builds that cover it. Changes to skim (renames, mechanical changes,
-/// tests) show their headline only until opened. What the commit as a
+/// One card, the header of its change block, read at a glance: the
+/// change's kind, its place in the reading order and a statement of what
+/// the changed code does (in notes from before steps, what it did before
+/// and does now). The steps are beside their lines ([`explain_items`]).
+/// Open, it adds what to check, the Was and Now, the Why and
+/// Justification, who made the change and the builds that cover it.
+/// Changes to skim (renames, mechanical changes, tests) show their headline
+/// only until opened. What the commit as a
 /// whole did is in the summary above the cards ([`commit_summary`]).
 pub fn card_view<'a, M: Clone + 'a>(
     card: &'a Card,
@@ -759,9 +960,6 @@ pub fn card_view<'a, M: Clone + 'a>(
     let steps = !card.change_steps.is_empty();
     // With steps, the before and after wait until the card is opened
     let was_now = if steps { open } else { !skim };
-    if !skim && steps {
-        body = body.push(steps_view(card, callbacks, font));
-    }
     if was_now {
         if !card.change_was.is_empty() {
             body = body.push(before_after(tr!("Was"), &card.change_was, callbacks, font));
@@ -916,9 +1114,6 @@ pub fn card_view<'a, M: Clone + 'a>(
 
     // What opening the card shows
     let mut more: Vec<String> = Vec::new();
-    if skim && steps {
-        more.push(tr!("Line by line").to_string());
-    }
     if !was_now && (!card.change_was.is_empty() || !card.change_now.is_empty()) {
         more.push(tr!("Was/Now").to_string());
     }
@@ -1182,11 +1377,25 @@ fn mix(a: Color, b: Color, t: f32) -> Color {
 /// clipped to its bounds. Takes all the space it gets and never asks for
 /// height: the cards scroll with the panes. An optional header stays at the
 /// top, over the cards scrolling past it.
+/// How far the cards are scrolled up, when those in view don't fit.
+#[derive(Default)]
+struct ColumnState {
+    offset: f32,
+    /// How far they can be: what the cards in view need beyond the column
+    overflow: f32,
+}
+
+/// Pixels a wheel line scrolls the cards.
+const WHEEL_LINE: f32 = 40.0;
+
 pub struct CardColumn<'a, M> {
     /// The header first, if any, then the cards
     children: Vec<Element<'a, M>>,
     /// One per card
     wanted: Vec<f32>,
+    /// Per card: for a block's header, where it starts when there is no
+    /// room for it to end at its `wanted` ([`wanted_starts`])
+    below: Vec<Option<f32>>,
     gap: f32,
     header: bool,
 }
@@ -1211,12 +1420,27 @@ pub fn card_column<'a, M: 'a>(
     CardColumn {
         children,
         wanted,
+        below: Vec::new(),
         gap: CARD_GAP,
         header: has_header,
     }
 }
 
 impl<'a, M: 'a> CardColumn<'a, M> {
+    /// The space between cards that clear each other ([`CARD_GAP`] unless
+    /// set)
+    pub fn gap(mut self, gap: f32) -> Self {
+        self.gap = gap;
+        self
+    }
+
+    /// Which cards are blocks' headers, and where each goes under its
+    /// block (one per card, in order; see [`wanted_starts`])
+    pub fn below(mut self, below: Vec<Option<f32>>) -> Self {
+        self.below = below;
+        self
+    }
+
     /// Visible part of `bounds` only gets the cursor, so cards scrolled
     /// out of the column can't be clicked through the widgets around it.
     fn cursor_in(bounds: Rectangle, cursor: mouse::Cursor) -> mouse::Cursor {
@@ -1255,6 +1479,14 @@ impl<'a, M: 'a> CardColumn<'a, M> {
 }
 
 impl<'a, M: 'a> Widget<M, Theme, Renderer> for CardColumn<'a, M> {
+    fn tag(&self) -> widget::tree::Tag {
+        widget::tree::Tag::of::<ColumnState>()
+    }
+
+    fn state(&self) -> widget::tree::State {
+        widget::tree::State::new(ColumnState::default())
+    }
+
     fn children(&self) -> Vec<Tree> {
         self.children.iter().map(Tree::new).collect()
     }
@@ -1293,9 +1525,27 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for CardColumn<'a, M> {
             .iter()
             .map(|n| n.size().height)
             .collect();
-        let tops = place_cards(&self.wanted, &heights, self.gap);
+        let header = if self.header {
+            nodes[0].size().height
+        } else {
+            0.0
+        };
+        let (wanted, lines) = wanted_starts(&self.wanted, &self.below, &heights, self.gap, header);
+        let tops = fit_cards(&wanted, &lines, &heights, self.gap, header, size.height);
+        // What the cards in view still need below the column, after fitting
+        let overflow = wanted
+            .iter()
+            .zip(&tops)
+            .zip(&heights)
+            .filter(|((wanted, _), _)| **wanted < size.height)
+            .map(|((_, top), height)| top + height - size.height)
+            .fold(0.0_f32, f32::max);
+        let state = tree.state.downcast_mut::<ColumnState>();
+        state.overflow = overflow;
+        state.offset = state.offset.clamp(0.0, overflow);
+        let offset = state.offset;
         for (node, top) in nodes[first_card..].iter_mut().zip(tops) {
-            node.move_to_mut((0.0, top));
+            node.move_to_mut((0.0, top - offset));
         }
         layout::Node::with_children(size, nodes)
     }
@@ -1346,6 +1596,25 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for CardColumn<'a, M> {
             child.as_widget_mut().update(
                 state, event, layout, cursor, renderer, clipboard, shell, &viewport,
             );
+        }
+        // Cards in view that don't fit scroll with the wheel; at either end
+        // the wheel goes on to what is below (the panes, in the overlay)
+        if shell.is_event_captured() || !cursor.is_over(self.card_area(layout)) {
+            return;
+        }
+        if let Event::Mouse(mouse::Event::WheelScrolled { delta }) = event {
+            let state = tree.state.downcast_mut::<ColumnState>();
+            let dy = match *delta {
+                mouse::ScrollDelta::Lines { y, .. } => y * WHEEL_LINE,
+                mouse::ScrollDelta::Pixels { y, .. } => y,
+            };
+            let offset = (state.offset - dy).clamp(0.0, state.overflow);
+            if offset != state.offset {
+                state.offset = offset;
+                shell.capture_event();
+                shell.invalidate_layout();
+                shell.request_redraw();
+            }
         }
     }
 
@@ -1528,6 +1797,201 @@ mod tests {
         // Equal positions keep diff order
         assert_eq!(place_cards(&[0.0, 0.0], &[10.0, 10.0], 4.0), [0.0, 14.0]);
         assert!(place_cards(&[], &[], 4.0).is_empty());
+    }
+
+    #[test]
+    fn cards_in_view_are_pulled_up_to_fit_above_the_bottom() {
+        // The last card's line is in view, but the card would end at 130
+        let fit = |wanted: &[f32], heights: &[f32], top| {
+            fit_cards(wanted, wanted, heights, 4.0, top, 100.0)
+        };
+        let tops = fit(&[10.0, 60.0, 90.0], &[20.0, 20.0, 40.0], 0.0);
+        assert_eq!(tops, [10.0, 36.0, 60.0]);
+        // Cards whose lines are below the column stay where they are
+        let tops = fit(&[10.0, 150.0], &[20.0, 40.0], 0.0);
+        assert_eq!(tops, [10.0, 150.0]);
+        // Never pulled above the header; what doesn't fit still hangs below
+        let tops = fit(&[30.0, 50.0], &[60.0, 60.0], 24.0);
+        assert_eq!(tops, [24.0, 88.0]);
+        // A card already scrolled above the header may stay there
+        let tops = fit(&[-50.0, 80.0], &[60.0, 40.0], 24.0);
+        assert_eq!(tops, [-50.0, 60.0]);
+    }
+
+    #[test]
+    fn cards_above_their_line_end_there() {
+        // A header, then steps on consecutive lines 20 apart
+        let lines = [100.0, 100.0, 120.0, 140.0];
+        let heights = [30.0, 20.0, 20.0, 20.0];
+        let header = [Some(160.0), None];
+        let (starts, anchors) = wanted_starts(&lines, &header, &heights, 0.0, 0.0);
+        assert_eq!(starts, [70.0, 100.0, 120.0, 140.0]);
+        assert_eq!(anchors, lines);
+        // The header ends at the line, and each step stays on its own line:
+        // without a gap they don't drift down
+        let tops = fit_cards(&starts, &anchors, &heights, 0.0, 0.0, 400.0);
+        assert_eq!(tops, [70.0, 100.0, 120.0, 140.0]);
+        // A step two lines tall pushes the next one down, no further
+        let tall = [30.0, 40.0, 20.0, 20.0];
+        let (starts, anchors) = wanted_starts(&lines, &header, &tall, 0.0, 0.0);
+        let tops = fit_cards(&starts, &anchors, &tall, 0.0, 0.0, 400.0);
+        assert_eq!(tops, [70.0, 100.0, 140.0, 160.0]);
+    }
+
+    #[test]
+    fn headers_without_room_above_go_under_their_block() {
+        let heights = [30.0, 20.0, 20.0];
+        let header = [Some(50.0), None, None];
+        // The block's line is at 10, in view: above it, the header would
+        // go above the column's top (under the pinned summary, at 24)
+        let lines = [10.0, 10.0, 30.0];
+        let (starts, anchors) = wanted_starts(&lines, &header, &heights, 0.0, 24.0);
+        assert_eq!(starts, [50.0, 10.0, 30.0]);
+        assert_eq!(anchors, [50.0, 10.0, 30.0]);
+        // The steps stay on their lines, the first partly under the summary
+        let tops = fit_cards(&starts, &anchors, &heights, 0.0, 24.0, 400.0);
+        assert_eq!(tops, [50.0, 10.0, 30.0]);
+
+        // The previous block's steps are in the way
+        let lines = [0.0, 80.0, 80.0, 100.0];
+        let heights = [20.0, 30.0, 20.0, 20.0];
+        let header = [None, Some(120.0), None, None];
+        let (starts, _) = wanted_starts(&lines, &header, &heights, 0.0, 0.0);
+        assert_eq!(starts, [0.0, 50.0, 80.0, 100.0]);
+        let lines = [0.0, 40.0, 40.0, 60.0];
+        let (starts, _) = wanted_starts(&lines, &header, &heights, 0.0, 0.0);
+        assert_eq!(starts, [0.0, 120.0, 40.0, 60.0]);
+
+        // Its block scrolled above the column: it goes along, above it
+        let lines = [-10.0, -10.0];
+        let header = [Some(10.0), None];
+        let (starts, anchors) = wanted_starts(&lines, &header, &[30.0, 20.0], 0.0, 0.0);
+        assert_eq!(starts, [-40.0, -10.0]);
+        let tops = fit_cards(&starts, &anchors, &[30.0, 20.0], 0.0, 0.0, 400.0);
+        assert_eq!(tops, [-40.0, -10.0]);
+    }
+
+    // Only built, never read: the tests look at where items go
+    #[allow(dead_code)]
+    #[derive(Debug, Clone)]
+    enum Msg {
+        Key(String),
+        Hover(Option<String>),
+        Step(String, Option<usize>),
+    }
+
+    fn callbacks() -> Callbacks<Msg> {
+        Callbacks {
+            explain: Msg::Key,
+            commit: Msg::Key,
+            build: Msg::Key,
+            hover: Msg::Hover,
+            expand: Msg::Key,
+            jump: Msg::Key,
+            hover_step: Msg::Step,
+        }
+    }
+
+    fn step(lines: Option<(Side, usize, usize)>, text: &str) -> CardStep {
+        CardStep {
+            lines: lines.map(|(side, start, end)| (side, LineRange::new(start, end))),
+            text: text.into(),
+        }
+    }
+
+    #[test]
+    fn explain_items_put_headers_above_blocks_and_steps_beside_their_lines() {
+        let mut first = card(Some((3, 6)), None);
+        first.change_steps = vec![
+            step(Some((Side::New, 3, 3)), "three"),
+            step(Some((Side::New, 5, 6)), "five"),
+            step(None, "anywhere"),
+        ];
+        // Only deletions, in the base pane, scrolled differently
+        let mut second = card(None, Some((10, 10)));
+        second.change_steps = vec![step(Some((Side::Old, 10, 10)), "gone")];
+        let cards = [first, second];
+        let states = CardStates::default();
+        let font = CardFont {
+            font: Font::MONOSPACE,
+            size: 14.0,
+        };
+        let items = explain_items(
+            &cards,
+            &states,
+            callbacks(),
+            0.0,
+            font,
+            vec![None, None],
+            [geometry(100.0), geometry(20.0)],
+        );
+        let placed: Vec<(f32, Option<f32>)> = items.iter().map(|i| (i.y, i.below)).collect();
+        assert_eq!(
+            placed,
+            [
+                // Line 3 of the target pane is at 2 * 20 - 20; the block
+                // ends with line 6, at 6 * 20 - 20
+                (20.0, Some(100.0)),
+                (20.0, None),
+                (60.0, None),
+                // A step without lines starts where its block does
+                (20.0, None),
+                // Line 10 of the base pane is at 9 * 20 - 100
+                (80.0, Some(100.0)),
+                (80.0, None),
+            ]
+        );
+    }
+
+    #[test]
+    fn deleted_line_steps_of_a_block_that_adds_lines_come_after_it() {
+        let mut replaced = card(Some((3, 4)), Some((3, 3)));
+        replaced.change_steps = vec![
+            step(Some((Side::New, 3, 3)), "new three"),
+            step(Some((Side::Old, 3, 3)), "old three"),
+            step(Some((Side::New, 4, 4)), "new four"),
+        ];
+        let cards = [replaced];
+        let states = CardStates::default();
+        let font = CardFont {
+            font: Font::MONOSPACE,
+            size: 14.0,
+        };
+        let items = explain_items(
+            &cards,
+            &states,
+            callbacks(),
+            0.0,
+            font,
+            vec![None],
+            [geometry(0.0), geometry(0.0)],
+        );
+        let ys: Vec<f32> = items.iter().map(|i| i.y).collect();
+        // Header at line 3 (40); old three after line 4 (80)
+        assert_eq!(ys, [40.0, 40.0, 80.0, 60.0]);
+    }
+
+    #[test]
+    fn steps_without_pane_geometry_start_with_their_block() {
+        let mut only = card(Some((3, 3)), None);
+        only.change_steps = vec![step(Some((Side::New, 3, 3)), "three")];
+        let cards = [only];
+        let states = CardStates::default();
+        let font = CardFont {
+            font: Font::MONOSPACE,
+            size: 14.0,
+        };
+        let items = explain_items(
+            &cards,
+            &states,
+            callbacks(),
+            0.0,
+            font,
+            vec![None],
+            [None, None],
+        );
+        let placed: Vec<(f32, Option<f32>)> = items.iter().map(|i| (i.y, i.below)).collect();
+        assert_eq!(placed, [(0.0, Some(0.0)), (0.0, None)]);
     }
 
     #[test]
