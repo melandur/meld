@@ -169,6 +169,9 @@ pub struct GitCompare {
     target_picker: Picker,
     popup: Option<Popup>,
     busy: Option<String>,
+    /// What Claude Code is explaining, by job name: kept apart from `busy`,
+    /// which loading a file takes over, until each answer comes back
+    explaining: std::collections::BTreeMap<String, String>,
     jobs: Jobs,
     banner: Option<Banner>,
     entries: Vec<FileEntry>,
@@ -278,6 +281,35 @@ pub enum Message {
     Review(review::Message),
 }
 
+/// What the header says is going on: what Claude Code is explaining (the
+/// explain-all job first, else the first card's, and how many more), then
+/// what is loading, if either
+fn status_text(
+    explaining: &std::collections::BTreeMap<String, String>,
+    busy: Option<&str>,
+) -> Option<String> {
+    let first = explaining
+        .get(EXPLAIN_ALL)
+        .or_else(|| explaining.values().next());
+    let explaining = first.map(|text| match explaining.len() {
+        0 | 1 => text.clone(),
+        n => trn!("{} (and {} more)", "{} (and {} more)", n - 1, text, n - 1),
+    });
+    match (explaining, busy) {
+        (Some(explaining), Some(busy)) => Some(format!("{explaining} · {busy}")),
+        (Some(explaining), None) => Some(explaining),
+        (None, busy) => busy.map(str::to_string),
+    }
+}
+
+/// The job that explains everything not explained yet.
+const EXPLAIN_ALL: &str = "explain-all";
+
+/// The job that explains the card `key`.
+fn explain_job(key: &str) -> String {
+    format!("explain-{key}")
+}
+
 /// Which popup a header button opens.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PopupKind {
@@ -331,6 +363,7 @@ impl GitCompare {
             target_picker: Picker::new(PickerSide::Target),
             popup: None,
             busy: None,
+            explaining: Default::default(),
             jobs: Jobs::default(),
             banner: None,
             entries: Vec::new(),
@@ -911,6 +944,7 @@ impl GitCompare {
             }
             Outcome::Explained(key, result) => {
                 self.cards.busy.remove(&key);
+                self.explaining.remove(&explain_job(&key));
                 match result {
                     Ok(()) => self.refresh_cards(),
                     Err(err) => {
@@ -936,7 +970,7 @@ impl GitCompare {
                 Task::none()
             }
             Outcome::ExplainedAll(result) => {
-                self.busy = None;
+                self.explaining.remove(EXPLAIN_ALL);
                 match result {
                     Ok(count) => {
                         let text = if count > 0 {
@@ -1456,13 +1490,22 @@ impl GitCompare {
         self.reload(shared)
     }
 
+    /// Forgets what Claude Code was explaining, its jobs cancelled
+    fn stop_explaining(&mut self) {
+        self.explaining.clear();
+        self.cards.busy.clear();
+    }
+
     fn explain_all(&mut self) -> Task<Message> {
         let Some(session) = self.session.clone() else {
             return Task::none();
         };
-        self.busy = Some(tr!("Explaining changes with Claude Code…").into());
+        self.explaining.insert(
+            EXPLAIN_ALL.into(),
+            tr!("Explaining changes with Claude Code…").into(),
+        );
         self.run(
-            "explain-all",
+            EXPLAIN_ALL,
             true,
             move |cancel, progress| session.explain_all(cancel, Some(progress), false),
             Outcome::ExplainedAll,
@@ -1728,7 +1771,12 @@ impl GitCompare {
                 self.finished(outcome, shared)
             }
             Message::Progress(ticket, text) => {
-                if self.jobs.is_current(&ticket) && self.busy.is_some() {
+                if !self.jobs.is_current(&ticket) {
+                    return Task::none();
+                }
+                if let Some(status) = self.explaining.get_mut(&ticket.name) {
+                    *status = text;
+                } else if self.busy.is_some() {
                     self.busy = Some(text);
                 }
                 Task::none()
@@ -1756,6 +1804,7 @@ impl GitCompare {
             }
             Message::RepositoryChosen(Some(path)) => {
                 self.jobs.cancel_all();
+                self.stop_explaining();
                 self.leave_pr();
                 self.forges = None;
                 self.base_picker.set_prs(None);
@@ -1944,9 +1993,18 @@ impl GitCompare {
                 };
                 self.cards.busy.insert(key.clone());
                 self.cards.errors.remove(&key);
+                let path = self
+                    .current
+                    .as_ref()
+                    .map(|entry| entry.change.path.clone())
+                    .unwrap_or_default();
+                self.explaining.insert(
+                    explain_job(&key),
+                    tr!("Explaining a change in {path}…", path = path),
+                );
                 let for_result = key.clone();
                 self.run(
-                    &format!("explain-{key}"),
+                    &explain_job(&key),
                     false,
                     move |cancel, _| session.explain_card(&view, &key, cancel),
                     move |result| Outcome::Explained(for_result.clone(), result),
@@ -2065,6 +2123,8 @@ impl GitCompare {
                     if pr.posting {
                         // The post may be half done; say so
                         self.jobs.cancel_all();
+                        self.explaining.clear();
+                        self.cards.busy.clear();
                         pr.posting = false;
                         pr.confirm = None;
                         self.busy = None;
@@ -2096,7 +2156,7 @@ impl GitCompare {
                     }
                     self.jobs.cancel_all();
                     self.busy = None;
-                    self.cards.busy.clear();
+                    self.stop_explaining();
                 }
                 Task::none()
             }
@@ -2315,10 +2375,11 @@ impl GitCompare {
         );
         let has_session = self.session.is_some();
         let idle = self.busy.is_none();
-        let status: Element<'_, Message> = match &self.busy {
-            Some(busy) => row![
+        let status: Element<'_, Message> = match status_text(&self.explaining, self.busy.as_deref())
+        {
+            Some(status) => row![
                 text("⏳").size(13),
-                ellipsized(busy.as_str(), Mode::End)
+                ellipsized(status, Mode::End)
                     .size(13)
                     .style(ui::dim_text)
                     .width(Length::Fill)
@@ -2366,7 +2427,10 @@ impl GitCompare {
                 button(text(tr!("Explain")).size(14))
                     .padding([5, 12])
                     .style(button::secondary)
-                    .on_press_maybe((has_session && idle).then_some(Message::ExplainAll)),
+                    .on_press_maybe(
+                        (has_session && !self.explaining.contains_key(EXPLAIN_ALL))
+                            .then_some(Message::ExplainAll),
+                    ),
                 container(
                     text(tr!(
                         "Explain every change that isn’t explained yet, with Claude Code"
@@ -2726,6 +2790,30 @@ mod tests {
         assert_eq!(config.author_pattern.as_deref(), Some("bot@"));
         settings.ailens_author_pattern.clear();
         assert_eq!(config_from_settings(&settings).author_pattern, None);
+    }
+
+    #[test]
+    fn explaining_stays_in_the_status_while_files_load() {
+        let mut explaining = std::collections::BTreeMap::new();
+        assert_eq!(status_text(&explaining, None), None);
+        assert_eq!(
+            status_text(&explaining, Some("Loading a.rs…")).as_deref(),
+            Some("Loading a.rs…")
+        );
+        explaining.insert(
+            explain_job("a.rs:0:x:0"),
+            "Explaining a change in a.rs…".to_string(),
+        );
+        // Loading another file doesn't hide it
+        assert_eq!(
+            status_text(&explaining, Some("Loading b.rs…")).as_deref(),
+            Some("Explaining a change in a.rs… · Loading b.rs…")
+        );
+        explaining.insert(EXPLAIN_ALL.into(), "Explaining 2 of 5 commits…".to_string());
+        assert_eq!(
+            status_text(&explaining, None).as_deref(),
+            Some("Explaining 2 of 5 commits… (and 1 more)")
+        );
     }
 
     #[test]

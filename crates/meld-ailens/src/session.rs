@@ -882,6 +882,7 @@ impl CompareSession {
         let mut cards = Vec::new();
         for index in 0..attribution.groups.len() {
             cards.push(self.card(
+                &attribution.change.path,
                 &attribution.groups,
                 index,
                 &covered,
@@ -898,6 +899,7 @@ impl CompareSession {
     #[allow(clippy::too_many_arguments)]
     fn card(
         &self,
+        path: &str,
         groups: &[ChangeGroup],
         index: usize,
         covered: &CoveredLines,
@@ -915,7 +917,9 @@ impl CompareSession {
             (None, None) => "unknown".to_string(),
         };
         let common = Card {
-            key: format!("{}:{by}:{index}", group.hunk_index),
+            // The path too: keys stay apart across files, e.g. for what
+            // is being explained while another file is shown
+            key: format!("{path}:{}:{by}:{index}", group.hunk_index),
             added: group.added.clone(),
             deleted: group.deleted.clone(),
             color_index: -1,
