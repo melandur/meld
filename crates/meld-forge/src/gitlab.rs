@@ -18,7 +18,7 @@ use crate::runner::Runner;
 
 const KIND: ForgeKind = ForgeKind::GitLab;
 const PAGE: usize = 100;
-/// Most pages read of a list (comments of huge merge requests are cut)
+/// Most pages of merge requests read for one list
 const MAX_PAGES: usize = 20;
 
 fn project(remote: &ForgeRemote) -> String {
