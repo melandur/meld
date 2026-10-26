@@ -49,20 +49,6 @@ impl StyleVariant {
     }
 }
 
-/// `org.gnome.meld.explainlayout`: where Git Compare shows the
-/// explanations of the changes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum ExplainLayout {
-    /// A column of its own beside the comparison
-    #[default]
-    Column,
-    /// Over the right of the target pane, beside the code
-    Overlay,
-    /// Not shown
-    Hidden,
-}
-
 /// `org.gnome.meld.wrapmode`: line wrapping in file comparisons.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -272,7 +258,6 @@ pub struct Settings {
     pub ailens_file_row_spacing: i32,
     pub ailens_file_list_width: i32,
     pub ailens_author_pattern: String,
-    pub ailens_explain_layout: ExplainLayout,
     // Arrays of tables come last so the TOML output stays readable.
     pub folder_columns: Vec<FolderColumn>,
     pub filename_filters: Vec<FilterSetting>,
@@ -378,7 +363,6 @@ impl Default for Settings {
             ailens_file_row_spacing: 4,
             ailens_file_list_width: 300,
             ailens_author_pattern: String::new(),
-            ailens_explain_layout: ExplainLayout::Column,
             window_state: WindowState::default(),
         }
     }
@@ -730,8 +714,8 @@ mod tests {
                 "missing setting {key}"
             );
         }
-        assert_eq!(count, 49);
-        assert_eq!(table.len() - 1 + window.len(), 49);
+        assert_eq!(count, 48);
+        assert_eq!(table.len() - 1 + window.len(), 48);
     }
 
     #[test]

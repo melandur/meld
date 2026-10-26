@@ -11,62 +11,30 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::forge::relative_date;
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::overlay;
 use iced::advanced::renderer;
 use iced::advanced::widget::{self, Tree, Widget};
 use iced::advanced::{Clipboard, Shell, mouse};
-use iced::keyboard;
 use iced::widget::{
-    button, column, container, mouse_area, rich_text, row, space, span, text, tooltip,
+    button, canvas, column, container, mouse_area, rich_text, row, span, text, tooltip,
 };
 use iced::{
     Background, Border, Color, Element, Event, Font, Length, Rectangle, Renderer, Size, Theme,
     Vector,
 };
 pub use meld_ailens::cards::CARD_GAP;
-use meld_ailens::cards::{layout_cards, reflow};
-use meld_ailens::picker::parse_iso_date;
-use meld_ailens::{
-    Card, CardKind, CardStep, ChangeGuide, ChangeKind, ExplainAction, ExplanationSource, Side,
-};
+use meld_ailens::cards::layout_cards;
+use meld_ailens::{Card, CardStep, ChangeGuide, ExplainAction, Side};
 
 use super::diffhost::PaneGeometry;
 use crate::ui;
-use crate::ui::ellipsis::{Mode, ellipsized};
 
-/// Number of commit colors (`.ailens-color-N` in style.css).
-pub const COLOR_COUNT: usize = 8;
-pub const DEFAULT_WIDTH: f32 = 300.0;
 pub const MIN_WIDTH: f32 = 160.0;
 pub const MAX_WIDTH: f32 = 900.0;
 
-/// Texts longer than this are cut short until the card is expanded.
-const LONG_TEXT: usize = 360;
-const SHORT_TEXT: usize = 280;
-
 fn hex(rgb: u32) -> Color {
     Color::from_rgb8((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8)
-}
-
-/// The colors of `.ailens-color-0` … `-7`.
-const COMMIT_COLORS: [u32; COLOR_COUNT] = [
-    0x3584e4, 0x9141ac, 0xe66100, 0x26a269, 0xc01c28, 0x1c71d8, 0x865e3c, 0x613583,
-];
-
-/// The color of a card's left edge: one per commit, by its place in the
-/// comparison; fixed colors for staged, unstaged and unknown changes.
-pub fn card_color(card: &Card, text: Color) -> Color {
-    match card.kind {
-        CardKind::Commit if card.color_index >= 0 => {
-            hex(COMMIT_COLORS[card.color_index as usize % COLOR_COUNT])
-        }
-        CardKind::Staged => hex(0x2ec27e),
-        CardKind::Unstaged => hex(0xe5a50a),
-        CardKind::Commit => text.scale_alpha(0.3),
-        CardKind::Unknown => text.scale_alpha(0.2),
-    }
 }
 
 /// Where each card wants to be: level with the first line of its change,
@@ -220,53 +188,6 @@ pub fn wanted_starts(
     (starts, lines)
 }
 
-/// A Unix time in local time, e.g. `Tue 21 Oct 2026 17:08:48` (the
-/// date's tooltip, `strftime("%c")` in Python).
-pub fn local_date(timestamp: f64) -> Option<String> {
-    let days = [
-        trc!("abbreviated weekday", "Sun"),
-        trc!("abbreviated weekday", "Mon"),
-        trc!("abbreviated weekday", "Tue"),
-        trc!("abbreviated weekday", "Wed"),
-        trc!("abbreviated weekday", "Thu"),
-        trc!("abbreviated weekday", "Fri"),
-        trc!("abbreviated weekday", "Sat"),
-    ];
-    let months = [
-        trc!("abbreviated month", "Jan"),
-        trc!("abbreviated month", "Feb"),
-        trc!("abbreviated month", "Mar"),
-        trc!("abbreviated month", "Apr"),
-        trc!("abbreviated month", "May"),
-        trc!("abbreviated month", "Jun"),
-        trc!("abbreviated month", "Jul"),
-        trc!("abbreviated month", "Aug"),
-        trc!("abbreviated month", "Sep"),
-        trc!("abbreviated month", "Oct"),
-        trc!("abbreviated month", "Nov"),
-        trc!("abbreviated month", "Dec"),
-    ];
-    if !timestamp.is_finite() {
-        return None;
-    }
-    let t = timestamp.floor() as libc::time_t;
-    // SAFETY: localtime_r only writes into the provided struct.
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    if unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
-        return None;
-    }
-    Some(format!(
-        "{} {:02} {} {} {:02}:{:02}:{:02}",
-        days.get(tm.tm_wday as usize)?,
-        tm.tm_mday,
-        months.get(tm.tm_mon as usize)?,
-        tm.tm_year + 1900,
-        tm.tm_hour,
-        tm.tm_min,
-        tm.tm_sec
-    ))
-}
-
 /// `text` cut at a word boundary near `limit` characters, with an ellipsis.
 pub fn shorten(text: &str, limit: usize) -> String {
     if text.chars().count() <= limit {
@@ -315,39 +236,17 @@ impl CardFont {
 pub struct CardStates {
     pub busy: HashSet<String>,
     pub errors: HashMap<String, String>,
-    /// Open cards ([`open_key`]), open commits of the summary
-    /// ([`commit_key`]) and long texts shown in full, by key
-    pub expanded: HashSet<String>,
     pub hovered: Option<String>,
     /// The step of the hovered card under the pointer, if any
     pub hovered_step: Option<usize>,
 }
 
-/// The key in [`CardStates::expanded`] of an open card.
-pub fn open_key(key: &str) -> String {
-    format!("{key}:open")
-}
-
-/// The key in [`CardStates::expanded`] of a commit opened in the summary.
-pub fn commit_key(sha: &str) -> String {
-    format!("commit:{sha}")
-}
-
-/// The key in [`CardStates::expanded`] of a summary showing every commit.
-const ALL_COMMITS_KEY: &str = "commits:all";
-
-/// Commits the summary shows until it is told to show them all.
-const SUMMARY_COMMITS: usize = 3;
-
-/// What the cards' buttons send.
+/// What the column's buttons and pointer send.
 pub struct Callbacks<M> {
     pub explain: fn(String) -> M,
-    pub commit: fn(String) -> M,
-    pub build: fn(String) -> M,
     pub hover: fn(Option<String>) -> M,
-    /// The pointer left a card (its key)
+    /// The pointer left a block's header (its card's key)
     pub leave: fn(String) -> M,
-    pub expand: fn(String) -> M,
     /// A name from the code was clicked: find it in the panes
     pub jump: fn(String) -> M,
     /// The pointer went over a step of a card (its index), or left it
@@ -361,49 +260,6 @@ impl<M> Clone for Callbacks<M> {
     }
 }
 impl<M> Copy for Callbacks<M> {}
-
-/// Where to read each card: its number and how many cards are numbered.
-///
-/// Cards are numbered by their commit, oldest first ([`commit_sort_key`]), then
-/// staged and
-/// unstaged changes, and within those by the reading order the model gave
-/// their changes. None for cards without an order, and for all of them
-/// when fewer than two have one.
-pub fn reading_order(cards: &[Card]) -> Vec<Option<(usize, usize)>> {
-    let mut numbers = vec![None; cards.len()];
-    let mut ordered: Vec<usize> = (0..cards.len())
-        .filter(|&i| cards[i].change_order.is_some())
-        .collect();
-    if ordered.len() < 2 {
-        return numbers;
-    }
-    let rank = |card: &Card| match card.kind {
-        CardKind::Commit => 0,
-        CardKind::Staged => 1,
-        CardKind::Unstaged => 2,
-        CardKind::Unknown => 3,
-    };
-    ordered.sort_by_cached_key(|&i| {
-        let card = &cards[i];
-        (rank(card), commit_sort_key(card), card.change_order, i)
-    });
-    let total = ordered.len();
-    for (number, index) in ordered.into_iter().enumerate() {
-        numbers[index] = Some((number + 1, total));
-    }
-    numbers
-}
-
-/// Where a commit sorts, oldest first, in the summary and the reading
-/// order alike: by place in the range; commits outside it (all color -1)
-/// by when they were committed (a rebase or cherry-pick updates that, not
-/// the author date), then by SHA, which keeps each one's cards together.
-/// Parsed once per card: sort with `sort_by_cached_key`.
-fn commit_sort_key(card: &Card) -> (i32, i64, Option<&str>) {
-    // Milliseconds; undated last
-    let committed = parse_iso_date(&card.committed).map_or(i64::MAX, |date| (date * 1000.0) as i64);
-    (card.color_index, committed, card.sha.as_deref())
-}
 
 /// `body` cut into plain text and names from the code (in backticks, which
 /// are dropped); a backtick without its pair stays text.
@@ -509,27 +365,6 @@ fn badge<'a, M: 'a>(
         .into()
 }
 
-/// The chip of a change's kind: colored for the kinds to read closely, grey
-/// for those to skim.
-fn kind_chip<'a, M: 'a>(kind: ChangeKind, font: CardFont) -> Element<'a, M> {
-    let (label, rgb) = match kind {
-        ChangeKind::Behavior => (trc!("change kind", "behavior"), 0x3584e4),
-        ChangeKind::Fix => (trc!("change kind", "fix"), 0xc01c28),
-        ChangeKind::Refactor => (trc!("change kind", "refactor"), 0x9141ac),
-        ChangeKind::Rename => (trc!("change kind", "rename"), 0x77767b),
-        ChangeKind::Mechanical => (trc!("change kind", "mechanical"), 0x77767b),
-        ChangeKind::Test => (trc!("change kind", "test"), 0x77767b),
-    };
-    let color = hex(rgb);
-    badge(
-        label.to_string(),
-        color.scale_alpha(0.15),
-        Some(color),
-        false,
-        font,
-    )
-}
-
 /// The chip of a change's risk: how much it needs checking, from grey (1,
 /// not worth the time) to red (5, to check and verify).
 /// None outside 1 to 5.
@@ -572,72 +407,23 @@ fn risk_chip<'a, M: 'a>(risk: u8, font: CardFont) -> Option<Element<'a, M>> {
     )
 }
 
-fn long_text<'a, M: Clone + 'a>(
-    body: String,
-    key: &str,
-    states: &CardStates,
-    callbacks: Callbacks<M>,
-    font: CardFont,
-) -> Element<'a, M> {
-    if body.chars().count() <= LONG_TEXT {
-        return rich(&body, font.size, font.font, false, callbacks.jump);
-    }
-    let expanded = states.expanded.contains(key);
-    let shown = if expanded {
-        body
-    } else {
-        shorten(&body, SHORT_TEXT)
-    };
-    column![
-        rich(&shown, font.size, font.font, false, callbacks.jump),
-        button(
-            text(if expanded {
-                tr!("Show less")
-            } else {
-                tr!("Show more")
-            })
-            .size(font.smaller(1.0))
-            .font(font.font)
+/// Tint behind the hovered block or step.
+fn hover_tint(theme: &Theme, alpha: Option<f32>) -> Option<Background> {
+    alpha.map(|alpha| {
+        Background::Color(
+            theme
+                .extended_palette()
+                .primary
+                .base
+                .color
+                .scale_alpha(alpha),
         )
-        .padding([0, 0])
-        .style(link_button)
-        .on_press((callbacks.expand)(key.to_string())),
-    ]
-    .spacing(2)
-    .into()
+    })
 }
 
-/// A small label over its text, e.g. Check or Why.
-fn labeled<'a, M: Clone + 'a>(
-    label: &'a str,
-    body: Element<'a, M>,
-    font: CardFont,
-) -> Element<'a, M> {
-    column![small_label(label, font), body].spacing(1).into()
-}
-
-/// What the code did before and does now, `label` beside the text.
-fn before_after<'a, M: Clone + 'a>(
-    label: &'a str,
-    body: &str,
-    callbacks: Callbacks<M>,
-    font: CardFont,
-) -> Element<'a, M> {
-    row![
-        small_label(label, font)
-            .width(font.size * 2.4)
-            .wrapping(text::Wrapping::None),
-        rich(&reflow(body), font.size, font.font, false, callbacks.jump),
-    ]
-    .spacing(4)
-    .align_y(iced::Alignment::Start)
-    .into()
-}
-
-/// One step of a change, level with the lines it explains: the code's
-/// font, size and line height, so each of its lines is beside a line of
-/// code. Steps of changes to skim are dimmed; hovering one highlights its
-/// lines.
+/// One step of a change, level with the lines it explains, like a line of
+/// code: the code's font, size and line height, so each of its lines is
+/// beside a line of code. Hovering one highlights its lines.
 fn step_view<'a, M: Clone + 'a>(
     card: &'a Card,
     index: usize,
@@ -647,255 +433,117 @@ fn step_view<'a, M: Clone + 'a>(
     font: CardFont,
     line_height: f32,
 ) -> Element<'a, M> {
-    let skim = card.change_kind.is_some_and(ChangeKind::skimmable);
     let body = rich_with(
         &step.text,
         font.size,
         font.font,
-        skim,
+        false,
         callbacks.jump,
         Some(line_height),
     );
-    // The step itself, or all of its card's
+    // The step itself, or all of its block's
     let tint = match (
         states.hovered.as_deref() == Some(card.key.as_str()),
         states.hovered_step,
     ) {
-        (true, Some(hovered)) if hovered == index => Some(0.14),
-        (true, None) => Some(0.06),
+        (true, Some(hovered)) if hovered == index => Some(0.16),
+        (true, None) => Some(0.07),
         _ => None,
     };
-    let line = container(row![
-        // Fainter than the card's own: a step, not a card
-        edge(card, 2.0, 0.6, Border::default()),
-        container(body).padding([0, 6]).width(Length::Fill)
-    ])
-    .width(Length::Fill)
-    .style(move |theme: &Theme| {
-        let palette = theme.extended_palette();
-        container::Style {
-            background: tint
-                .map(|alpha| Background::Color(palette.primary.base.color.scale_alpha(alpha))),
+    let line = container(body)
+        .padding([0, 8])
+        .width(Length::Fill)
+        .style(move |theme: &Theme| container::Style {
+            background: hover_tint(theme, tint),
             ..container::Style::default()
-        }
-    });
-    mouse_area(container(line).padding([0, 6]))
+        });
+    mouse_area(line)
         .on_enter((callbacks.hover_step)(card.key.clone(), index, true))
         .on_exit((callbacks.hover_step)(card.key.clone(), index, false))
         .into()
 }
 
-/// A card's colored edge, `width` wide: the color of its commit.
-fn edge<'a, M: 'a>(card: &Card, width: f32, alpha: f32, border: Border) -> Element<'a, M> {
-    // Only what the color depends on, not the whole card
-    let color = Card {
-        kind: card.kind,
-        color_index: card.color_index,
-        ..Card::default()
-    };
-    container(space::vertical())
-        .width(width)
-        .height(Length::Fill)
-        .style(move |theme: &Theme| container::Style {
-            background: Some(Background::Color(
-                card_color(&color, theme.extended_palette().background.base.text)
-                    .scale_alpha(alpha),
-            )),
-            border,
-            ..container::Style::default()
-        })
-        .into()
-}
-
-/// A small dim label, e.g. Check or Was.
-fn small_label<'a>(label: &'a str, font: CardFont) -> iced::widget::Text<'a> {
-    text(label)
-        .size(font.smaller(2.0))
-        .font(font.font)
-        .style(ui::dim_text)
-}
-
-/// The line that opens and closes a card: quiet until hovered.
-fn toggle_button(theme: &Theme, status: button::Status) -> button::Style {
-    let text = theme.extended_palette().background.base.text;
-    let color = match status {
-        button::Status::Hovered | button::Status::Pressed => text,
-        _ => text.scale_alpha(0.6),
-    };
-    button::Style {
-        background: None,
-        text_color: color,
-        ..button::Style::default()
-    }
-}
-
-fn link_button(theme: &Theme, status: button::Status) -> button::Style {
-    let palette = theme.extended_palette();
-    let color = match status {
-        button::Status::Hovered | button::Status::Pressed => palette.primary.strong.color,
-        _ => palette.primary.base.color,
-    };
-    button::Style {
-        background: None,
-        text_color: color,
-        ..button::Style::default()
-    }
-}
-
-/// The commit's short SHA, which shows its whole message; or what the
-/// change is when it has no commit.
-fn origin<'a, M: Clone + 'a>(
+/// A change block's header: its risk and what the changed code does; the
+/// explain button while it has no explanation of its own.
+fn block_header<'a, M: Clone + 'a>(
     card: &'a Card,
+    states: &'a CardStates,
     callbacks: Callbacks<M>,
     font: CardFont,
 ) -> Element<'a, M> {
-    match (card.kind, &card.sha) {
-        (CardKind::Commit, Some(sha)) => {
-            let sha_button = button(
-                text(card.short_sha.as_str())
+    let key = card.key.as_str();
+    let explained = !card.change_what.is_empty();
+    let summary = if explained {
+        &card.change_what
+    } else {
+        &card.what
+    };
+    let mut top = row![].spacing(8).align_y(iced::Alignment::Start);
+    if let Some(chip) = card.change_risk.and_then(|risk| risk_chip(risk, font)) {
+        top = top.push(chip);
+    }
+    if !summary.is_empty() {
+        let weight = if explained { font.bold() } else { font.font };
+        top = top.push(rich(summary, font.size, weight, !explained, callbacks.jump));
+    }
+    let mut body = column![top].spacing(4).width(Length::Fill);
+    let busy = states.busy.contains(key);
+    if let Some(action) = card.explain {
+        let label = match action {
+            ExplainAction::Commit | ExplainAction::Uncommitted => tr!("Explain with Claude"),
+            ExplainAction::Changes => tr!("Explain changes"),
+        };
+        let mut explain = row![
+            button(text(label).size(font.smaller(1.0)).font(font.font))
+                .padding([2, 10])
+                .style(button::secondary)
+                .on_press_maybe((!busy).then(|| (callbacks.explain)(card.key.clone())))
+        ]
+        .spacing(6)
+        .align_y(iced::Center);
+        if busy {
+            explain = explain.push(
+                text(tr!("Explaining…"))
                     .size(font.smaller(1.0))
                     .font(font.font)
                     .style(ui::dim_text),
-            )
-            .padding([0, 4])
-            .style(ui::flat_button)
-            .on_press((callbacks.commit)(sha.clone()));
-            tooltip(
-                sha_button,
-                container(text(tr!("Show the full commit message")).size(12))
-                    .padding([4, 8])
-                    .style(ui::tooltip_box),
-                tooltip::Position::Bottom,
-            )
-            .into()
+            );
         }
-        (kind, _) => {
-            let label = match kind {
-                CardKind::Staged => tr!("Staged"),
-                CardKind::Unstaged => tr!("Unstaged"),
-                _ => tr!("Commit unknown"),
-            };
-            text(label)
-                .size(font.smaller(1.0))
-                .font(font.bold())
-                .wrapping(text::Wrapping::None)
-                .into()
-        }
+        body = body.push(explain);
     }
-}
-
-/// Who made a commit and when: the agent's badge, the model or author and
-/// the date.
-fn people_line<'a, M: 'a>(card: &'a Card, now: f64, font: CardFont) -> Option<Element<'a, M>> {
-    let mut line = row![].spacing(6).align_y(iced::Center);
-    let mut any = false;
-    if card.agent() {
-        let claude = hex(0xd97757);
-        line = line.push(tooltip(
-            badge(
-                "Claude".into(),
-                claude.scale_alpha(0.2),
-                Some(claude),
-                false,
-                font,
-            ),
-            container(text(card.agent_name.as_str()).size(12))
-                .padding([4, 8])
-                .style(ui::tooltip_box),
-            tooltip::Position::Bottom,
+    if let Some(error) = states.errors.get(key).filter(|_| !busy) {
+        let (first, rest) = super::condense(error);
+        let error = match rest {
+            Some(rest) => shorten(&format!("{first} {rest}"), 160),
+            None => first,
+        };
+        body = body.push(text(error).size(font.smaller(1.0)).font(font.font).style(
+            |theme: &Theme| text::Style {
+                color: Some(theme.extended_palette().danger.base.color),
+            },
         ));
-        any = true;
     }
-    // The model or author gives way to the date
-    let who = if card.agent() {
-        &card.agent_model
-    } else {
-        &card.author
-    };
-    let filled = !who.is_empty();
-    if filled {
-        line = line.push(
-            ellipsized(who.as_str(), Mode::End)
-                .size(font.smaller(1.0))
-                .font(font.font)
-                .style(ui::dim_text)
-                .width(Length::Fill),
-        );
-        any = true;
-    }
-    if let Some(date) = parse_iso_date(&card.date).filter(|_| !card.date.is_empty()) {
-        if !filled {
-            line = line.push(space::horizontal());
-        }
-        line = line.push(tooltip(
-            text(relative_date(date, now))
-                .size(font.smaller(1.0))
-                .font(font.font)
-                .style(ui::dim_text)
-                .wrapping(text::Wrapping::None),
-            container(text(local_date(date).unwrap_or_else(|| card.date.clone())).size(12))
-                .padding([4, 8])
-                .style(ui::tooltip_box),
-            tooltip::Position::Bottom,
-        ));
-        any = true;
-    }
-    any.then(|| line.into())
-}
-
-/// Where a commit's Why comes from: its message, a note, or a model.
-fn source_line<'a, M: 'a>(card: &Card, font: CardFont) -> Option<Element<'a, M>> {
-    match card.source? {
-        ExplanationSource::Inferred => {
-            let line = if card.inferred_by.is_empty() {
-                tr!("Inferred by a model, not the author’s words").to_string()
-            } else {
-                tr!(
-                    "Inferred by {model}, not the author’s words",
-                    model = card.inferred_by
-                )
-            };
-            Some(badge_line(line, font))
-        }
-        source => {
-            let label = match source {
-                ExplanationSource::Commit => tr!("from the commit"),
-                ExplanationSource::Note => tr!("from a note"),
-                ExplanationSource::Inferred => tr!("inferred"),
-            };
-            Some(
-                text(label)
-                    .size(font.smaller(2.0))
-                    .font(font.font)
-                    .style(ui::dim_text)
-                    .into(),
-            )
-        }
-    }
-}
-
-fn build_links<'a, M: Clone + 'a>(
-    card: &'a Card,
-    callbacks: Callbacks<M>,
-    font: CardFont,
-) -> Vec<Element<'a, M>> {
-    card.builds
-        .iter()
-        .map(|build| {
-            button(
-                text(tr!(
-                    "Build {name}",
-                    name = build.strip_suffix(".md").unwrap_or(build)
+    let hovered = states.hovered.as_deref() == Some(key);
+    let header = container(body)
+        .padding([3, 8])
+        .width(Length::Fill)
+        .style(move |theme: &Theme| container::Style {
+            background: hover_tint(theme, hovered.then_some(0.07)).or_else(|| {
+                Some(Background::Color(
+                    theme
+                        .extended_palette()
+                        .background
+                        .base
+                        .text
+                        .scale_alpha(0.06),
                 ))
-                .size(font.smaller(1.0))
-                .font(font.font),
-            )
-            .padding(0)
-            .style(link_button)
-            .on_press((callbacks.build)(build.clone()))
-            .into()
-        })
-        .collect()
+            }),
+            ..container::Style::default()
+        });
+    mouse_area(header)
+        .on_enter((callbacks.hover)(Some(card.key.clone())))
+        .on_exit((callbacks.leave)(card.key.clone()))
+        .into()
 }
 
 /// What the column shows, and where: each element wants to start at `y`;
@@ -907,22 +555,19 @@ pub struct Item<'a, M> {
     pub below: Option<f32>,
 }
 
-/// The column laid out like the panes beside it: per change block its card
-/// as a header, ending where the block's first line starts (or under the
+/// The column laid out like the panes beside it: per change block its
+/// header ([`block_header`]), ending where the block's first line starts (or under the
 /// block, when there is no room above it), then each step level with the
 /// first line it explains. Steps without lines start with the block; steps
 /// on deleted lines of a block that also adds lines come right after the
 /// block, so they don't push the steps of its added lines off their lines.
 /// For a [`card_column`] without a gap: the headers keep their own space
 /// above them.
-#[allow(clippy::too_many_arguments)]
 pub fn explain_items<'a, M: Clone + 'a>(
     cards: &'a [Card],
     states: &'a CardStates,
     callbacks: Callbacks<M>,
-    now: f64,
     font: CardFont,
-    reading: Vec<Option<(usize, usize)>>,
     panes: [Option<PaneGeometry>; 2],
 ) -> Vec<Item<'a, M>> {
     let line_height = panes
@@ -941,7 +586,7 @@ pub fn explain_items<'a, M: Clone + 'a>(
         panes[pane].map(|g| g.line_y(end))
     };
     let mut items = Vec::new();
-    for ((card, reading), top) in cards.iter().zip(reading).zip(tops) {
+    for (card, top) in cards.iter().zip(tops) {
         // Under the block: after its added lines, else its deleted ones
         let end = line_end(Side::New, &card.added)
             .or_else(|| line_end(Side::Old, &card.deleted))
@@ -949,7 +594,7 @@ pub fn explain_items<'a, M: Clone + 'a>(
         // The space above the header is its own: steps sit on their lines
         // with no gap between them
         items.push(Item {
-            element: container(card_view(card, states, callbacks, now, font, reading))
+            element: container(block_header(card, states, callbacks, font))
                 .padding(iced::Padding::default().top(CARD_GAP))
                 .into(),
             y: top,
@@ -979,520 +624,84 @@ pub fn explain_items<'a, M: Clone + 'a>(
     items
 }
 
-/// The card's headline: what its change does, else what its commit did.
-fn headline(card: &Card) -> &str {
-    if !card.change_what.is_empty() {
-        &card.change_what
-    } else {
-        &card.what
+/// The target pane's line numbers, level with its lines, at the left of
+/// the column: so its explanations read like a pane of their own. Drawn
+/// for the lines in view only.
+#[derive(Clone, Copy)]
+pub struct LineNumbers<'a> {
+    pub geometry: Option<PaneGeometry<'a>>,
+    pub font: CardFont,
+    /// The scheme's colors, if it has them, else the theme's
+    pub color: Option<Color>,
+    pub background: Option<Color>,
+}
+
+impl LineNumbers<'_> {
+    /// Wide enough for the pane's last line number
+    pub fn width(&self) -> f32 {
+        let lines = self.geometry.map_or(1, |g| g.line_count.max(1));
+        let digits = lines.to_string().len().max(2) as f32;
+        // Monospace digits are about 0.6 of the size wide
+        (digits * 0.6 * self.font.size + 16.0).ceil()
     }
 }
 
-/// Characters of a closed card's headline.
-const HEADLINE_TEXT: usize = 160;
-
-/// A headline for a closed card: its first paragraph (a card covering
-/// several changes joins theirs), cut near [`HEADLINE_TEXT`] characters,
-/// with an ellipsis when anything is left out.
-pub fn short_headline(title: &str) -> String {
-    let title = title.trim();
-    let (first, more) = match title.split_once("\n\n") {
-        Some((first, _)) => (first.trim(), true),
-        None => (title, false),
-    };
-    let mut short = shorten(first, HEADLINE_TEXT);
-    // Cut inside a name from the code: cut before it instead, so its
-    // backtick isn't left without its pair; with nothing before it, show
-    // it as plain text
-    if short != first
-        && short.matches('`').count() % 2 == 1
-        && let Some(open) = short.rfind('`')
-    {
-        let before = short[..open].trim_end();
-        short = if before.is_empty() {
-            short.replace('`', "")
+/// The 0-based lines whose tops are in `0..height`, and those tops, for
+/// `geometry`; also the line partly above the top.
+pub fn lines_in_view(geometry: &PaneGeometry, height: f32) -> Vec<(usize, f32)> {
+    let count = geometry.line_count;
+    // The first line that ends below the top
+    let (mut low, mut high) = (0, count);
+    while low < high {
+        let middle = (low + high) / 2;
+        if geometry.line_y(middle + 1) <= 0.0 {
+            low = middle + 1;
         } else {
-            format!("{before}…")
-        };
+            high = middle;
+        }
     }
-    if more && !short.ends_with('…') {
-        format!("{short} …")
-    } else {
-        short
-    }
+    (low..count)
+        .map(|line| (line, geometry.line_y(line)))
+        .take_while(|&(_, y)| y < height)
+        .collect()
 }
 
-/// Whether the card has its own explanation of the change.
-fn has_change(card: &Card) -> bool {
-    !card.change_what.is_empty() || !card.change_why.is_empty()
-}
+impl<M> canvas::Program<M> for LineNumbers<'_> {
+    type State = ();
 
-/// One card, the header of its change block, read at a glance: the
-/// change's kind, its place in the reading order and a statement of what
-/// the changed code does (in notes from before steps, what it did before
-/// and does now). The steps are beside their lines ([`explain_items`]).
-/// Open, it adds what to check, the Was and Now, the Why and
-/// Justification, who made the change and the builds that cover it.
-/// Changes to skim (renames, mechanical changes, tests) show their headline
-/// only until opened. What the commit as a
-/// whole did is in the summary above the cards ([`commit_summary`]).
-pub fn card_view<'a, M: Clone + 'a>(
-    card: &'a Card,
-    states: &'a CardStates,
-    callbacks: Callbacks<M>,
-    now: f64,
-    font: CardFont,
-    reading: Option<(usize, usize)>,
-) -> Element<'a, M> {
-    let key = card.key.as_str();
-    let dim = ui::dim_text;
-    let open = states.expanded.contains(&open_key(key));
-    let skim = !open && card.change_kind.is_some_and(ChangeKind::skimmable);
-
-    let mut top = row![].spacing(6).align_y(iced::Center);
-    if let Some(kind) = card.change_kind {
-        top = top.push(kind_chip(kind, font));
-    }
-    if let Some(chip) = card.change_risk.and_then(|risk| risk_chip(risk, font)) {
-        top = top.push(chip);
-    }
-    if let Some((number, total)) = reading {
-        let label = if number == 1 {
-            tr!(
-                "Start here · {number}/{total}",
-                number = number,
-                total = total
-            )
-        } else {
-            format!("{number}/{total}")
-        };
-        top = top.push(
-            text(label)
-                .size(font.smaller(2.0))
-                .font(if number == 1 { font.bold() } else { font.font })
-                .style(dim)
-                .wrapping(text::Wrapping::None),
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &Renderer,
+        theme: &Theme,
+        bounds: Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let base = &theme.extended_palette().background.base;
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        frame.fill_rectangle(
+            iced::Point::ORIGIN,
+            bounds.size(),
+            self.background.unwrap_or(base.color),
         );
-    }
-    top = top.push(space::horizontal());
-    top = top.push(origin(card, callbacks, font));
-
-    let mut body = column![top].spacing(3).width(Length::Fill);
-    let title = headline(card);
-    if !title.is_empty() {
-        let title_font = if skim { font.font } else { font.bold() };
-        // At a glance, its first paragraph cut short; all of it when open
-        let title = if open {
-            title.to_string()
-        } else {
-            short_headline(title)
-        };
-        body = body.push(rich(&title, font.size, title_font, skim, callbacks.jump));
-    }
-    let steps = !card.change_steps.is_empty();
-    // With steps, the before and after wait until the card is opened
-    let was_now = if steps { open } else { !skim };
-    if was_now {
-        if !card.change_was.is_empty() {
-            body = body.push(before_after(tr!("Was"), &card.change_was, callbacks, font));
-        }
-        if !card.change_now.is_empty() {
-            body = body.push(before_after(tr!("Now"), &card.change_now, callbacks, font));
-        }
-    }
-    if !skim {
-        // Notes from before changes had a before and after: the change's
-        // Why stands in, cut short
-        if !open
-            && !steps
-            && card.change_was.is_empty()
-            && card.change_now.is_empty()
-            && !card.change_why.is_empty()
-        {
-            body = body.push(rich(
-                &shorten(&reflow(&card.change_why), SHORT_TEXT),
-                font.size,
-                font.font,
-                false,
-                callbacks.jump,
-            ));
-        }
-    }
-
-    if open {
-        if !card.change_check.is_empty() {
-            body = body.push(labeled(
-                tr!("Check"),
-                rich(
-                    &reflow(&card.change_check),
-                    font.size,
-                    font.font,
-                    false,
-                    callbacks.jump,
-                ),
-                font,
-            ));
-        }
-        if has_change(card) {
-            if !card.change_why.is_empty() {
-                body = body.push(labeled(
-                    tr!("Why"),
-                    long_text(
-                        reflow(&card.change_why),
-                        &format!("{key}:change"),
-                        states,
-                        callbacks,
-                        font,
-                    ),
-                    font,
-                ));
-            }
-            if !card.change_justification.is_empty() {
-                body = body.push(labeled(
-                    tr!("Justification"),
-                    long_text(
-                        reflow(&card.change_justification),
-                        &format!("{key}:change-justification"),
-                        states,
-                        callbacks,
-                        font,
-                    ),
-                    font,
-                ));
-            }
-            let line = if card.change_model.is_empty() {
-                tr!("This change · inferred by a model").to_string()
-            } else {
-                tr!(
-                    "This change · inferred by {model}",
-                    model = card.change_model
-                )
-            };
-            body = body.push(badge_line(line, font));
-        } else if !card.why.is_empty() {
-            // No explanation of its own: the commit's stands in
-            if let Some(source) = source_line(card, font) {
-                body = body.push(source);
-            }
-            body = body.push(labeled(
-                tr!("Why"),
-                long_text(
-                    reflow(&card.why),
-                    &format!("{key}:why"),
-                    states,
-                    callbacks,
-                    font,
-                ),
-                font,
-            ));
-            if !card.justification.is_empty() {
-                body = body.push(labeled(
-                    tr!("Justification"),
-                    long_text(
-                        reflow(&card.justification),
-                        &format!("{key}:justification"),
-                        states,
-                        callbacks,
-                        font,
-                    ),
-                    font,
-                ));
+        let color = self.color.unwrap_or(base.text.scale_alpha(0.5));
+        if let Some(geometry) = &self.geometry {
+            for (line, y) in lines_in_view(geometry, bounds.height) {
+                frame.fill_text(canvas::Text {
+                    content: (line + 1).to_string(),
+                    position: iced::Point::new(bounds.width - 8.0, y),
+                    color,
+                    size: self.font.size.into(),
+                    line_height: text::LineHeight::Absolute(geometry.line_height.into()),
+                    font: self.font.font,
+                    align_x: iced::alignment::Horizontal::Right.into(),
+                    align_y: iced::alignment::Vertical::Top,
+                    ..canvas::Text::default()
+                });
             }
         }
-        if let Some(people) = people_line(card, now, font) {
-            body = body.push(people);
-        }
-        for link in build_links(card, callbacks, font) {
-            body = body.push(link);
-        }
+        vec![frame.into_geometry()]
     }
-
-    let busy = states.busy.contains(key);
-    if let Some(action) = card.explain {
-        let label = match action {
-            ExplainAction::Commit | ExplainAction::Uncommitted => tr!("Explain with Claude"),
-            ExplainAction::Changes => tr!("Explain changes"),
-        };
-        let mut explain = row![
-            button(text(label).size(font.smaller(1.0)).font(font.font))
-                .padding([3, 10])
-                .style(button::secondary)
-                .on_press_maybe((!busy).then(|| (callbacks.explain)(card.key.clone())))
-        ]
-        .spacing(6)
-        .align_y(iced::Center);
-        if busy {
-            explain = explain.push(
-                text(tr!("Explaining…"))
-                    .size(font.smaller(1.0))
-                    .font(font.font)
-                    .style(dim),
-            );
-        }
-        body = body.push(explain);
-    }
-    if let Some(error) = states.errors.get(key).filter(|_| !busy) {
-        let (first, rest) = super::condense(error);
-        let error = match rest {
-            Some(rest) => shorten(&format!("{first} {rest}"), 160),
-            None => first,
-        };
-        body = body.push(text(error).size(font.smaller(1.0)).font(font.font).style(
-            |theme: &Theme| text::Style {
-                color: Some(theme.extended_palette().danger.base.color),
-            },
-        ));
-    }
-
-    // What opening the card shows
-    let mut more: Vec<String> = Vec::new();
-    if !was_now && (!card.change_was.is_empty() || !card.change_now.is_empty()) {
-        more.push(tr!("Was/Now").to_string());
-    }
-    if !card.change_check.is_empty() {
-        more.push(tr!("Check").to_string());
-    }
-    if !card.change_why.is_empty() || !card.why.is_empty() {
-        more.push(tr!("Why").to_string());
-    }
-    if card.kind == CardKind::Commit {
-        more.push(tr!("Details").to_string());
-    }
-    if open || !more.is_empty() {
-        let label = if open {
-            format!("▾ {}", tr!("Less"))
-        } else {
-            format!("▸ {}", more.join(" · "))
-        };
-        body = body.push(
-            button(text(label).size(font.smaller(1.0)).font(font.font))
-                .padding(0)
-                .style(toggle_button)
-                .on_press((callbacks.expand)(open_key(key))),
-        );
-    }
-
-    framed(card, body, states.hovered.as_deref() == Some(key))
-        .on_enter((callbacks.hover)(Some(card.key.clone())))
-        .on_exit((callbacks.leave)(card.key.clone()))
-        .on_press((callbacks.expand)(open_key(key)))
-        .into()
-}
-
-/// `body` in a card with the commit's color at its left edge.
-fn framed<'a, M: 'a>(
-    card: &Card,
-    body: iced::widget::Column<'a, M>,
-    hovered: bool,
-) -> iced::widget::MouseArea<'a, M> {
-    let edge = edge(
-        card,
-        4.0,
-        1.0,
-        Border::default().rounded(iced::border::Radius::default().left(6)),
-    );
-    let boxed = container(row![
-        edge,
-        container(body).padding([6, 8]).width(Length::Fill)
-    ])
-    .width(Length::Fill)
-    .style(move |theme: &Theme| {
-        let palette = theme.extended_palette();
-        let base = palette.background.base.color;
-        let background = if hovered {
-            mix(base, palette.primary.base.color, 0.08)
-        } else {
-            base
-        };
-        container::Style {
-            background: Some(Background::Color(background)),
-            text_color: Some(palette.background.base.text),
-            border: Border::default().rounded(6),
-            shadow: iced::Shadow {
-                color: Color::BLACK.scale_alpha(0.12),
-                offset: Vector::new(0.0, 1.0),
-                blur_radius: 2.0,
-            },
-            ..container::Style::default()
-        }
-    });
-    mouse_area(container(boxed).padding([0, 6]))
-}
-
-/// The commits of the file's cards, once each and oldest first, above the
-/// cards: what each did, and opened, why, by whom and the builds that cover
-/// it. None when no card has a commit.
-pub fn commit_summary<'a, M: Clone + 'a>(
-    cards: &'a [Card],
-    states: &'a CardStates,
-    callbacks: Callbacks<M>,
-    now: f64,
-    font: CardFont,
-) -> Option<Element<'a, M>> {
-    let mut commits: Vec<&Card> = Vec::new();
-    for card in cards {
-        if card.kind == CardKind::Commit
-            && card.sha.is_some()
-            && !commits.iter().any(|c| c.sha == card.sha)
-        {
-            commits.push(card);
-        }
-    }
-    if commits.is_empty() {
-        return None;
-    }
-    // In the order the cards are numbered in
-    commits.sort_by_cached_key(|card| commit_sort_key(card));
-    let all = states.expanded.contains(ALL_COMMITS_KEY);
-    let shown = if all { commits.len() } else { SUMMARY_COMMITS };
-    let mut list = column![].spacing(4).width(Length::Fill);
-    for card in commits.iter().take(shown) {
-        list = list.push(commit_row(card, states, callbacks, now, font));
-    }
-    if commits.len() > SUMMARY_COMMITS {
-        let label = if all {
-            tr!("Fewer commits").to_string()
-        } else {
-            let count = commits.len() - SUMMARY_COMMITS;
-            trn!(
-                "{count} more commit",
-                "{count} more commits",
-                count,
-                count = count
-            )
-        };
-        list = list.push(
-            button(text(label).size(font.smaller(1.0)).font(font.font))
-                .padding(0)
-                .style(link_button)
-                .on_press((callbacks.expand)(ALL_COMMITS_KEY.to_string())),
-        );
-    }
-    Some(
-        column![
-            container(list).padding([4, 8]).width(Length::Fill),
-            ui::separator(false),
-        ]
-        .into(),
-    )
-}
-
-/// One commit of the summary: its SHA and What; opened, its Why,
-/// Justification, people and builds.
-fn commit_row<'a, M: Clone + 'a>(
-    card: &'a Card,
-    states: &'a CardStates,
-    callbacks: Callbacks<M>,
-    now: f64,
-    font: CardFont,
-) -> Element<'a, M> {
-    let sha = card.sha.clone().unwrap_or_default();
-    let key = commit_key(&sha);
-    let opened = states.expanded.contains(&key);
-    let what = button(
-        row![
-            // Names from the code without their backticks: one line has no
-            // room to set them apart
-            ellipsized(card.what.replace('`', ""), Mode::End)
-                .size(font.smaller(1.0))
-                .font(font.bold())
-                .width(Length::Fill),
-            text(if opened { "▾" } else { "▸" })
-                .size(font.smaller(2.0))
-                .style(ui::dim_text),
-        ]
-        .spacing(4)
-        .align_y(iced::Center),
-    )
-    .padding(0)
-    .width(Length::Fill)
-    .style(ui::flat_button)
-    .on_press((callbacks.expand)(key.clone()));
-    let mut details = column![
-        row![origin(card, callbacks, font), what]
-            .spacing(4)
-            .align_y(iced::Center)
-    ]
-    .spacing(3)
-    .width(Length::Fill);
-    if opened {
-        if let Some(source) = source_line(card, font) {
-            details = details.push(source);
-        }
-        if card.what.chars().count() > 40 {
-            details = details.push(rich(
-                &card.what,
-                font.size,
-                font.font,
-                false,
-                callbacks.jump,
-            ));
-        }
-        if !card.why.is_empty() {
-            details = details.push(labeled(
-                tr!("Why"),
-                long_text(
-                    reflow(&card.why),
-                    &format!("{key}:why"),
-                    states,
-                    callbacks,
-                    font,
-                ),
-                font,
-            ));
-        }
-        if !card.justification.is_empty() {
-            details = details.push(labeled(
-                tr!("Justification"),
-                long_text(
-                    reflow(&card.justification),
-                    &format!("{key}:justification"),
-                    states,
-                    callbacks,
-                    font,
-                ),
-                font,
-            ));
-        }
-        if let Some(people) = people_line(card, now, font) {
-            details = details.push(people);
-        }
-        for link in build_links(card, callbacks, font) {
-            details = details.push(link);
-        }
-    }
-    row![edge(card, 3.0, 1.0, Border::default().rounded(2)), details]
-        .spacing(6)
-        .into()
-}
-
-fn badge_line<'a, M: 'a>(label: String, font: CardFont) -> Element<'a, M> {
-    let element: Element<'a, M> =
-        container(text(label).size(font.smaller(2.0)).font(font.italic()))
-            .padding([0, 6])
-            .style(|theme: &Theme| container::Style {
-                background: Some(Background::Color(
-                    theme
-                        .extended_palette()
-                        .background
-                        .base
-                        .text
-                        .scale_alpha(0.08),
-                )),
-                border: Border::default().rounded(9),
-                ..container::Style::default()
-            })
-            .into();
-    row![element].into()
-}
-
-fn mix(a: Color, b: Color, t: f32) -> Color {
-    Color::from_rgba(
-        a.r + (b.r - a.r) * t,
-        a.g + (b.g - a.g) * t,
-        a.b + (b.b - a.b) * t,
-        a.a,
-    )
 }
 
 /// How far the cards are scrolled up, when those in view don't fit.
@@ -1504,19 +713,6 @@ struct ColumnState {
     /// Where the cards wanted to be when they were scrolled: once the
     /// panes move, the cards follow their lines again
     scrolled_at: Vec<f32>,
-    /// Whether Shift is held, for [`Wheel::WithShift`]
-    shift: bool,
-}
-
-/// Where the wheel scrolls cards that don't fit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Wheel {
-    /// Anywhere over the column; once the panes scroll, the cards follow
-    /// their lines again
-    Anywhere,
-    /// Only with Shift held, the panes being under the column: the plain
-    /// wheel always scrolls the code, so cards and code never take turns
-    WithShift,
 }
 
 /// Pixels a wheel line scrolls the cards.
@@ -1536,8 +732,6 @@ pub struct CardColumn<'a, M> {
     below: Vec<Option<f32>>,
     gap: f32,
     header: bool,
-    /// Where the wheel scrolls cards that don't fit
-    wheel: Wheel,
 }
 
 /// Cards wanting to be at `wanted` (one per card), plus an optional
@@ -1563,7 +757,6 @@ pub fn card_column<'a, M: 'a>(
         below: Vec::new(),
         gap: CARD_GAP,
         header: has_header,
-        wheel: Wheel::Anywhere,
     }
 }
 
@@ -1572,13 +765,6 @@ impl<'a, M: 'a> CardColumn<'a, M> {
     /// set)
     pub fn gap(mut self, gap: f32) -> Self {
         self.gap = gap;
-        self
-    }
-
-    /// Where the wheel scrolls cards that don't fit ([`Wheel::Anywhere`]
-    /// unless set)
-    pub fn wheel(mut self, wheel: Wheel) -> Self {
-        self.wheel = wheel;
         self
     }
 
@@ -1750,9 +936,6 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for CardColumn<'a, M> {
         }
         // Cards in view that don't fit scroll with the wheel; at either end
         // the wheel goes on to what is below
-        if let Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) = event {
-            tree.state.downcast_mut::<ColumnState>().shift = modifiers.shift();
-        }
         if shell.is_event_captured() {
             return;
         }
@@ -1761,15 +944,10 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for CardColumn<'a, M> {
                 return;
             }
             let state = tree.state.downcast_mut::<ColumnState>();
-            if self.wheel == Wheel::WithShift && !state.shift {
-                return;
-            }
-            // Some systems turn Shift+wheel into a sideways scroll
-            let (dx, dy) = match *delta {
-                mouse::ScrollDelta::Lines { x, y } => (x * WHEEL_LINE, y * WHEEL_LINE),
-                mouse::ScrollDelta::Pixels { x, y } => (x, y),
+            let dy = match *delta {
+                mouse::ScrollDelta::Lines { y, .. } => y * WHEEL_LINE,
+                mouse::ScrollDelta::Pixels { y, .. } => y,
             };
-            let dy = if dy == 0.0 { dx } else { dy };
             let offset = (state.offset - dy).clamp(0.0, state.overflow);
             if offset != state.offset {
                 state.offset = offset;
@@ -2048,11 +1226,8 @@ mod tests {
     fn callbacks() -> Callbacks<Msg> {
         Callbacks {
             explain: Msg::Key,
-            commit: Msg::Key,
-            build: Msg::Key,
             hover: Msg::Hover,
             leave: Msg::Key,
-            expand: Msg::Key,
             jump: Msg::Key,
             hover_step: Msg::Step,
         }
@@ -2086,9 +1261,7 @@ mod tests {
             &cards,
             &states,
             callbacks(),
-            0.0,
             font,
-            vec![None, None],
             [geometry(100.0), geometry(20.0)],
         );
         let placed: Vec<(f32, Option<f32>)> = items.iter().map(|i| (i.y, i.below)).collect();
@@ -2127,9 +1300,7 @@ mod tests {
             &cards,
             &states,
             callbacks(),
-            0.0,
             font,
-            vec![None],
             [geometry(0.0), geometry(0.0)],
         );
         let ys: Vec<f32> = items.iter().map(|i| i.y).collect();
@@ -2147,106 +1318,9 @@ mod tests {
             font: Font::MONOSPACE,
             size: 14.0,
         };
-        let items = explain_items(
-            &cards,
-            &states,
-            callbacks(),
-            0.0,
-            font,
-            vec![None],
-            [None, None],
-        );
+        let items = explain_items(&cards, &states, callbacks(), font, [None, None]);
         let placed: Vec<(f32, Option<f32>)> = items.iter().map(|i| (i.y, i.below)).collect();
         assert_eq!(placed, [(0.0, Some(0.0)), (0.0, None)]);
-    }
-
-    #[test]
-    fn commit_colors_cycle() {
-        let text = Color::BLACK;
-        let mut c = Card {
-            kind: CardKind::Commit,
-            color_index: 9,
-            ..Default::default()
-        };
-        assert_eq!(card_color(&c, text), hex(COMMIT_COLORS[1]));
-        c.color_index = -1;
-        assert_eq!(card_color(&c, text), text.scale_alpha(0.3));
-        c.kind = CardKind::Staged;
-        assert_eq!(card_color(&c, text), hex(0x2ec27e));
-    }
-
-    #[test]
-    fn dates_are_shown_in_local_time() {
-        // Mid-month and mid-year, so that no time zone changes the month
-        let date = local_date(1_784_548_800.0).unwrap();
-        assert!(date.contains(" Jul 2026 "), "{date}");
-        assert_eq!(date.len(), "Wed 15 Jul 2026 12:00:00".len());
-        assert_eq!(local_date(f64::NAN), None);
-    }
-
-    #[test]
-    fn cards_are_numbered_in_reading_order_by_commit() {
-        let ordered = |kind, color_index, order| Card {
-            kind,
-            color_index,
-            change_order: order,
-            ..Default::default()
-        };
-        let cards = [
-            ordered(CardKind::Commit, 1, Some(1)),
-            ordered(CardKind::Commit, 0, Some(2)),
-            ordered(CardKind::Staged, -1, Some(1)),
-            ordered(CardKind::Commit, 0, None),
-            ordered(CardKind::Commit, 0, Some(1)),
-        ];
-        assert_eq!(
-            reading_order(&cards),
-            [Some((3, 4)), Some((2, 4)), Some((4, 4)), None, Some((1, 4))]
-        );
-        // One ordered card is no order to read in
-        assert_eq!(reading_order(&cards[..1]), [None]);
-    }
-
-    #[test]
-    fn commits_outside_the_range_keep_their_changes_together() {
-        let ordered = |sha: &str, order| Card {
-            kind: CardKind::Commit,
-            color_index: -1,
-            sha: Some(sha.into()),
-            committed: if sha == "aaa" {
-                "2026-03-01T10:00:00+02:00".into()
-            } else {
-                "2026-01-01T10:00:00+00:00".into()
-            },
-            // Authored the other way round: a rebase keeps author dates
-            date: if sha == "aaa" {
-                "2025-01-01T10:00:00+00:00".into()
-            } else {
-                "2025-06-01T10:00:00+00:00".into()
-            },
-            change_order: Some(order),
-            ..Default::default()
-        };
-        let cards = [
-            ordered("bbb", 1),
-            ordered("aaa", 2),
-            ordered("bbb", 2),
-            ordered("aaa", 1),
-        ];
-        // bbb is older, though its SHA comes later
-        assert_eq!(
-            reading_order(&cards),
-            [Some((1, 4)), Some((4, 4)), Some((2, 4)), Some((3, 4))]
-        );
-        // Times are compared as times, not as text
-        let at = |date: &str| Card {
-            committed: date.into(),
-            ..Default::default()
-        };
-        assert!(
-            commit_sort_key(&at("2026-01-01T10:00:00+02:00"))
-                < commit_sort_key(&at("2026-01-01T09:30:00+00:00"))
-        );
     }
 
     #[test]
@@ -2264,39 +1338,6 @@ mod tests {
     }
 
     #[test]
-    fn closed_cards_show_the_start_of_their_headline() {
-        assert_eq!(short_headline("  Adds a cache. "), "Adds a cache.");
-        // A card covering several changes: the first one's, marked
-        assert_eq!(
-            short_headline("Adds a cache.\n\nRetries."),
-            "Adds a cache. …"
-        );
-        let long = "word ".repeat(60);
-        let short = short_headline(&long);
-        assert!(short.ends_with('…') && short.chars().count() <= HEADLINE_TEXT + 1);
-        assert!(!short_headline(&format!("{long}\n\nmore")).ends_with("… …"));
-        // Not cut inside a name from the code
-        let code = format!("{} `fn parse(a: &str, b: usize)` here", "word ".repeat(30));
-        let short = short_headline(&code);
-        assert_eq!(short.matches('`').count(), 0, "{short}");
-        assert!(short.ends_with("word…"), "{short}");
-        let whole = format!("{} `parse` here", "word ".repeat(10));
-        assert_eq!(short_headline(&whole), whole.trim());
-        // A lone backtick in a headline not cut short stays
-        assert_eq!(
-            short_headline("Quotes the ` character"),
-            "Quotes the ` character"
-        );
-        // Cut inside a name it starts with: the name, as plain text
-        let leading = format!("`fn refresh({})` now caches", "a: u8, ".repeat(40));
-        let short = short_headline(&leading);
-        assert!(
-            short.starts_with("fn refresh(a: u8") && !short.contains('`'),
-            "{short}"
-        );
-    }
-
-    #[test]
     fn a_header_moved_under_its_block_is_in_the_way_of_the_next() {
         // Block A at line 0 (no room above), ending at 40; block B's line
         // at 70, with room for its 30 tall header only if A's header (40 to
@@ -2310,6 +1351,36 @@ mod tests {
         let tops = fit_cards(&starts, &anchors, &heights, 0.0, 0.0, 400.0);
         // Every step on its line
         assert_eq!(tops, [40.0, 0.0, 20.0, 90.0, 70.0]);
+    }
+
+    #[test]
+    fn line_numbers_are_drawn_for_the_lines_in_view() {
+        // Lines 20 high, scrolled by 50: line 2 (0-based) is partly above
+        let lines = lines_in_view(&geometry(50.0).unwrap(), 100.0);
+        assert_eq!(
+            lines,
+            [
+                (2, -10.0),
+                (3, 10.0),
+                (4, 30.0),
+                (5, 50.0),
+                (6, 70.0),
+                (7, 90.0)
+            ]
+        );
+        // Past the end: none
+        assert!(lines_in_view(&geometry(5000.0).unwrap(), 100.0).is_empty());
+        let numbers = LineNumbers {
+            geometry: geometry(0.0),
+            font: CardFont {
+                font: Font::MONOSPACE,
+                size: 10.0,
+            },
+            color: None,
+            background: None,
+        };
+        // 100 lines: three digits
+        assert_eq!(numbers.width(), (3.0 * 0.6 * 10.0 + 16.0_f32).ceil());
     }
 
     #[test]

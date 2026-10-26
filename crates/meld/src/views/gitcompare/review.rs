@@ -14,38 +14,18 @@
 //!   ([`PrReview::dialog`]). Nothing reaches the forge without the user
 //!   pressing Post in that confirmation.
 
-use std::collections::HashSet;
-use std::time::Duration;
-
-use crate::forge::relative_date;
-use iced::widget::{
-    button, column, container, mouse_area, row, scrollable, space, text, text_editor, tooltip,
-};
-use iced::{Background, Border, Color, Element, Length, Theme, Vector};
-use meld_ailens::picker::{EntryKind, parse_iso_date};
+use iced::widget::{button, column, container, scrollable, text, text_editor};
+use iced::{Background, Border, Element, Length, Theme};
+use meld_ailens::picker::EntryKind;
 use meld_ailens::{PickerEntry, Revision, Side};
 use meld_forge::fetch::pr_ref;
 use meld_forge::{
-    Comment, ConversationItem, Discussion, DraftComment, FetchedPullRequest, Forge, ForgeKind,
-    ForgeRemote, PullRequest, PullRequestDetails, ReviewEvent, ReviewSubmission, ReviewThread,
+    Discussion, DraftComment, FetchedPullRequest, Forge, ForgeKind, ForgeRemote, PullRequest,
+    PullRequestDetails, ReviewEvent, ReviewSubmission, ReviewThread,
 };
 
-use super::diffhost::PaneGeometry;
-use super::whycolumn::{local_date, shorten};
+use super::whycolumn::shorten;
 use crate::ui;
-use crate::ui::ellipsis::{Mode, ellipsized};
-
-/// Comments longer than this are cut short until expanded.
-const LONG_COMMENT: usize = 300;
-/// Replies shown under a thread's first comment until expanded.
-const SHOWN_REPLIES: usize = 2;
-
-fn hex(rgb: u32) -> Color {
-    Color::from_rgb8((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8)
-}
-
-const THREAD_COLOR: u32 = 0x0969da;
-const DRAFT_COLOR: u32 = 0xbf8700;
 
 /// What the user is writing.
 pub struct Composer {
@@ -91,25 +71,26 @@ pub struct PrReview {
     /// The review's own comment, kept while the composer is closed.
     pub review_body: String,
     pub review_event: ReviewEvent,
-    pub show_details: bool,
     pub composer: Option<Composer>,
     /// The confirmation shown before posting.
     pub confirm: Option<Post>,
     pub posting: bool,
-    /// Threads (and comments) shown in full.
-    pub expanded: HashSet<String>,
     /// The composer's editor, to focus it when it opens.
     pub editor_id: iced::widget::Id,
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
-    ToggleDetails,
     OpenInBrowser,
     /// Comment on the line with the cursor (the tab knows where it is).
     AddComment,
+    // Sent from the pull request's bar and comment cards, which Git
+    // Compare doesn't show; kept with the review logic they drive
+    #[allow(dead_code)]
     EditDraft(usize),
+    #[allow(dead_code)]
     DeleteDraft(usize),
+    #[allow(dead_code)]
     Reply(String),
     StartReview,
     Editor(text_editor::Action),
@@ -120,9 +101,7 @@ pub enum Message {
     /// Post what the confirmation shows.
     ConfirmPost,
     CancelConfirm,
-    Expand(String),
     RefreshComments,
-    Hover(Option<(Side, u32)>),
     /// Clicking beside a dialog does nothing (the text stays).
     Ignore,
 }
@@ -135,7 +114,6 @@ pub enum Action {
     Post(Post),
     RefreshComments,
     OpenUrl(String),
-    Hover(Option<(Side, u32)>),
 }
 
 impl PrReview {
@@ -152,11 +130,9 @@ impl PrReview {
             drafts: Vec::new(),
             review_body: String::new(),
             review_event: ReviewEvent::Comment,
-            show_details: false,
             composer: None,
             confirm: None,
             posting: false,
-            expanded: HashSet::new(),
             editor_id: iced::widget::Id::unique(),
         }
     }
@@ -265,7 +241,6 @@ impl PrReview {
 
     pub fn update(&mut self, message: Message) -> Action {
         match message {
-            Message::ToggleDetails => self.show_details = !self.show_details,
             Message::OpenInBrowser => return Action::OpenUrl(self.url()),
             // Handled by the tab, which knows the cursor
             Message::AddComment => {}
@@ -319,13 +294,7 @@ impl PrReview {
                     self.confirm = None;
                 }
             }
-            Message::Expand(key) => {
-                if !self.expanded.remove(&key) {
-                    self.expanded.insert(key);
-                }
-            }
             Message::RefreshComments => return Action::RefreshComments,
-            Message::Hover(at) => return Action::Hover(at),
             Message::Ignore => {}
         }
         Action::None
@@ -432,299 +401,18 @@ impl PrReview {
         }
     }
 
-    /// Threads and pending comments on `path`, in the order they appear.
-    fn on_file<'a>(
-        &'a self,
-        path: &'a str,
-        original: Option<&'a str>,
-    ) -> impl Iterator<Item = &'a ReviewThread> + 'a {
-        self.discussion
-            .threads
-            .iter()
-            .filter(move |t| t.is_on(path) || original.is_some_and(|o| t.is_on(o)))
-    }
-
     /// Number of threads on `path`.
     #[cfg(test)]
     pub fn thread_count(&self, path: &str) -> usize {
-        self.on_file(path, None).count() + self.drafts.iter().filter(|d| d.path == path).count()
+        self.discussion
+            .threads
+            .iter()
+            .filter(|t| t.is_on(path))
+            .count()
+            + self.drafts.iter().filter(|d| d.path == path).count()
     }
 
     // -- views --
-
-    /// The strip under the header bar.
-    pub fn strip(&self) -> Element<'_, Message> {
-        let pr = &self.details.pr;
-        let mut line = row![
-            crate::forge::state_badge(pr),
-            text(self.reference())
-                .size(14)
-                .style(ui::dim_text)
-                .wrapping(text::Wrapping::None),
-            ellipsized(pr.title.as_str(), Mode::End)
-                .size(14)
-                .font(ui::bold())
-                .max_width(520.0),
-        ]
-        .spacing(8)
-        .align_y(iced::Center);
-        let mut facts = Vec::new();
-        if !pr.author.is_empty() {
-            facts.push(tr!("by {author}", author = pr.author));
-        }
-        if !pr.head_branch.is_empty() && !pr.base_branch.is_empty() {
-            facts.push(format!("{} → {}", pr.head_branch, pr.base_branch));
-        }
-        if let Some(decision) = &self.details.review_decision {
-            facts.push(decision.clone());
-        }
-        if let Some(checks) = &self.details.checks {
-            facts.push(checks.clone());
-        }
-        let facts = facts.join(" · ");
-        line = line.push(
-            container(
-                ellipsized(facts, Mode::End)
-                    .size(12)
-                    .style(ui::dim_text)
-                    .width(Length::Fill),
-            )
-            .width(Length::Fill)
-            .clip(true),
-        );
-        for label in pr.labels.iter().take(4) {
-            line = line.push(pill(label.clone()));
-        }
-        let comments = self.discussion.threads.len() + self.discussion.conversation.len();
-        let details_label = format!(
-            "{} {}",
-            if self.show_details { "▴" } else { "▾" },
-            if comments == 0 {
-                tr!("Description").to_string()
-            } else {
-                trn!(
-                    "Description · {} comment",
-                    "Description · {} comments",
-                    comments,
-                    comments
-                )
-            }
-        );
-        line = line
-            .push(
-                button(text(details_label).size(13))
-                    .padding([3, 8])
-                    .style(ui::flat_button)
-                    .on_press(Message::ToggleDetails),
-            )
-            .push(tip(
-                button(text(tr!("Comment on Line")).size(13))
-                    .padding([3, 10])
-                    .style(button::secondary)
-                    .on_press(Message::AddComment),
-                tr!("Write a comment on the line with the cursor (click a line first); it is posted with the review"),
-            ));
-        let review_label = match self.drafts.len() {
-            0 => tr!("Review…").to_string(),
-            n => trn!("Review ({} pending)…", "Review ({} pending)…", n, n),
-        };
-        line = line
-            .push(tip(
-                button(text(review_label).size(13))
-                    .padding([3, 10])
-                    .style(button::primary)
-                    .on_press(Message::StartReview),
-                tr!("Comment, approve or request changes"),
-            ))
-            .push(ui::tool_button(
-                "⟳",
-                tr!("Reload the comments"),
-                Some(Message::RefreshComments),
-            ))
-            .push(ui::tool_button(
-                "↗",
-                tr!("Open in the browser"),
-                Some(Message::OpenInBrowser),
-            ));
-        let mut strip = column![container(line).padding([4, 8])];
-        if self.show_details {
-            strip = strip.push(ui::separator(false)).push(self.details_panel());
-        }
-        container(strip)
-            .width(Length::Fill)
-            .style(|theme: &Theme| container::Style {
-                background: Some(Background::Color(
-                    theme.extended_palette().background.weak.color,
-                )),
-                ..container::Style::default()
-            })
-            .into()
-    }
-
-    fn details_panel(&self) -> Element<'_, Message> {
-        let now = meld_ailens::time::now_timestamp();
-        let body = self.details.body.trim();
-        let mut panel = column![].spacing(10).width(Length::Fill);
-        let mut created = Vec::new();
-        if let Some(date) = parse_iso_date(&self.details.pr.created_at)
-            .filter(|_| !self.details.pr.created_at.is_empty())
-        {
-            created.push(tr!("opened {when}", when = relative_date(date, now)));
-        }
-        if let (Some(add), Some(del)) = (self.details.additions, self.details.deletions) {
-            created.push(format!("+{add} −{del}"));
-        }
-        if let Some(files) = self.details.changed_files {
-            created.push(trn!("{} file", "{} files", files, files));
-        }
-        if !created.is_empty() {
-            panel = panel.push(text(created.join(" · ")).size(12).style(ui::dim_text));
-        }
-        panel = panel.push(if body.is_empty() {
-            Element::from(text(tr!("No description.")).size(13).style(ui::dim_text))
-        } else {
-            text(body)
-                .size(13)
-                .wrapping(text::Wrapping::WordOrGlyph)
-                .into()
-        });
-        panel = panel.push(ui::separator(false));
-        panel = panel.push(text(tr!("Conversation")).size(13).font(ui::bold()));
-        if let Some(status) = &self.discussion_status {
-            panel = panel.push(text(status.as_str()).size(12).style(ui::dim_text));
-        } else if self.discussion.conversation.is_empty() {
-            panel = panel.push(
-                text(tr!("No comments outside the code."))
-                    .size(12)
-                    .style(ui::dim_text),
-            );
-        }
-        for item in &self.discussion.conversation {
-            panel = panel.push(conversation_item(item, &self.expanded, now));
-        }
-        if !self.discussion.threads.is_empty() {
-            let files: HashSet<&str> = self
-                .discussion
-                .threads
-                .iter()
-                .map(|t| t.path.as_str())
-                .collect();
-            panel = panel.push(
-                text(trn!(
-                    "{threads} line comment threads on {} file, shown beside the code",
-                    "{threads} line comment threads on {} files, shown beside the code",
-                    files.len(),
-                    files.len(),
-                    threads = self.discussion.threads.len()
-                ))
-                .size(12)
-                .style(ui::dim_text),
-            );
-        }
-        container(scrollable(container(panel).padding([8, 12])).height(Length::Shrink))
-            .max_height(280)
-            .into()
-    }
-
-    /// Cards for the Why column: the threads and pending comments on the
-    /// file at `path` (`original`: its path in the base), with where each
-    /// wants to be.
-    pub fn cards<'a>(
-        &'a self,
-        path: &'a str,
-        original: Option<&'a str>,
-        panes: [Option<PaneGeometry<'_>>; 2],
-    ) -> Vec<(f32, Element<'a, Message>)> {
-        let now = meld_ailens::time::now_timestamp();
-        let top = |side: Side, line: u32| -> f32 {
-            let pane = match side {
-                Side::Old => 0,
-                Side::New => 1,
-            };
-            panes[pane].map_or(0.0, |g| g.line_y(line.saturating_sub(1) as usize))
-        };
-        let mut cards = Vec::new();
-        for thread in self.on_file(path, original) {
-            let line = thread.anchor_line().unwrap_or(1);
-            cards.push((top(thread.side, line), self.thread_card(thread, now)));
-        }
-        for (index, draft) in self.drafts.iter().enumerate() {
-            if draft.path == path {
-                cards.push((top(draft.side, draft.line), draft_card(draft, index)));
-            }
-        }
-        cards
-    }
-
-    fn thread_card<'a>(&'a self, thread: &'a ReviewThread, now: f64) -> Element<'a, Message> {
-        let expanded = self.expanded.contains(&thread.id);
-        let mut body = column![].spacing(4).width(Length::Fill);
-        let mut header = row![text("💬").size(12)].spacing(6).align_y(iced::Center);
-        if let Some(first) = thread.comments.first() {
-            header = header.push(
-                ellipsized(first.author.as_str(), Mode::End)
-                    .size(12)
-                    .font(ui::bold())
-                    .width(Length::Fill),
-            );
-        } else {
-            header = header.push(space::horizontal());
-        }
-        if thread.outdated {
-            header = header.push(tip(
-                pill(tr!("Outdated").into()),
-                tr!("Made on an older version of this change"),
-            ));
-        }
-        if thread.resolved {
-            header = header.push(pill(tr!("Resolved").into()));
-        }
-        if let Some(line) = thread.anchor_line() {
-            header = header.push(text(format!("L{line}")).size(11).style(ui::dim_text));
-        }
-        body = body.push(header);
-        let count = thread.comments.len();
-        let hidden = if expanded {
-            0
-        } else {
-            count.saturating_sub(1 + SHOWN_REPLIES)
-        };
-        for (index, comment) in thread.comments.iter().enumerate() {
-            if index > 0 && index <= hidden {
-                continue;
-            }
-            if index > 0 {
-                body = body.push(ui::separator(false));
-                body = body.push(comment_header(comment, now));
-            } else if let Some(date) = date_label(&comment.created_at, now) {
-                body = body.push(date);
-            }
-            body = body.push(comment_body(
-                comment,
-                &format!("{}:{}", thread.id, comment.id),
-                &self.expanded,
-            ));
-            if index == 0 && hidden > 0 {
-                body = body.push(
-                    button(text(trn!("{} more reply", "{} more replies", hidden, hidden)).size(12))
-                        .padding(0)
-                        .style(link_button)
-                        .on_press(Message::Expand(thread.id.clone())),
-                );
-            }
-        }
-        body = body.push(
-            row![
-                button(text(tr!("Reply…")).size(12))
-                    .padding([2, 10])
-                    .style(button::secondary)
-                    .on_press(Message::Reply(thread.id.clone())),
-            ]
-            .spacing(6),
-        );
-        let at = thread.anchor_line().map(|line| (thread.side, line));
-        card(body.into(), hex(THREAD_COLOR), thread.outdated, at)
-    }
 
     /// The composer or the confirmation, when one is open.
     pub fn dialog(&self) -> Option<(Element<'_, Message>, Message)> {
@@ -1003,37 +691,6 @@ fn first_line(text: &str) -> &str {
         .trim()
 }
 
-fn tip<'a>(content: impl Into<Element<'a, Message>>, tip: &'a str) -> Element<'a, Message> {
-    tooltip(
-        content,
-        container(text(tip).size(12))
-            .max_width(360)
-            .padding([4, 8])
-            .style(ui::tooltip_box),
-        tooltip::Position::Bottom,
-    )
-    .delay(Duration::from_millis(500))
-    .into()
-}
-
-fn pill<'a, M: 'a>(label: String) -> Element<'a, M> {
-    container(text(label).size(11).wrapping(text::Wrapping::None))
-        .padding([0, 6])
-        .style(|theme: &Theme| container::Style {
-            background: Some(Background::Color(
-                theme
-                    .extended_palette()
-                    .background
-                    .base
-                    .text
-                    .scale_alpha(0.1),
-            )),
-            border: Border::default().rounded(9),
-            ..container::Style::default()
-        })
-        .into()
-}
-
 fn quote<'a, M: 'a>(body: String) -> Element<'a, M> {
     container(text(body).size(13).wrapping(text::Wrapping::WordOrGlyph))
         .width(Length::Fill)
@@ -1058,191 +715,10 @@ fn error_text<'a, M: 'a>(message: String) -> Element<'a, M> {
         .into()
 }
 
-fn link_button(theme: &Theme, status: button::Status) -> button::Style {
-    let palette = theme.extended_palette();
-    button::Style {
-        background: None,
-        text_color: match status {
-            button::Status::Hovered | button::Status::Pressed => palette.primary.strong.color,
-            _ => palette.primary.base.color,
-        },
-        ..button::Style::default()
-    }
-}
-
-fn date_label<'a>(date: &str, now: f64) -> Option<Element<'a, Message>> {
-    let parsed = parse_iso_date(date).filter(|_| !date.is_empty())?;
-    Some(
-        tooltip(
-            text(relative_date(parsed, now))
-                .size(11)
-                .style(ui::dim_text),
-            container(text(local_date(parsed).unwrap_or_else(|| date.to_string())).size(12))
-                .padding([4, 8])
-                .style(ui::tooltip_box),
-            tooltip::Position::Bottom,
-        )
-        .into(),
-    )
-}
-
-fn comment_header<'a>(comment: &'a Comment, now: f64) -> Element<'a, Message> {
-    let mut header = row![text(comment.author.as_str()).size(12).font(ui::bold())]
-        .spacing(6)
-        .align_y(iced::Center);
-    if let Some(date) = date_label(&comment.created_at, now) {
-        header = header.push(date);
-    }
-    header.into()
-}
-
-fn comment_body<'a>(
-    comment: &'a Comment,
-    key: &str,
-    expanded: &HashSet<String>,
-) -> Element<'a, Message> {
-    let body = comment.body.trim();
-    if body.chars().count() <= LONG_COMMENT {
-        return text(body)
-            .size(13)
-            .wrapping(text::Wrapping::WordOrGlyph)
-            .into();
-    }
-    let open = expanded.contains(key);
-    column![
-        text(if open {
-            body.to_string()
-        } else {
-            shorten(body, LONG_COMMENT)
-        })
-        .size(13)
-        .wrapping(text::Wrapping::WordOrGlyph),
-        button(
-            text(if open {
-                tr!("Show less")
-            } else {
-                tr!("Show more")
-            })
-            .size(12)
-        )
-        .padding(0)
-        .style(link_button)
-        .on_press(Message::Expand(key.to_string())),
-    ]
-    .spacing(2)
-    .into()
-}
-
-fn conversation_item<'a>(
-    item: &'a ConversationItem,
-    expanded: &HashSet<String>,
-    now: f64,
-) -> Element<'a, Message> {
-    let mut header = row![text(item.comment.author.as_str()).size(13).font(ui::bold())]
-        .spacing(6)
-        .align_y(iced::Center);
-    if let Some(review) = item.review {
-        header = header.push(pill(crate::i18n::gettext(review.label()).to_string()));
-    }
-    if let Some(date) = date_label(&item.comment.created_at, now) {
-        header = header.push(date);
-    }
-    let mut column = column![header].spacing(2);
-    if !item.comment.body.trim().is_empty() {
-        column = column.push(comment_body(
-            &item.comment,
-            &format!("conversation:{}", item.comment.id),
-            expanded,
-        ));
-    }
-    column.into()
-}
-
-fn draft_card(draft: &DraftComment, index: usize) -> Element<'_, Message> {
-    let body = column![
-        row![
-            pill(tr!("Pending").into()),
-            text(format!("L{}", draft.line))
-                .size(11)
-                .style(ui::dim_text),
-            space::horizontal(),
-        ]
-        .spacing(6)
-        .align_y(iced::Center),
-        text(draft.body.trim())
-            .size(13)
-            .wrapping(text::Wrapping::WordOrGlyph),
-        row![
-            button(text(tr!("Edit")).size(12))
-                .padding([2, 10])
-                .style(button::secondary)
-                .on_press(Message::EditDraft(index)),
-            button(text(tr!("Delete")).size(12))
-                .padding([2, 10])
-                .style(button::secondary)
-                .on_press(Message::DeleteDraft(index)),
-        ]
-        .spacing(6),
-    ]
-    .spacing(4)
-    .width(Length::Fill);
-    card(
-        body.into(),
-        hex(DRAFT_COLOR),
-        false,
-        Some((draft.side, draft.line)),
-    )
-}
-
-/// A card like the Why column's, with a colored edge, that highlights its
-/// line while hovered.
-fn card<'a>(
-    body: Element<'a, Message>,
-    color: Color,
-    faded: bool,
-    at: Option<(Side, u32)>,
-) -> Element<'a, Message> {
-    let edge_color = if faded { color.scale_alpha(0.4) } else { color };
-    let edge = container(space::vertical())
-        .width(4)
-        .height(Length::Fill)
-        .style(move |_theme: &Theme| container::Style {
-            background: Some(Background::Color(edge_color)),
-            border: Border::default().rounded(iced::border::Radius::default().left(6)),
-            ..container::Style::default()
-        });
-    let boxed = container(row![
-        edge,
-        container(body).padding([6, 8]).width(Length::Fill)
-    ])
-    .width(Length::Fill)
-    .style(move |theme: &Theme| {
-        let palette = theme.extended_palette();
-        container::Style {
-            background: Some(Background::Color(palette.background.base.color)),
-            text_color: Some(palette.background.base.text),
-            border: Border::default()
-                .rounded(6)
-                .width(1)
-                .color(color.scale_alpha(0.35)),
-            shadow: iced::Shadow {
-                color: Color::BLACK.scale_alpha(0.12),
-                offset: Vector::new(0.0, 1.0),
-                blur_radius: 2.0,
-            },
-            ..container::Style::default()
-        }
-    });
-    mouse_area(container(boxed).padding([0, 6]))
-        .on_enter(Message::Hover(at))
-        .on_exit(Message::Hover(None))
-        .into()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use meld_forge::{PrState, ScriptedRunner};
+    use meld_forge::{Comment, PrState, ScriptedRunner};
     use std::sync::Arc;
 
     fn review() -> PrReview {

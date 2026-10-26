@@ -35,9 +35,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use iced::widget::{
-    button, column, container, row, scrollable, space, stack, text, text_editor, tooltip,
-};
+use iced::widget::{button, column, container, row, scrollable, space, text, tooltip};
 use iced::{Background, Element, Length, Subscription, Task, Theme};
 use meld_ailens::picker::{apply_pick, revisions_from_args};
 use meld_ailens::{
@@ -45,7 +43,7 @@ use meld_ailens::{
     PickerEntry, PickerSide, RepositoryInfo, Revision, RevisionKind, SessionConfig,
     build_file_tree,
 };
-use meld_config::{ExplainLayout, Settings};
+use meld_config::{Settings, StyleAttr};
 use meld_forge::{
     Discussion, FetchedPullRequest, Forge, PullRequest, PullRequestDetails, Side, StateFilter,
 };
@@ -147,11 +145,6 @@ fn dragged_width(target: DragTarget, start_width: f32, origin_x: f32, x: f32) ->
 }
 
 /// A commit's full message, shown when its card's SHA is clicked.
-struct CommitPopup {
-    sha: String,
-    /// Read-only, but selectable and copyable.
-    message: text_editor::Content,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Popup {
@@ -190,10 +183,11 @@ pub struct GitCompare {
     temp: Option<tempfile::TempDir>,
     temp_count: u64,
     cards: CardStates,
-    commit: Option<CommitPopup>,
     /// Asking whether closing may discard pending review comments.
     confirm_close: bool,
-    why_width: f32,
+    /// The Explain column's width once its divider was dragged; until then
+    /// as wide as each pane
+    why_width: Option<f32>,
     drag: Option<Drag>,
     files_scroll_id: iced::widget::Id,
     files_viewport: (f32, f32),
@@ -233,7 +227,6 @@ pub enum Outcome {
     ExplainedAll(Result<usize, Error>),
     Built(Result<PathBuf, Error>),
     AgentsSetUp(Result<Vec<String>, Error>),
-    CommitMessage(String, Result<String, Error>),
     PrRemotes(Result<crate::forge::Remotes, Error>),
     PrList(Result<Vec<PullRequest>, Error>),
     PrSearch(String, Result<Vec<PullRequest>, Error>),
@@ -266,23 +259,15 @@ pub enum Message {
     ToggleFolder(String),
     FilesScrolled(scrollable::Viewport),
     ExplainCard(String),
-    ShowCommit(String),
-    CommitAction(text_editor::Action),
-    CloseCommit,
     /// Close the tab although review comments are pending.
     DiscardAndClose,
     CancelClose,
-    CompareWithParent(String),
-    OpenBuild(String),
     HoverCard(Option<String>),
     /// The pointer left a card (its key)
     LeaveCard(String),
     /// The pointer went over a step of a card (its index), or left it
     /// (false)
     HoverStep(String, usize, bool),
-    ExpandCard(String),
-    /// Show the explanations in a column, over the target pane, or not at all
-    SetExplainLayout(ExplainLayout),
     /// A name from the code in a card was clicked: show where it is.
     JumpToName(String),
     StartDrag(DragTarget, f32),
@@ -365,9 +350,8 @@ impl GitCompare {
             temp: None,
             temp_count: 0,
             cards: CardStates::default(),
-            commit: None,
             confirm_close: false,
-            why_width: whycolumn::DEFAULT_WIDTH,
+            why_width: None,
             drag: None,
             files_scroll_id: iced::widget::Id::unique(),
             files_viewport: (0.0, 0.0),
@@ -720,7 +704,6 @@ impl GitCompare {
             return Task::none();
         }
         self.cards.errors.clear();
-        self.cards.expanded.clear();
         self.cards.hovered = None;
         self.cards.hovered_step = None;
         if !view.message.is_empty() {
@@ -1016,22 +999,6 @@ impl GitCompare {
                 }
                 Task::none()
             }
-            Outcome::CommitMessage(sha, result) => {
-                match result {
-                    Ok(message) => {
-                        // The dialog covers the card, which then never
-                        // sees the pointer leave
-                        self.hover_card(None);
-                        self.commit = Some(CommitPopup {
-                            sha,
-                            message: text_editor::Content::with_text(message.trim_end()),
-                        });
-                    }
-                    Err(err) if !err.is_cancelled() => self.show_error(&err),
-                    Err(_) => {}
-                }
-                Task::none()
-            }
             Outcome::PrRemotes(result) => {
                 match result {
                     Ok(remotes) if !remotes.forges.is_empty() => {
@@ -1091,8 +1058,6 @@ impl GitCompare {
                             opened.drafts = old.drafts;
                             opened.review_body = old.review_body;
                             opened.review_event = old.review_event;
-                            opened.show_details = old.show_details;
-                            opened.expanded = old.expanded;
                         }
                         self.base = Revision::commit(opened.fetched.base.clone());
                         self.target = Revision::commit(opened.fetched.head_ref.clone());
@@ -1414,16 +1379,6 @@ impl GitCompare {
                         None,
                     );
                 }
-                Task::none()
-            }
-            review::Action::Hover(at) => {
-                let mut lines = [Vec::new(), Vec::new()];
-                if let Some((side, line)) = at {
-                    let pane = if side == Side::Old { 0 } else { 1 };
-                    let line = line.saturating_sub(1) as usize;
-                    lines[pane] = Vec::from([line..line + 1]);
-                }
-                self.diff.set_hover(lines);
                 Task::none()
             }
         }
@@ -1997,26 +1952,6 @@ impl GitCompare {
                     move |result| Outcome::Explained(for_result.clone(), result),
                 )
             }
-            Message::ShowCommit(sha) => {
-                let Some(session) = self.session.clone() else {
-                    return Task::none();
-                };
-                let for_result = sha.clone();
-                self.run(
-                    "message",
-                    true,
-                    move |cancel, _| session.commit_message(&sha, cancel),
-                    move |result| Outcome::CommitMessage(for_result.clone(), result),
-                )
-            }
-            Message::CommitAction(action) => {
-                if let Some(commit) = &mut self.commit
-                    && !action.is_edit()
-                {
-                    commit.message.perform(action);
-                }
-                Task::none()
-            }
             Message::DiscardAndClose => {
                 self.confirm_close = false;
                 if let Some(pr) = self.pr.as_mut() {
@@ -2028,34 +1963,8 @@ impl GitCompare {
                 self.confirm_close = false;
                 Task::none()
             }
-            Message::CloseCommit => {
-                self.commit = None;
-                Task::none()
-            }
-            Message::CompareWithParent(sha) => {
-                self.commit = None;
-                self.leave_pr();
-                self.base = Revision::commit(format!("{sha}^"));
-                self.target = Revision::commit(sha);
-                self.reload(shared)
-            }
-            Message::OpenBuild(name) => {
-                if let Some(info) = &self.info {
-                    match info.build_folder(&self.config) {
-                        Ok(folder) => open_path(&folder.join(name)),
-                        Err(err) => self.show_error(&err),
-                    }
-                }
-                Task::none()
-            }
             Message::HoverCard(key) => {
                 self.hover_card(key);
-                Task::none()
-            }
-            Message::ExpandCard(key) => {
-                if !self.cards.expanded.remove(&key) {
-                    self.cards.expanded.insert(key);
-                }
                 Task::none()
             }
             Message::LeaveCard(key) => {
@@ -2080,16 +1989,6 @@ impl GitCompare {
                 }
                 Task::none()
             }
-            Message::SetExplainLayout(layout) => {
-                if shared.settings.ailens_explain_layout != layout {
-                    shared.settings.ailens_explain_layout = layout;
-                    events.push(Event::SettingsChanged);
-                }
-                if layout == ExplainLayout::Hidden {
-                    self.hover_card(None);
-                }
-                Task::none()
-            }
             Message::JumpToName(name) => match self.diff.find_name(&name) {
                 Some((pane, line)) => self.diff.scroll_to_line(pane, line).map(Message::Diff),
                 None => Task::none(),
@@ -2097,7 +1996,11 @@ impl GitCompare {
             Message::StartDrag(target, origin_x) => {
                 let start_width = match target {
                     DragTarget::FileList => shared.settings.ailens_file_list_width as f32,
-                    DragTarget::WhyColumn => self.why_width,
+                    // Until dragged it fills a share of the window: its
+                    // right edge is the window's
+                    DragTarget::WhyColumn => self
+                        .why_width
+                        .unwrap_or_else(|| shared.settings.window_state.width as f32 - origin_x),
                 };
                 self.drag = Some(Drag {
                     target,
@@ -2115,7 +2018,7 @@ impl GitCompare {
                         DragTarget::FileList => {
                             shared.settings.ailens_file_list_width = width as i32
                         }
-                        DragTarget::WhyColumn => self.why_width = width,
+                        DragTarget::WhyColumn => self.why_width = Some(width),
                     }
                 }
                 Task::none()
@@ -2130,7 +2033,7 @@ impl GitCompare {
                 Task::none()
             }
             Message::ResetWhyWidth => {
-                self.why_width = whycolumn::DEFAULT_WIDTH;
+                self.why_width = None;
                 Task::none()
             }
             Message::Poll => self.poll(shared),
@@ -2175,9 +2078,8 @@ impl GitCompare {
                     } else {
                         pr.update(review::Message::CancelComposer);
                     }
-                } else if self.popup.is_some() || self.commit.is_some() {
+                } else if self.popup.is_some() {
                     self.popup = None;
-                    self.commit = None;
                 } else {
                     if self.jobs.is_running("pr-open")
                         && let Some(spec) = &self.pr_spec
@@ -2331,11 +2233,6 @@ impl GitCompare {
 
     pub fn view<'a>(&'a self, shared: &'a Shared) -> Element<'a, Message> {
         let mut page = column![self.header(), ui::separator(false)];
-        if let Some(pr) = self.active_pr() {
-            page = page
-                .push(pr.strip().map(Message::Review))
-                .push(ui::separator(false));
-        }
         if let Some(banner) = &self.banner {
             let mut actions = Vec::new();
             if let Some((label, _)) = &banner.action {
@@ -2356,9 +2253,6 @@ impl GitCompare {
         .height(Length::Fill);
         let page: Element<'a, Message> = page.push(body).into();
 
-        if let Some(commit) = &self.commit {
-            return ui::modal::modal(page, commit_dialog(commit), Message::CloseCommit);
-        }
         if self.confirm_close {
             let count = self.pr.as_ref().map_or(0, |pr| pr.drafts.len());
             let dialog = ui::modal::dialog(
@@ -2629,166 +2523,80 @@ impl GitCompare {
                 container(page).center(Length::Fill).padding(20).into()
             }
             Content::Diff => {
-                let diff = container(self.diff.view(shared).map(Message::Diff))
-                    .width(Length::Fill)
-                    .height(Length::Fill);
-                match shared.settings.ailens_explain_layout {
-                    ExplainLayout::Column => row![
-                        diff,
-                        divider(
-                            |x| Message::StartDrag(DragTarget::WhyColumn, x),
-                            Some(Message::ResetWhyWidth)
-                        ),
-                        self.explain_panel(),
-                    ]
-                    .height(Length::Fill)
-                    .into(),
-                    ExplainLayout::Overlay => stack![diff, self.explain_overlay()]
-                        .width(Length::Fill)
-                        .height(Length::Fill)
-                        .into(),
-                    ExplainLayout::Hidden => {
-                        row![diff, self.explain_strip()].height(Length::Fill).into()
-                    }
-                }
+                // The explanations are a third column as wide as each pane,
+                // until their divider is dragged
+                let (diff_width, explain_width) = match self.why_width {
+                    Some(width) => (Length::Fill, Length::Fixed(width)),
+                    None => (Length::FillPortion(2), Length::FillPortion(1)),
+                };
+                row![
+                    container(self.diff.view(shared).map(Message::Diff))
+                        .width(diff_width)
+                        .height(Length::Fill),
+                    divider(
+                        |x| Message::StartDrag(DragTarget::WhyColumn, x),
+                        Some(Message::ResetWhyWidth)
+                    ),
+                    container(self.explain_panel(shared))
+                        .width(explain_width)
+                        .height(Length::Fill),
+                ]
+                .height(Length::Fill)
+                .into()
             }
         }
     }
 
-    /// A small flat button that switches where the explanations are.
-    fn layout_button(
-        &self,
-        label: &'static str,
-        tip: &'static str,
-        layout: ExplainLayout,
-    ) -> Element<'_, Message> {
-        tooltip(
-            button(text(label).size(12).style(ui::dim_text))
-                .padding([1, 6])
-                .style(ui::flat_button)
-                .on_press(Message::SetExplainLayout(layout)),
-            container(text(tip).size(12))
-                .padding([4, 8])
-                .style(ui::tooltip_box),
-            tooltip::Position::Bottom,
-        )
-        .into()
-    }
-
-    /// The explanations in a column of their own, with its title.
-    fn explain_panel(&self) -> Element<'_, Message> {
-        let title = container(
-            row![
-                text(tr!("Explain")).size(13).font(ui::bold()),
-                space::horizontal(),
-                self.layout_button(
-                    tr!("Overlay"),
-                    tr!(
-                        "Show the explanations over the code, beside the lines they explain; Shift+wheel scrolls them"
-                    ),
-                    ExplainLayout::Overlay,
-                ),
-                self.layout_button(
-                    tr!("Hide"),
-                    tr!("Hide the explanations"),
-                    ExplainLayout::Hidden,
-                ),
-            ]
-            .spacing(2)
-            .align_y(iced::Center),
-        )
-        .height(self.diff.header_height())
-        .padding([0, 4])
-        .align_y(iced::Center);
-        container(column![title, self.explain_cards(true)])
-            .width(self.why_width)
-            .height(Length::Fill)
+    /// The explanations, laid out like the panes beside them: a header row
+    /// like theirs, then on the pane's background its line numbers and,
+    /// level with its lines, each change block's risk and summary and what
+    /// each line does.
+    fn explain_panel<'a>(&'a self, shared: &'a Shared) -> Element<'a, Message> {
+        let title = container(text(tr!("Explain")).size(13).font(ui::bold()))
+            .height(self.diff.header_height())
+            .width(Length::Fill)
+            .padding([0, 8])
+            .align_y(iced::Center)
             .style(|theme: &Theme| container::Style {
                 background: Some(Background::Color(
                     theme.extended_palette().background.weak.color,
                 )),
                 ..container::Style::default()
-            })
-            .into()
-    }
-
-    /// The explanations over the right of the target pane: only the cards,
-    /// level with their lines, and the buttons to move them back or hide
-    /// them where the column's title would be.
-    fn explain_overlay(&self) -> Element<'_, Message> {
-        // Clear of the pane's scrollbar and the chunk map
-        const RIGHT_MARGIN: f32 = 28.0;
-        let buttons = container(
-            row![
-                self.layout_button(
-                    tr!("Column"),
-                    tr!("Show the explanations in a column of their own"),
-                    ExplainLayout::Column,
-                ),
-                self.layout_button(
-                    tr!("Hide"),
-                    tr!("Hide the explanations"),
-                    ExplainLayout::Hidden,
-                ),
-            ]
-            .spacing(2),
-        )
-        .style(|theme: &Theme| container::Style {
-            background: Some(Background::Color(
-                theme.extended_palette().background.weak.color,
-            )),
-            border: iced::Border::default().rounded(4),
-            ..container::Style::default()
-        });
-        let header = container(buttons)
-            .height(self.diff.header_height())
+            });
+        let (font, size) = self.diff.text_font();
+        let font = whycolumn::CardFont { font, size };
+        // The panes' colors, from the style scheme
+        let look = |name: &str, attr| shared.scheme_color(name, attr);
+        let background = look("text", StyleAttr::Background);
+        let numbers = whycolumn::LineNumbers {
+            geometry: self.diff.pane_geometry(1),
+            font,
+            color: look("line-numbers", StyleAttr::Foreground),
+            background: look("line-numbers", StyleAttr::Background).or(background),
+        };
+        let gutter = iced::widget::canvas(numbers)
+            .width(numbers.width())
+            .height(Length::Fill);
+        let text_color = look("text", StyleAttr::Foreground);
+        let body = container(row![gutter, self.explain_cards(font)])
             .width(Length::Fill)
-            .align_x(iced::alignment::Horizontal::Right)
-            .align_y(iced::Center);
-        let cards = column![header, self.explain_cards(false)].width(self.why_width);
-        row![space::horizontal(), cards]
-            .padding(iced::Padding::default().right(RIGHT_MARGIN))
             .height(Length::Fill)
-            .into()
+            .style(move |theme: &Theme| {
+                let base = &theme.extended_palette().background.base;
+                container::Style {
+                    background: Some(Background::Color(background.unwrap_or(base.color))),
+                    text_color: Some(text_color.unwrap_or(base.text)),
+                    ..container::Style::default()
+                }
+            });
+        column![title, body].into()
     }
 
-    /// The explanations hidden: a thin strip at the right that brings them
-    /// back.
-    fn explain_strip(&self) -> Element<'_, Message> {
-        let show = tooltip(
-            button(text("‹").size(14).style(ui::dim_text))
-                .padding([2, 6])
-                .style(ui::flat_button)
-                .on_press(Message::SetExplainLayout(ExplainLayout::Column)),
-            container(text(tr!("Show the explanations")).size(12))
-                .padding([4, 8])
-                .style(ui::tooltip_box),
-            tooltip::Position::Left,
-        );
-        container(
-            container(show)
-                .height(self.diff.header_height())
-                .align_y(iced::Center),
-        )
-        .height(Length::Fill)
-        .style(|theme: &Theme| container::Style {
-            background: Some(Background::Color(
-                theme.extended_palette().background.weak.color,
-            )),
-            ..container::Style::default()
-        })
-        .into()
-    }
-
-    /// The cards (and the pull request's comments), level with their lines;
-    /// `summary` pins what each commit did above them.
-    fn explain_cards(&self, summary: bool) -> Element<'_, Message> {
+    /// The change blocks' headers and steps, level with their lines.
+    fn explain_cards(&self, font: whycolumn::CardFont) -> Element<'_, Message> {
         let callbacks = whycolumn::Callbacks {
             explain: Message::ExplainCard,
-            commit: Message::ShowCommit,
-            build: Message::OpenBuild,
             hover: Message::HoverCard,
-            expand: Message::ExpandCard,
             jump: Message::JumpToName,
             hover_step: Message::HoverStep,
             leave: Message::LeaveCard,
@@ -2797,13 +2605,8 @@ impl GitCompare {
             (Some(view), false) => &view.cards,
             _ => &[],
         };
-        let now = meld_ailens::time::now_timestamp();
-        let (font, size) = self.diff.text_font();
-        let font = whycolumn::CardFont { font, size };
-        let reading = whycolumn::reading_order(cards);
         let panes = [self.diff.pane_geometry(0), self.diff.pane_geometry(1)];
-        let items =
-            whycolumn::explain_items(cards, &self.cards, callbacks, now, font, reading, panes);
+        let items = whycolumn::explain_items(cards, &self.cards, callbacks, font, panes);
         let mut wanted = Vec::with_capacity(items.len());
         let mut below = Vec::with_capacity(items.len());
         let mut elements: Vec<Element<'_, Message>> = Vec::with_capacity(items.len());
@@ -2812,31 +2615,10 @@ impl GitCompare {
             below.push(item.below);
             elements.push(item.element);
         }
-        // In a column of its own: the overlay lies over the code
-        let in_column = summary;
-        let summary = summary
-            .then(|| whycolumn::commit_summary(cards, &self.cards, callbacks, now, font))
-            .flatten();
-        // The pull request's comments on this file, beside their lines
-        let mut comments = 0;
-        if let (Some(pr), Some(view), false) =
-            (self.active_pr(), &self.view, self.diff.is_loading())
-        {
-            let change = view.change();
-            for (top, card) in pr.cards(&change.path, change.original_path.as_deref(), panes) {
-                wanted.push(top);
-                elements.push(
-                    container(card.map(Message::Review))
-                        .padding(iced::Padding::default().top(whycolumn::CARD_GAP))
-                        .into(),
-                );
-                comments += 1;
-            }
-        }
         let placeholder = self
             .view
             .as_ref()
-            .filter(|v| v.cards.is_empty() && !v.cards_placeholder.is_empty() && comments == 0)
+            .filter(|v| v.cards.is_empty() && !v.cards_placeholder.is_empty())
             .map(|v| {
                 container(
                     text(v.cards_placeholder.as_str())
@@ -2849,45 +2631,11 @@ impl GitCompare {
                 .center_x(Length::Fill)
                 .into()
             });
-        whycolumn::card_column(elements, wanted, placeholder, summary)
+        whycolumn::card_column(elements, wanted, placeholder, None)
             .below(below)
-            // Over the code, the wheel scrolls the code; Shift+wheel the
-            // cards that don't fit
-            .wheel(if in_column {
-                whycolumn::Wheel::Anywhere
-            } else {
-                whycolumn::Wheel::WithShift
-            })
             .gap(0.0)
             .into()
     }
-}
-
-fn commit_dialog(commit: &CommitPopup) -> Element<'_, Message> {
-    let short = meld_ailens::picker::short_sha(&commit.sha);
-    // An editor that ignores edits: the message can be selected and copied
-    let message = text_editor(&commit.message)
-        .on_action(Message::CommitAction)
-        .font(iced::Font::MONOSPACE)
-        .size(13)
-        .padding(8)
-        .max_height(420)
-        .wrapping(text::Wrapping::WordOrGlyph);
-    let dialog = ui::modal::dialog(
-        tr!("Commit {sha}", sha = short),
-        container(message).width(600),
-        vec![
-            button(text(tr!("Compare with Parent")))
-                .style(button::secondary)
-                .on_press(Message::CompareWithParent(commit.sha.clone()))
-                .into(),
-            button(text(tr!("Close")))
-                .on_press(Message::CloseCommit)
-                .into(),
-        ],
-    );
-    // As wide as the message and the dialog's padding, not the window
-    container(dialog).max_width(640).into()
 }
 
 fn map_item<M, N>(item: menu::Item<M>, f: impl Fn(M) -> N) -> menu::Item<N> {
