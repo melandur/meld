@@ -359,13 +359,18 @@ impl ComparisonAttributor {
                     groups.len() - 1
                 });
                 let group = &mut groups[index];
-                if line.kind == DiffLineKind::Add {
-                    add_line(&mut group.added, line.new_line.unwrap_or_default());
+                let place = if line.kind == DiffLineKind::Add {
+                    let line = line.new_line.unwrap_or_default();
+                    add_line(&mut group.added, line);
+                    (Side::New, line)
                 } else {
-                    add_line(&mut group.deleted, line.old_line.unwrap_or_default());
-                }
+                    let line = line.old_line.unwrap_or_default();
+                    add_line(&mut group.deleted, line);
+                    (Side::Old, line)
+                };
                 if let Some(origin) = origin {
                     group.origins.push(origin);
+                    group.origin_places.push(place);
                 }
             }
         }

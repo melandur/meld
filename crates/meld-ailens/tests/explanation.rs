@@ -5,8 +5,8 @@ use meld_ailens::explanation::{
     parse_note,
 };
 use meld_ailens::{
-    ChangeExplanation, ChangeGuide, ChangeKind, CommitExplanation, CommitHunk, ExplanationSource,
-    GitCommit, GitIdentity, GitTrailer, LineOrigin, Side,
+    ChangeExplanation, ChangeGuide, ChangeKind, ChangeStep, CommitExplanation, CommitHunk,
+    ExplanationSource, GitCommit, GitIdentity, GitTrailer, LineOrigin, Side, StepLines,
 };
 
 use ExplanationSource::{Commit, Inferred, Note};
@@ -793,13 +793,36 @@ fn a_change_guide_round_trips_before_its_why() {
         was: Some("one card per hunk".into()),
         now: Some("one card\nper block".into()),
         check: Some("Old notes still match.".into()),
+        steps: vec![
+            ChangeStep {
+                lines: Some(StepLines {
+                    side: Side::New,
+                    first: 1,
+                    last: 3,
+                }),
+                text: "Reads the\nsettings.".into(),
+            },
+            ChangeStep {
+                lines: Some(StepLines {
+                    side: Side::Old,
+                    first: 2,
+                    last: 2,
+                }),
+                text: "Drops the cache.".into(),
+            },
+            ChangeStep {
+                lines: None,
+                text: "Ends early.".into(),
+            },
+        ],
     };
     let text = compose_note("", "m", &[guided.clone(), bottom()]);
     assert!(text.contains(
-        "Kind: behavior\nOrder: 3\nWhat: top\nWas: one card per hunk\nNow: one card per block\nCheck: Old notes still match.\nWhy: Needed."
+        "Kind: behavior\nOrder: 3\nWhat: top\nWas: one card per hunk\nNow: one card per block\nCheck: Old notes still match.\nStep: +1-3 Reads the settings.\nStep: -2 Drops the cache.\nStep: Ends early.\nWhy: Needed."
     ));
     let parsed = parse_note(&text);
     guided.guide.now = Some("one card per block".into());
+    guided.guide.steps[0].text = "Reads the settings.".into();
     assert_eq!(parsed.changes[0], guided);
     assert!(parsed.changes[1].guide.is_empty());
 }

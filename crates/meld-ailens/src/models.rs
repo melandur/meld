@@ -543,6 +543,9 @@ pub struct ChangeGroup {
     /// Where the lines were in the commit's own diff (against its first
     /// parent), or, when uncommitted, in its layer's diff
     pub origins: Vec<LineOrigin>,
+    /// Where each of `origins` is in the comparison: the side (target
+    /// `New`, base `Old`) and its line there
+    pub origin_places: Vec<(Side, usize)>,
     /// Set for a change not committed yet
     pub uncommitted: Option<UncommittedLayer>,
 }
@@ -713,6 +716,70 @@ pub struct ChangeGuide {
     pub now: Option<String>,
     /// What a reviewer should verify about the change
     pub check: Option<String>,
+    /// The change read line by line, in reading order
+    pub steps: Vec<ChangeStep>,
+}
+
+/// What a few lines of a change do: one step of reading it line by line
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangeStep {
+    /// The lines; None when the step names no lines of the change
+    pub lines: Option<StepLines>,
+    pub text: String,
+}
+
+/// Lines of a change, numbered from 1 among the change's lines on one side
+/// (its new lines from `new_start`, its old lines from `old_start`), so
+/// they stay right when the change moves
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StepLines {
+    pub side: Side,
+    pub first: usize,
+    /// Inclusive, at least `first`
+    pub last: usize,
+}
+
+impl StepLines {
+    /// The lines in the version of `side`, for a change at `hunk`
+    /// (1-based, inclusive)
+    pub fn in_hunk(&self, hunk: &CommitHunk) -> (usize, usize) {
+        let start = match self.side {
+            Side::Old => hunk.old_start,
+            Side::New => hunk.new_start,
+        };
+        (start + self.first - 1, start + self.last - 1)
+    }
+
+    /// As written in notes: `+3`, `+3-5`, `-2`
+    pub fn label(&self) -> String {
+        let sign = match self.side {
+            Side::Old => '-',
+            Side::New => '+',
+        };
+        if self.first == self.last {
+            format!("{sign}{}", self.first)
+        } else {
+            format!("{sign}{}-{}", self.first, self.last)
+        }
+    }
+
+    /// Reads [`StepLines::label`]
+    pub fn parse(label: &str) -> Option<Self> {
+        let side = match label.chars().next()? {
+            '+' => Side::New,
+            '-' => Side::Old,
+            _ => return None,
+        };
+        let rest = &label[1..];
+        let (first, last) = match rest.split_once('-') {
+            Some((first, last)) => (first.parse().ok()?, last.parse().ok()?),
+            None => {
+                let line = rest.parse().ok()?;
+                (line, line)
+            }
+        };
+        (first >= 1 && last >= first).then_some(Self { side, first, last })
+    }
 }
 
 impl ChangeGuide {

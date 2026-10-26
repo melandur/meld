@@ -20,7 +20,7 @@ use crate::build_facts::{
 use crate::build_file::BuildHeader;
 use crate::build_index::{find_builds, read_build_headers, resolve_build_folder};
 use crate::build_narrative::write_narrative;
-use crate::cards::{Card, CardKind, ExplainAction};
+use crate::cards::{Card, CardKind, CardStep, ExplainAction};
 use crate::claude::RunClaude;
 use crate::comparison::{changed_files_with_stats, resolve_comparison};
 use crate::error::{Error, Result};
@@ -34,9 +34,9 @@ use crate::infer::{
     InferOptions, compose_inferred_note, infer_explanation, infer_uncommitted_explanation,
 };
 use crate::models::{
-    ChangeExplanation, ChangeGroup, ChangeGuide, Comparison, ComparisonRelation, ExplanationSource,
-    FileAttribution, GitCommit, GitFileChange, GitFileStatus, LayerDiffsUsed, Revision,
-    RevisionKind, UncommittedLayer,
+    ChangeExplanation, ChangeGroup, ChangeGuide, ChangeStep, CommitHunk, Comparison,
+    ComparisonRelation, ExplanationSource, FileAttribution, GitCommit, GitFileChange,
+    GitFileStatus, LayerDiffsUsed, LineRange, Revision, RevisionKind, Side, UncommittedLayer,
 };
 use crate::picker::{
     COMMIT_PAGE_SIZE, PickerEntry, PickerSide, PickerSources, build_entries, short_sha,
@@ -940,6 +940,10 @@ impl CompareSession {
                 ..common
             };
             set_guide(&mut card, changes.iter().map(|c| &c.guide));
+            card.change_steps = card_steps(
+                group,
+                changes.iter().map(|c| (&c.hunk, c.guide.steps.as_slice())),
+            );
             return Ok(card);
         }
         let Some(sha) = &group.sha else {
@@ -1012,6 +1016,10 @@ impl CompareSession {
             ..common
         };
         set_guide(&mut card, changes.iter().map(|c| &c.guide));
+        card.change_steps = card_steps(
+            group,
+            changes.iter().map(|c| (&c.hunk, c.guide.steps.as_slice())),
+        );
         Ok(card)
     }
 
@@ -1459,6 +1467,51 @@ fn set_guide<'a>(card: &mut Card, guides: impl Iterator<Item = &'a ChangeGuide> 
     card.change_was = join_texts(guides.clone().filter_map(|g| g.was.as_deref()));
     card.change_now = join_texts(guides.clone().filter_map(|g| g.now.as_deref()));
     card.change_check = join_texts(guides.filter_map(|g| g.check.as_deref()));
+}
+
+/// The steps of the changes a card shows, with their lines where the
+/// comparison has them
+///
+/// A step's lines are found through the group's origins, so only lines of
+/// this card count; a step none of whose lines it has keeps no lines.
+fn card_steps<'a>(
+    group: &ChangeGroup,
+    changes: impl Iterator<Item = (&'a CommitHunk, &'a [ChangeStep])>,
+) -> Vec<CardStep> {
+    let mut steps = Vec::new();
+    for (hunk, change_steps) in changes {
+        for step in change_steps {
+            let lines = step.lines.and_then(|at| {
+                let (first, last) = at.in_hunk(hunk);
+                let path = match at.side {
+                    Side::Old => hunk.original_path.as_deref().unwrap_or(&hunk.path),
+                    Side::New => hunk.path.as_str(),
+                };
+                let mut places = group
+                    .origins
+                    .iter()
+                    .zip(&group.origin_places)
+                    .filter(|(origin, _)| {
+                        origin.side == at.side
+                            && origin.path == path
+                            && (first..=last).contains(&origin.line)
+                    })
+                    .map(|(_, place)| *place);
+                let (side, line) = places.next()?;
+                let (start, end) = places
+                    .filter(|(other, _)| *other == side)
+                    .fold((line, line), |(start, end), (_, line)| {
+                        (start.min(line), end.max(line))
+                    });
+                Some((side, LineRange::new(start, end)))
+            });
+            steps.push(CardStep {
+                lines,
+                text: step.text.clone(),
+            });
+        }
+    }
+    steps
 }
 
 fn join_texts<'a>(texts: impl Iterator<Item = &'a str>) -> String {

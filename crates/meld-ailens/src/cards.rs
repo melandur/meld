@@ -71,6 +71,9 @@ pub struct Card {
     pub change_was: String,
     pub change_now: String,
     pub change_check: String,
+    /// The change read line by line; empty in notes written before steps
+    /// were asked for
+    pub change_steps: Vec<CardStep>,
     pub change_model: String,
     /// The explain button, if any
     pub explain: Option<ExplainAction>,
@@ -79,6 +82,16 @@ pub struct Card {
     pub color_index: i32,
     /// Build files (names in the build folder) covering this commit
     pub builds: Vec<String>,
+}
+
+/// One step of reading a change line by line
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CardStep {
+    /// Its lines in the comparison: in the target version (`Side::New`) or
+    /// the base version (`Side::Old`), 1-based, inclusive; None when they
+    /// are not lines of this card
+    pub lines: Option<(Side, LineRange)>,
+    pub text: String,
 }
 
 impl Card {

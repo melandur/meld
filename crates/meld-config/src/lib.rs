@@ -87,7 +87,8 @@ pub use scheme::{
     SchemeInfo, SchemeManager, SchemeSource, Style, StyleAttr, StyleScheme, Underline, Variant,
 };
 pub use settings::{
-    FilterSetting, FolderColumn, FontSpec, MergeFileOrder, OverviewMapStyle, Settings, SpacesFlags,
-    StyleVariant, TIMESTAMP_RESOLUTIONS, WindowState, WrapMode, settings_path,
+    ExplainLayout, FilterSetting, FolderColumn, FontSpec, MergeFileOrder, OverviewMapStyle,
+    Settings, SpacesFlags, StyleVariant, TIMESTAMP_RESOLUTIONS, WindowState, WrapMode,
+    settings_path,
 };
 pub use style::{ChunkColors, ChunkTag, DiffColors, FontZoom, StatusColors, Theme};

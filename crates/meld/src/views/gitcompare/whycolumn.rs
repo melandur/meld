@@ -1,5 +1,7 @@
-//! The Why column (port of `meld/ui/whycolumn.py`): a card per change,
-//! level with the change's lines in the comparison next to it.
+//! The Explain column (port of `meld/ui/whycolumn.py`, where it is the Why
+//! column): a card per change, level with the change's lines in the
+//! comparison next to it. It can also lie over the target pane, or be
+//! hidden ([`meld_config::ExplainLayout`]).
 //!
 //! Added lines are found in the target pane, deleted lines in the base
 //! pane. A card is pushed down only to clear the one above it
@@ -24,7 +26,7 @@ use iced::{
 };
 use meld_ailens::cards::{CARD_GAP, layout_cards, reflow};
 use meld_ailens::picker::parse_iso_date;
-use meld_ailens::{Card, CardKind, ChangeKind, ExplainAction, ExplanationSource, Side};
+use meld_ailens::{Card, CardKind, CardStep, ChangeKind, ExplainAction, ExplanationSource, Side};
 
 use super::diffhost::PaneGeometry;
 use crate::ui;
@@ -228,6 +230,8 @@ pub struct Callbacks<M> {
     pub expand: fn(String) -> M,
     /// A name from the code was clicked: find it in the panes
     pub jump: fn(String) -> M,
+    /// The pointer went over a step of a card (its index) or left it
+    pub hover_step: fn(String, Option<usize>) -> M,
 }
 
 impl<M> Clone for Callbacks<M> {
@@ -451,6 +455,59 @@ fn before_after<'a, M: Clone + 'a>(
     .into()
 }
 
+/// A step's lines as a label: `12`, `12–14`, and `−7` for lines of the
+/// base version; `·` for a step without lines.
+pub fn step_label(step: &CardStep) -> String {
+    match step.lines {
+        Some((side, range)) => {
+            let sign = match side {
+                Side::Old => "−",
+                Side::New => "",
+            };
+            if range.start == range.end {
+                format!("{sign}{}", range.start)
+            } else {
+                format!("{sign}{}–{}", range.start, range.end)
+            }
+        }
+        None => "·".to_string(),
+    }
+}
+
+/// The change read line by line: each step's lines beside what they do.
+/// Hovering a step highlights its lines.
+fn steps_view<'a, M: Clone + 'a>(
+    card: &'a Card,
+    callbacks: Callbacks<M>,
+    font: CardFont,
+) -> Element<'a, M> {
+    let labels: Vec<String> = card.change_steps.iter().map(step_label).collect();
+    let widest = labels.iter().map(|l| l.chars().count()).max().unwrap_or(1);
+    // Monospace digits are about 0.6 of the size wide
+    let width = (widest as f32 * 0.62 + 0.6) * font.smaller(2.0);
+    let mut steps = column![].spacing(2).width(Length::Fill);
+    for (index, (step, label)) in card.change_steps.iter().zip(labels).enumerate() {
+        let line = row![
+            text(label)
+                .size(font.smaller(2.0))
+                .font(font.font)
+                .style(ui::dim_text)
+                .width(width)
+                .align_x(iced::alignment::Horizontal::Right)
+                .wrapping(text::Wrapping::None),
+            rich(&step.text, font.size, font.font, false, callbacks.jump),
+        ]
+        .spacing(6)
+        .align_y(iced::Alignment::Start);
+        steps = steps.push(
+            mouse_area(line)
+                .on_enter((callbacks.hover_step)(card.key.clone(), Some(index)))
+                .on_exit((callbacks.hover_step)(card.key.clone(), None)),
+        );
+    }
+    steps.into()
+}
+
 /// The line that opens and closes a card: quiet until hovered.
 fn toggle_button(theme: &Theme, status: button::Status) -> button::Style {
     let text = theme.extended_palette().background.base.text;
@@ -649,9 +706,10 @@ fn has_change(card: &Card) -> bool {
 }
 
 /// One card, read at a glance: the change's kind, its place in the reading
-/// order, a headline and what the code did before and does now. Open, it
-/// adds what to check, the Why and Justification, who made the change and
-/// the builds that cover it. Changes to skim (renames, mechanical changes,
+/// order, a statement of what the changed code does, and then the code
+/// line by line (in notes from before steps, what it did before and does
+/// now). Open, it adds what to check, the Was and Now, the Why and
+/// Justification, who made the change and the builds that cover it. Changes to skim (renames, mechanical changes,
 /// tests) show their headline only until opened. What the commit as a
 /// whole did is in the summary above the cards ([`commit_summary`]).
 pub fn card_view<'a, M: Clone + 'a>(
@@ -698,16 +756,25 @@ pub fn card_view<'a, M: Clone + 'a>(
         let title_font = if skim { font.font } else { font.bold() };
         body = body.push(rich(title, font.size, title_font, skim, callbacks.jump));
     }
-    if !skim {
+    let steps = !card.change_steps.is_empty();
+    // With steps, the before and after wait until the card is opened
+    let was_now = if steps { open } else { !skim };
+    if !skim && steps {
+        body = body.push(steps_view(card, callbacks, font));
+    }
+    if was_now {
         if !card.change_was.is_empty() {
             body = body.push(before_after(tr!("Was"), &card.change_was, callbacks, font));
         }
         if !card.change_now.is_empty() {
             body = body.push(before_after(tr!("Now"), &card.change_now, callbacks, font));
         }
+    }
+    if !skim {
         // Notes from before changes had a before and after: the change's
         // Why stands in, cut short
         if !open
+            && !steps
             && card.change_was.is_empty()
             && card.change_now.is_empty()
             && !card.change_why.is_empty()
@@ -849,7 +916,10 @@ pub fn card_view<'a, M: Clone + 'a>(
 
     // What opening the card shows
     let mut more: Vec<String> = Vec::new();
-    if skim && (!card.change_was.is_empty() || !card.change_now.is_empty()) {
+    if skim && steps {
+        more.push(tr!("Line by line").to_string());
+    }
+    if !was_now && (!card.change_was.is_empty() || !card.change_now.is_empty()) {
         more.push(tr!("Was/Now").to_string());
     }
     if !card.change_check.is_empty() {

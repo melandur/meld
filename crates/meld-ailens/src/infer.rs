@@ -16,8 +16,9 @@ use crate::error::{ClaudeErrorReason, Error, Result};
 use crate::explanation::{MessageFormat, compose_note, explain_commit, format_note, parse_note};
 use crate::ignore::{create_ignore_rules, is_ignored};
 use crate::models::{
-    ChangeExplanation, ChangeGuide, ChangeKind, CommitExplanation, CommitHunk, ExplanationSource,
-    GitCommit, GitDiffHunk, GitFileChange, GitFileDiff, GitFileStatus, UncommittedLayer,
+    ChangeExplanation, ChangeGuide, ChangeKind, ChangeStep, CommitExplanation, CommitHunk,
+    DiffLineKind, ExplanationSource, GitCommit, GitDiffHunk, GitFileChange, GitFileDiff,
+    GitFileStatus, Side, StepLines, UncommittedLayer,
 };
 use crate::process::CancelToken;
 
@@ -33,7 +34,12 @@ macro_rules! change_fields_prompt {
     else), "mechanical" (formatting, imports, generated or other changes that need no thought) or "test" (tests only).
   - "order": where to read the change to understand all the changes fastest, 1 first: definitions and the core of
     the change before their callers, mechanical changes last. Every change gets its own number.
-  - "what": a headline of at most eight words, starting with a verb, saying what the change does.
+  - "what": one plain sentence saying what the changed code does, as a statement a reader can take in at a glance
+    before reading the lines.
+  - "steps": the changed lines read line by line, top to bottom: one entry per line, or per few lines that do one
+    thing together, with "lines" naming them by their tags ("n12", or "n12-n14" for a run; "o7" for deleted lines)
+    and "says" telling in a few plain words what those lines do. Cover every changed line that does something; skip
+    blank lines, lone closing brackets and unchanged lines. A deleted line gets a step only when its removal matters.
   - "was": what the code did before the change, in a few words; empty when the change adds something new.
   - "now": what the code does after the change, in a few words, set against "was".
   - "why": one or two plain sentences on why that change is needed: its part in the whole, specific to it.
@@ -53,6 +59,8 @@ headings, no lists."#
 pub const SYSTEM_PROMPT: &str = concat!(
     r#"You explain git commits to engineers who want to understand the changed code as fast as possible.
 The diff's hunks are numbered: each hunk header starts with "[change N]".
+Every line of a hunk starts with a tag: "nN" for line N of the new version (added or unchanged lines), "oN" for
+line N of the old version (deleted lines).
 Reply with JSON matching the schema:
 - "what": one plain sentence saying what the commit changed.
 - "why": one to three plain sentences on why: the problem it solves or the goal it serves.
@@ -68,6 +76,8 @@ pub const UNCOMMITTED_SYSTEM_PROMPT: &str = concat!(
     r#"You explain uncommitted changes to engineers who want to understand the changed code as fast as possible.
 The changes are not committed yet, so there is no commit message: base the answer on the diff alone.
 The diff's hunks are numbered: each hunk header starts with "[change N]".
+Every line of a hunk starts with a tag: "nN" for line N of the new version (added or unchanged lines), "oN" for
+line N of the old version (deleted lines).
 Reply with JSON matching the schema: "changes" has one entry for every numbered change in the diff, with its
 number as "change", and
 "#,
@@ -84,6 +94,18 @@ fn changes_schema() -> Value {
                 "kind": {"type": "string", "enum": ChangeKind::ALL.map(ChangeKind::as_str)},
                 "order": {"type": "integer"},
                 "what": {"type": "string"},
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "lines": {"type": "string"},
+                            "says": {"type": "string"},
+                        },
+                        "required": ["lines", "says"],
+                        "additionalProperties": false,
+                    },
+                },
                 "was": {"type": "string"},
                 "now": {"type": "string"},
                 "why": {"type": "string"},
@@ -91,7 +113,8 @@ fn changes_schema() -> Value {
                 "justification": {"type": "string"},
             },
             "required": [
-                "change", "kind", "order", "what", "was", "now", "why", "check", "justification"
+                "change", "kind", "order", "what", "steps", "was", "now", "why", "check",
+                "justification"
             ],
             "additionalProperties": false,
         },
@@ -360,7 +383,14 @@ pub fn parse_changes(answer: Option<&Value>, hunks: &[CommitHunk]) -> Vec<Change
     let Some(Value::Array(items)) = answer else {
         return Vec::new();
     };
-    let mut by_hunk: HashMap<i64, (String, String, Option<String>, ChangeGuide)> = HashMap::new();
+    type Parsed<'a> = (
+        String,
+        String,
+        Option<String>,
+        ChangeGuide,
+        Option<&'a Value>,
+    );
+    let mut by_hunk: HashMap<i64, Parsed<'_>> = HashMap::new();
     for item in items {
         let Some(item) = item.as_object() else {
             continue;
@@ -397,6 +427,7 @@ pub fn parse_changes(answer: Option<&Value>, hunks: &[CommitHunk]) -> Vec<Change
             was: text("was"),
             now: text("now"),
             check: text("check"),
+            steps: Vec::new(),
         };
         by_hunk.insert(
             number,
@@ -405,6 +436,7 @@ pub fn parse_changes(answer: Option<&Value>, hunks: &[CommitHunk]) -> Vec<Change
                 why.trim().to_string(),
                 text("justification"),
                 guide,
+                item.get("steps"),
             ),
         );
     }
@@ -413,7 +445,9 @@ pub fn parse_changes(answer: Option<&Value>, hunks: &[CommitHunk]) -> Vec<Change
         .iter()
         .enumerate()
         .filter_map(|(index, hunk)| {
-            let (what, why, justification, guide) = by_hunk.remove(&(index as i64 + 1))?;
+            let (what, why, justification, mut guide, steps) =
+                by_hunk.remove(&(index as i64 + 1))?;
+            guide.steps = parse_steps(steps, hunk);
             Some(ChangeExplanation {
                 hunk: hunk.clone(),
                 what,
@@ -423,6 +457,69 @@ pub fn parse_changes(answer: Option<&Value>, hunks: &[CommitHunk]) -> Vec<Change
             })
         })
         .collect()
+}
+
+/// The answer's steps of one change, with their lines numbered among the
+/// change's lines (see [`StepLines`])
+///
+/// Steps without text are dropped; a step whose tags are not lines of the
+/// change keeps its text without lines.
+fn parse_steps(steps: Option<&Value>, hunk: &CommitHunk) -> Vec<ChangeStep> {
+    let Some(Value::Array(steps)) = steps else {
+        return Vec::new();
+    };
+    steps
+        .iter()
+        .filter_map(|step| {
+            let text = step.get("says")?.as_str()?.trim();
+            if text.is_empty() {
+                return None;
+            }
+            let lines = step
+                .get("lines")
+                .and_then(Value::as_str)
+                .and_then(|tags| step_lines(tags, hunk));
+            Some(ChangeStep {
+                lines,
+                text: text.to_string(),
+            })
+        })
+        .collect()
+}
+
+/// Tags such as `n12`, `n12-n14` or `o7-9` as lines of the change at `hunk`
+fn step_lines(tags: &str, hunk: &CommitHunk) -> Option<StepLines> {
+    let tag = |tag: &str| -> Option<(Option<Side>, usize)> {
+        let tag = tag.trim();
+        let side = match tag.chars().next()? {
+            'n' | 'N' => Some(Side::New),
+            'o' | 'O' => Some(Side::Old),
+            _ => None,
+        };
+        let digits = if side.is_some() { &tag[1..] } else { tag };
+        Some((side, digits.trim().parse().ok()?))
+    };
+    let (first, last) = match tags.split_once('-') {
+        Some((first, last)) => (tag(first)?, tag(last)?),
+        None => {
+            let line = tag(tags)?;
+            (line, line)
+        }
+    };
+    let side = first.0.or(last.0)?;
+    let (start, count) = match side {
+        Side::Old => (hunk.old_start, hunk.old_count),
+        Side::New => (hunk.new_start, hunk.new_count),
+    };
+    let (first, last) = (first.1.min(last.1), first.1.max(last.1));
+    if first < start || first >= start + count {
+        return None;
+    }
+    Some(StepLines {
+        side,
+        first: first - start + 1,
+        last: last.min(start + count - 1) - start + 1,
+    })
 }
 
 /// A JSON number as an integer; JSON has no integers of its own, so 2.0 is 2
@@ -591,7 +688,12 @@ fn render_file(
             let number = numbering.next().unwrap_or_default();
             lines.push(format!("[change {number}] {}", hunk_header(&hunk)));
             for line in &hunk.lines {
-                lines.push(format!("{}{}", line.kind.prefix(), line.content));
+                let tag = match (line.kind, line.old_line, line.new_line) {
+                    (DiffLineKind::Delete, Some(old), _) => format!("o{old}"),
+                    (_, _, Some(new)) => format!("n{new}"),
+                    _ => String::new(),
+                };
+                lines.push(format!("{tag:<6}{}{}", line.kind.prefix(), line.content));
                 if line.no_newline_at_end {
                     lines.push("\\ No newline at end of file".into());
                 }

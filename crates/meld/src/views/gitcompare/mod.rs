@@ -35,7 +35,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use iced::widget::{button, column, container, row, scrollable, space, text, text_editor, tooltip};
+use iced::widget::{
+    button, column, container, row, scrollable, space, stack, text, text_editor, tooltip,
+};
 use iced::{Background, Element, Length, Subscription, Task, Theme};
 use meld_ailens::picker::{apply_pick, revisions_from_args};
 use meld_ailens::{
@@ -43,7 +45,7 @@ use meld_ailens::{
     PickerEntry, PickerSide, RepositoryInfo, Revision, RevisionKind, SessionConfig,
     build_file_tree,
 };
-use meld_config::Settings;
+use meld_config::{ExplainLayout, Settings};
 use meld_forge::{
     Discussion, FetchedPullRequest, Forge, PullRequest, PullRequestDetails, Side, StateFilter,
 };
@@ -273,7 +275,11 @@ pub enum Message {
     CompareWithParent(String),
     OpenBuild(String),
     HoverCard(Option<String>),
+    /// The pointer went over a step of a card (its index), or left it
+    HoverStep(String, Option<usize>),
     ExpandCard(String),
+    /// Show the explanations in a column, over the target pane, or not at all
+    SetExplainLayout(ExplainLayout),
     /// A name from the code in a card was clicked: show where it is.
     JumpToName(String),
     StartDrag(DragTarget, f32),
@@ -1622,6 +1628,30 @@ impl GitCompare {
         self.cards.hovered = key;
     }
 
+    /// Highlights the lines of a card's step, or the whole card's when the
+    /// pointer left the step (it is still over the card).
+    fn hover_step(&mut self, key: String, step: Option<usize>) {
+        let lines = self
+            .view
+            .as_ref()
+            .and_then(|view| view.cards.iter().find(|c| c.key == key))
+            .zip(step)
+            .and_then(|(card, step)| card.change_steps.get(step)?.lines);
+        match lines {
+            Some((side, range)) => {
+                let mut lines = [Vec::new(), Vec::new()];
+                let pane = match side {
+                    meld_ailens::Side::Old => 0,
+                    meld_ailens::Side::New => 1,
+                };
+                lines[pane] = zero_based(&[range]);
+                self.diff.set_hover(lines);
+                self.cards.hovered = Some(key);
+            }
+            None => self.hover_card(Some(key)),
+        }
+    }
+
     // -- status --
 
     fn show_message(&mut self, icon: &'static str, title: &str, description: Option<String>) {
@@ -2016,6 +2046,20 @@ impl GitCompare {
             Message::ExpandCard(key) => {
                 if !self.cards.expanded.remove(&key) {
                     self.cards.expanded.insert(key);
+                }
+                Task::none()
+            }
+            Message::HoverStep(key, step) => {
+                self.hover_step(key, step);
+                Task::none()
+            }
+            Message::SetExplainLayout(layout) => {
+                if shared.settings.ailens_explain_layout != layout {
+                    shared.settings.ailens_explain_layout = layout;
+                    events.push(Event::SettingsChanged);
+                }
+                if layout == ExplainLayout::Hidden {
+                    self.hover_card(None);
                 }
                 Task::none()
             }
@@ -2557,26 +2601,159 @@ impl GitCompare {
                 }
                 container(page).center(Length::Fill).padding(20).into()
             }
-            Content::Diff => row![
-                container(self.diff.view(shared).map(Message::Diff))
+            Content::Diff => {
+                let diff = container(self.diff.view(shared).map(Message::Diff))
                     .width(Length::Fill)
-                    .height(Length::Fill),
-                divider(
-                    |x| Message::StartDrag(DragTarget::WhyColumn, x),
-                    Some(Message::ResetWhyWidth)
-                ),
-                self.why_panel(),
-            ]
-            .height(Length::Fill)
-            .into(),
+                    .height(Length::Fill);
+                match shared.settings.ailens_explain_layout {
+                    ExplainLayout::Column => row![
+                        diff,
+                        divider(
+                            |x| Message::StartDrag(DragTarget::WhyColumn, x),
+                            Some(Message::ResetWhyWidth)
+                        ),
+                        self.explain_panel(),
+                    ]
+                    .height(Length::Fill)
+                    .into(),
+                    ExplainLayout::Overlay => stack![diff, self.explain_overlay()]
+                        .width(Length::Fill)
+                        .height(Length::Fill)
+                        .into(),
+                    ExplainLayout::Hidden => {
+                        row![diff, self.explain_strip()].height(Length::Fill).into()
+                    }
+                }
+            }
         }
     }
 
-    fn why_panel(&self) -> Element<'_, Message> {
-        let title = container(text(tr!("Why")).size(13).font(ui::bold()))
+    /// A small flat button that switches where the explanations are.
+    fn layout_button(
+        &self,
+        label: &'static str,
+        tip: &'static str,
+        layout: ExplainLayout,
+    ) -> Element<'_, Message> {
+        tooltip(
+            button(text(label).size(12).style(ui::dim_text))
+                .padding([1, 6])
+                .style(ui::flat_button)
+                .on_press(Message::SetExplainLayout(layout)),
+            container(text(tip).size(12))
+                .padding([4, 8])
+                .style(ui::tooltip_box),
+            tooltip::Position::Bottom,
+        )
+        .into()
+    }
+
+    /// The explanations in a column of their own, with its title.
+    fn explain_panel(&self) -> Element<'_, Message> {
+        let title = container(
+            row![
+                text(tr!("Explain")).size(13).font(ui::bold()),
+                space::horizontal(),
+                self.layout_button(
+                    tr!("Overlay"),
+                    tr!("Show the explanations over the code, beside the lines they explain"),
+                    ExplainLayout::Overlay,
+                ),
+                self.layout_button(
+                    tr!("Hide"),
+                    tr!("Hide the explanations"),
+                    ExplainLayout::Hidden,
+                ),
+            ]
+            .spacing(2)
+            .align_y(iced::Center),
+        )
+        .height(self.diff.header_height())
+        .padding([0, 4])
+        .align_y(iced::Center);
+        container(column![title, self.explain_cards(true)])
+            .width(self.why_width)
+            .height(Length::Fill)
+            .style(|theme: &Theme| container::Style {
+                background: Some(Background::Color(
+                    theme.extended_palette().background.weak.color,
+                )),
+                ..container::Style::default()
+            })
+            .into()
+    }
+
+    /// The explanations over the right of the target pane: only the cards,
+    /// level with their lines, and the buttons to move them back or hide
+    /// them where the column's title would be.
+    fn explain_overlay(&self) -> Element<'_, Message> {
+        // Clear of the pane's scrollbar and the chunk map
+        const RIGHT_MARGIN: f32 = 28.0;
+        let buttons = container(
+            row![
+                self.layout_button(
+                    tr!("Column"),
+                    tr!("Show the explanations in a column of their own"),
+                    ExplainLayout::Column,
+                ),
+                self.layout_button(
+                    tr!("Hide"),
+                    tr!("Hide the explanations"),
+                    ExplainLayout::Hidden,
+                ),
+            ]
+            .spacing(2),
+        )
+        .style(|theme: &Theme| container::Style {
+            background: Some(Background::Color(
+                theme.extended_palette().background.weak.color,
+            )),
+            border: iced::Border::default().rounded(4),
+            ..container::Style::default()
+        });
+        let header = container(buttons)
             .height(self.diff.header_height())
-            .padding([0, 8])
+            .width(Length::Fill)
+            .align_x(iced::alignment::Horizontal::Right)
             .align_y(iced::Center);
+        let cards = column![header, self.explain_cards(false)].width(self.why_width);
+        row![space::horizontal(), cards]
+            .padding(iced::Padding::default().right(RIGHT_MARGIN))
+            .height(Length::Fill)
+            .into()
+    }
+
+    /// The explanations hidden: a thin strip at the right that brings them
+    /// back.
+    fn explain_strip(&self) -> Element<'_, Message> {
+        let show = tooltip(
+            button(text("‹").size(14).style(ui::dim_text))
+                .padding([2, 6])
+                .style(ui::flat_button)
+                .on_press(Message::SetExplainLayout(ExplainLayout::Column)),
+            container(text(tr!("Show the explanations")).size(12))
+                .padding([4, 8])
+                .style(ui::tooltip_box),
+            tooltip::Position::Left,
+        );
+        container(
+            container(show)
+                .height(self.diff.header_height())
+                .align_y(iced::Center),
+        )
+        .height(Length::Fill)
+        .style(|theme: &Theme| container::Style {
+            background: Some(Background::Color(
+                theme.extended_palette().background.weak.color,
+            )),
+            ..container::Style::default()
+        })
+        .into()
+    }
+
+    /// The cards (and the pull request's comments), level with their lines;
+    /// `summary` pins what each commit did above them.
+    fn explain_cards(&self, summary: bool) -> Element<'_, Message> {
         let callbacks = whycolumn::Callbacks {
             explain: Message::ExplainCard,
             commit: Message::ShowCommit,
@@ -2584,6 +2761,7 @@ impl GitCompare {
             hover: Message::HoverCard,
             expand: Message::ExpandCard,
             jump: Message::JumpToName,
+            hover_step: Message::HoverStep,
         };
         let cards: &[Card] = match (&self.view, self.diff.is_loading()) {
             (Some(view), false) => &view.cards,
@@ -2600,7 +2778,9 @@ impl GitCompare {
                 whycolumn::card_view(card, &self.cards, callbacks, now, font, reading)
             })
             .collect();
-        let summary = whycolumn::commit_summary(cards, &self.cards, callbacks, now, font);
+        let summary = summary
+            .then(|| whycolumn::commit_summary(cards, &self.cards, callbacks, now, font))
+            .flatten();
         let panes = [self.diff.pane_geometry(0), self.diff.pane_geometry(1)];
         let mut wanted = whycolumn::wanted_tops(cards, panes);
         // The pull request's comments on this file, beside their lines
@@ -2631,19 +2811,7 @@ impl GitCompare {
                 .center_x(Length::Fill)
                 .into()
             });
-        container(column![
-            title,
-            whycolumn::card_column(elements, wanted, placeholder, summary)
-        ])
-        .width(self.why_width)
-        .height(Length::Fill)
-        .style(|theme: &Theme| container::Style {
-            background: Some(Background::Color(
-                theme.extended_palette().background.weak.color,
-            )),
-            ..container::Style::default()
-        })
-        .into()
+        whycolumn::card_column(elements, wanted, placeholder, summary).into()
     }
 }
 

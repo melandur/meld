@@ -12,6 +12,12 @@
     <value nick="full-sourcemap" value="2"/>
   </enum>
 
+  <enum id="org.gnome.meld.explainlayout">
+    <value nick="column" value="0"/>
+    <value nick="overlay" value="1"/>
+    <value nick="hidden" value="2"/>
+  </enum>
+
   <enum id="org.gnome.meld.wrapmode">
     <value nick="none" value="0"/>
     <value nick="char" value="1"/>
@@ -353,6 +359,11 @@
       <default>""</default>
       <summary>Extra pattern for agent commits</summary>
       <description>A regular expression matched against commit authors to recognise agent commits, besides the Co-Authored-By: Claude trailer.</description>
+    </key>
+    <key name="ailens-explain-layout" enum="org.gnome.meld.explainlayout">
+      <default>"column"</default>
+      <summary>Where Git Compare shows explanations</summary>
+      <description>"column" shows them in a column of their own beside the comparison, "overlay" over the right of the target pane, beside the code, and "hidden" not at all.</description>
     </key>
   </schema>
 </schemalist>

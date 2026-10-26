@@ -93,7 +93,7 @@ pub mod time;
 pub mod uncommitted;
 pub mod worker;
 
-pub use cards::{Card, CardKind, ExplainAction};
+pub use cards::{Card, CardKind, CardStep, ExplainAction};
 pub use claude::{ClaudeRequest, ClaudeResponse, RunClaude};
 pub use error::{ClaudeErrorReason, Error, Result};
 pub use git::{GitOptions, GitRepository};

@@ -10,9 +10,10 @@ use meld_ailens::infer::{
     infer_uncommitted_explanation, parse_changes,
 };
 use meld_ailens::{
-    CancelToken, ChangeExplanation, ChangeGuide, ChangeKind, ClaudeErrorReason, CommitExplanation,
-    CommitHunk, DiffLineKind, Error, ExplanationSource, GitCommit, GitDiffHunk, GitDiffLine,
-    GitFileChange, GitFileDiff, GitFileStatus, GitIdentity, UncommittedLayer,
+    CancelToken, ChangeExplanation, ChangeGuide, ChangeKind, ChangeStep, ClaudeErrorReason,
+    CommitExplanation, CommitHunk, DiffLineKind, Error, ExplanationSource, GitCommit, GitDiffHunk,
+    GitDiffLine, GitFileChange, GitFileDiff, GitFileStatus, GitIdentity, Side, StepLines,
+    UncommittedLayer,
 };
 use serde_json::{Value, json};
 
@@ -263,7 +264,10 @@ fn sends_the_message_and_diff_leaving_out_ignored_and_generated_files() {
     assert_eq!(sent.system_prompt.as_deref(), Some(SYSTEM_PROMPT));
     assert_eq!(sent.json_schema.as_ref(), Some(&*SCHEMA));
     assert_eq!(*run.cancels.lock().unwrap(), vec![cancel]);
-    assert!(sent.prompt.contains("[change 1] @@ -1 +1 @@\n-one\n+two"));
+    assert!(
+        sent.prompt
+            .contains("[change 1] @@ -1 +1 @@\no1    -one\nn1    +two")
+    );
     assert!(!sent.prompt.contains("[change 2]"));
     assert!(sent.prompt.contains("Changes a\n\nSome body."));
     assert!(
@@ -430,8 +434,12 @@ fn changes_git_joined_into_one_hunk_are_numbered_apart() {
     .unwrap();
 
     let prompt = run.prompt();
-    assert!(prompt.contains("[change 1] @@ -1,4 +1,4 @@\n-one\n+ONE\n 2\n 3\n 4\n"));
-    assert!(prompt.contains("[change 2] @@ -5,4 +5,4 @@\n 5\n 6\n 7\n-eight\n+EIGHT\n"));
+    assert!(prompt.contains(
+        "[change 1] @@ -1,4 +1,4 @@\no1    -one\nn1    +ONE\nn2     2\nn3     3\nn4     4\n"
+    ));
+    assert!(prompt.contains(
+        "[change 2] @@ -5,4 +5,4 @@\nn5     5\nn6     6\nn7     7\no8    -eight\nn8    +EIGHT\n"
+    ));
     let got: Vec<(&CommitHunk, &str)> = explanation
         .changes
         .iter()
@@ -484,9 +492,9 @@ fn build_prompt_layout() {
         "--- a/a.py".into(),
         "+++ b/a.py".into(),
         "[change 1] @@ -3,2 +3,2 @@ def f():".into(),
-        " ctx".into(),
-        "-old".into(),
-        "+new".into(),
+        "n3     ctx".into(),
+        "o4    -old".into(),
+        "n4    +new".into(),
         "".into(),
     ]
     .join("\n");
@@ -565,21 +573,21 @@ fn build_prompt_renders_renames_additions_deletions_and_binaries() {
     assert!(text.contains("R old.py -> new.py\nA new.txt\nD gone.py\nM logo.png\nM end.txt\n"));
     assert!(text.contains(
         "diff --git a/old.py b/new.py\nsimilarity index 90%\nrename from old.py\n\
-         rename to new.py\n--- a/old.py\n+++ b/new.py\n[change 1] @@ -1 +1 @@\n-a\n+b\n"
+         rename to new.py\n--- a/old.py\n+++ b/new.py\n[change 1] @@ -1 +1 @@\no1    -a\nn1    +b\n"
     ));
     assert!(text.contains(
         "diff --git a/new.txt b/new.txt\n--- /dev/null\n+++ b/new.txt\n\
-         [change 2] @@ -0,0 +1 @@\n+hi\n"
+         [change 2] @@ -0,0 +1 @@\nn1    +hi\n"
     ));
     assert!(text.contains(
         "diff --git a/gone.py b/gone.py\n--- a/gone.py\n+++ /dev/null\n\
-         [change 3] @@ -1 +0,0 @@\n-bye\n"
+         [change 3] @@ -1 +0,0 @@\no1    -bye\n"
     ));
     assert!(text.contains(
         "diff --git a/logo.png b/logo.png\nBinary files a/logo.png and b/logo.png differ\n"
     ));
     assert!(text.contains(
-        "[change 4] @@ -1 +1 @@\n-x\n\\ No newline at end of file\n+y\n\
+        "[change 4] @@ -1 +1 @@\no1    -x\n\\ No newline at end of file\nn1    +y\n\
          \\ No newline at end of file\n"
     ));
     let mut renamed_hunk = hunk_ref("new.py", 1, 1, 1, 1);
@@ -631,7 +639,7 @@ fn unicode_paths_and_content() {
             .text
             .contains("diff --git a/données/é.py b/données/é.py")
     );
-    assert!(prompt.text.contains("-☃\n+雪"));
+    assert!(prompt.text.contains("o1    -☃\nn1    +雪"));
 }
 
 #[test]
@@ -645,7 +653,11 @@ fn a_huge_file_is_cut_and_listed() {
     assert!(prompt.text.contains("[… rest of big.txt left out]"));
     assert!(!prompt.text.contains("+line 01999"));
     // The next file is still shown, and every hunk keeps its number
-    assert!(prompt.text.contains("[change 2] @@ -1 +1 @@\n-a\n+b"));
+    assert!(
+        prompt
+            .text
+            .contains("[change 2] @@ -1 +1 @@\no1    -a\nn1    +b")
+    );
     assert_eq!(prompt.hunks.len(), 2);
     let diff = prompt.text.split_once("\nDiff:\n").unwrap().1;
     let big_part = diff.split_once("diff --git a/small.txt").unwrap().0;
@@ -837,8 +849,8 @@ fn uncommitted_prompt_layout_for_a_rename() {
         "--- a/old.ts",
         "+++ b/new.ts",
         "[change 1] @@ -1 +1 @@",
-        "-a",
-        "+b",
+        "o1    -a",
+        "n1    +b",
         "",
     ];
     assert_eq!(run.prompt(), expected.join("\n"));
@@ -964,7 +976,7 @@ fn an_untracked_file_is_an_addition() {
     .unwrap();
     assert!(
         run.prompt()
-            .contains("--- /dev/null\n+++ b/new.txt\n[change 1] @@ -0,0 +1 @@\n+hello")
+            .contains("--- /dev/null\n+++ b/new.txt\n[change 1] @@ -0,0 +1 @@\nn1    +hello")
     );
     assert_eq!(explained.changes[0].hunk, hunk_ref("new.txt", 0, 0, 1, 1));
 }
@@ -1117,6 +1129,7 @@ fn the_prompts_and_schemas_ask_for_justifications() {
                 "kind",
                 "order",
                 "what",
+                "steps",
                 "was",
                 "now",
                 "why",
@@ -1141,7 +1154,9 @@ fn the_prompts_and_schemas_ask_for_justifications() {
 #[test]
 fn the_prompts_ask_for_a_guide_to_each_change() {
     for prompt in [SYSTEM_PROMPT, meld_ailens::infer::UNCOMMITTED_SYSTEM_PROMPT] {
-        assert!(prompt.contains("\"what\": a headline of at most eight words"));
+        assert!(prompt.contains("\"what\": one plain sentence saying what the changed code does"));
+        assert!(prompt.contains("\"steps\": the changed lines read line by line"));
+        assert!(prompt.contains("\"nN\" for line N of the new version"));
         assert!(prompt.contains("\"was\": what the code did before the change"));
         assert!(prompt.contains("\"check\": one plain sentence on what a reviewer should verify"));
         assert!(prompt.contains("in backticks"));
@@ -1172,9 +1187,65 @@ fn answers_give_each_change_its_guide() {
             was: Some("loops forever".into()),
             now: Some("stops at `end`".into()),
             check: Some("Callers with an empty list.".into()),
+            steps: Vec::new(),
         }
     );
     assert_eq!(changes[0].justification, None);
     // Unknown kinds, orders below 1 and empty texts are left out
     assert!(changes[1].guide.is_empty());
+}
+
+#[test]
+fn answers_read_each_change_line_by_line() {
+    // Lines 10-14 new, 7-8 old
+    let hunks = [hunk_ref("a.rs", 7, 2, 10, 5)];
+    let answer = json!([{
+        "change": 1, "kind": "fix", "order": 1, "what": "Stops at the end",
+        "was": "", "now": "", "why": "Hangs.", "check": "", "justification": "",
+        "steps": [
+            {"lines": "n10", "says": "Reads the end."},
+            {"lines": "n12-n16", "says": "Loops up to it."},
+            {"lines": "o8", "says": "Drops the old loop."},
+            {"lines": "n40", "says": "Not a line of the change."},
+            {"lines": "n11", "says": "  "},
+        ],
+    }]);
+    let changes = parse_changes(Some(&answer), &hunks);
+    let at = |side, first, last| Some(StepLines { side, first, last });
+    assert_eq!(
+        changes[0].guide.steps,
+        [
+            ChangeStep {
+                lines: at(Side::New, 1, 1),
+                text: "Reads the end.".into()
+            },
+            // Cut to the change's last line
+            ChangeStep {
+                lines: at(Side::New, 3, 5),
+                text: "Loops up to it.".into()
+            },
+            ChangeStep {
+                lines: at(Side::Old, 2, 2),
+                text: "Drops the old loop.".into()
+            },
+            ChangeStep {
+                lines: None,
+                text: "Not a line of the change.".into()
+            },
+        ]
+    );
+}
+
+#[test]
+fn prompt_lines_are_tagged_with_their_line_numbers() {
+    let files = [modified(
+        "a.rs",
+        vec![hunk(3, 3, &[" keep", "-old", "+new"])],
+    )];
+    let prompt = build_prompt(&commit(), &files, None);
+    assert!(
+        prompt.text.contains("n3     keep\no4    -old\nn4    +new"),
+        "{}",
+        prompt.text
+    );
 }

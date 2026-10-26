@@ -11,8 +11,8 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::models::{
-    ChangeExplanation, ChangeGuide, ChangeKind, CommitExplanation, CommitHunk, ExplanationSource,
-    GitCommit, LineOrigin, Side,
+    ChangeExplanation, ChangeGuide, ChangeKind, ChangeStep, CommitExplanation, CommitHunk,
+    ExplanationSource, GitCommit, LineOrigin, Side, StepLines,
 };
 use crate::uncommitted::HunkChange;
 
@@ -33,7 +33,7 @@ const CHANGE_UNIT_BLOCK: &str = "block";
 static CHANGE_LINE: LazyLock<Regex> =
     LazyLock::new(|| regex(r"\AChange: -([0-9]+)(?:,([0-9]+))? \+([0-9]+)(?:,([0-9]+))? (.+)\z"));
 static CHANGE_FIELD: LazyLock<Regex> =
-    LazyLock::new(|| regex(r"\A(Change-From|Kind|Order|What|Was|Now|Check|Why):[ \t]*(.*)\z"));
+    LazyLock::new(|| regex(r"\A(Change-From|Kind|Order|What|Was|Now|Check|Step|Why):[ \t]*(.*)\z"));
 static JUSTIFICATION_LINE: LazyLock<Regex> =
     LazyLock::new(|| regex(r"(?i)\AJustification:[ \t]*(.*)\z"));
 static TRAILER_LINE: LazyLock<Regex> = LazyLock::new(|| regex(r"\A[A-Za-z0-9][A-Za-z0-9_-]*:\s"));
@@ -271,7 +271,9 @@ impl ParsedNote {
 /// before, with every justification None.
 ///
 /// Before `Why:` a change may also have the one-line fields of its
-/// [`ChangeGuide`]: `Kind:`, `Order:`, `Was:`, `Now:` and `Check:`. Readers
+/// [`ChangeGuide`]: `Kind:`, `Order:`, `Was:`, `Now:` and `Check:`, and a
+/// `Step:` line per step of reading it line by line (`Step: +3-5 text`, see
+/// [`StepLines::label`]; `Step: text` for a step without lines). Readers
 /// that don't know them skip them, as they skip any line before `Why:`.
 pub fn parse_note(text: &str) -> ParsedNote {
     let normalized = normalize(text);
@@ -380,11 +382,28 @@ pub fn parse_note(text: &str) -> ParsedNote {
             "Was" => guide.was = text(),
             "Now" => guide.now = text(),
             "Check" => guide.check = text(),
+            "Step" => guide.steps.extend(parse_step(value)),
             _ => why = Some(vec![value]),
         }
     }
     finish(&mut note, &hunk, &what, &guide, &why, &justification);
     note
+}
+
+/// A `Step:` line's value; None when it has no text
+fn parse_step(value: &str) -> Option<ChangeStep> {
+    let value = value.trim();
+    let (lines, text) = match value.split_once(char::is_whitespace) {
+        Some((label, text)) => match StepLines::parse(label) {
+            Some(lines) => (Some(lines), text.trim()),
+            None => (None, value),
+        },
+        None => (None, value),
+    };
+    (!text.is_empty()).then(|| ChangeStep {
+        lines,
+        text: text.to_string(),
+    })
 }
 
 fn parse_note_head(text: &str) -> ParsedNote {
@@ -523,6 +542,16 @@ pub fn compose_note(head: &str, model: &str, changes: &[ChangeExplanation]) -> S
             if let Some(value) = value.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
                 lines.push(format!("{label}: {}", value.replace('\n', " ")));
             }
+        }
+        for step in &guide.steps {
+            let text = step.text.trim().replace('\n', " ");
+            if text.is_empty() {
+                continue;
+            }
+            lines.push(match &step.lines {
+                Some(at) => format!("Step: {} {text}", at.label()),
+                None => format!("Step: {text}"),
+            });
         }
         lines.push(format!(
             "Why: {}",
