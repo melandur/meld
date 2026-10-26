@@ -71,6 +71,9 @@ pub struct Card {
     pub change_was: String,
     pub change_now: String,
     pub change_check: String,
+    /// How much the change needs checking, 1 to 5: the highest of the
+    /// changes the card shows; None in notes from before risks
+    pub change_risk: Option<u8>,
     /// The change read line by line; empty in notes written before steps
     /// were asked for
     pub change_steps: Vec<CardStep>,

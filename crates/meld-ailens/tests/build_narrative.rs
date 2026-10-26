@@ -446,7 +446,7 @@ fn schema_and_version() {
 
 // -- The prompts and schemas are pinned: the build ones are byte-identical
 // to the Python ones; the infer ones are too, plus the justification and
-// each change's guide (kind, order, steps, was, now, check) and the line
+// each change's guide (kind, order, steps, was, now, check, risk) and the line
 // tags --
 
 fn sha1(text: &str) -> String {
@@ -464,11 +464,11 @@ fn prompts_match_python() {
     );
     assert_eq!(
         sha1(infer::SYSTEM_PROMPT),
-        "12d0a58601ad10263fe835aab5ea71316f7aa26f"
+        "f81fe77a58e200168227814b03c313388e03e566"
     );
     assert_eq!(
         sha1(infer::UNCOMMITTED_SYSTEM_PROMPT),
-        "972e27473705dc918dcea5ea64dd3ac1de4a859c"
+        "b9c46901be36dda1b6ffc3ee1817a49a3bafc938"
     );
 }
 
@@ -483,11 +483,11 @@ fn schemas_match_python() {
     );
     assert_eq!(
         infer::SCHEMA.to_string(),
-        r#"{"type":"object","properties":{"what":{"type":"string"},"why":{"type":"string"},"justification":{"type":"string"},"changes":{"type":"array","items":{"type":"object","properties":{"change":{"type":"integer"},"kind":{"type":"string","enum":["behavior","fix","refactor","rename","mechanical","test"]},"order":{"type":"integer"},"what":{"type":"string"},"steps":{"type":"array","items":{"type":"object","properties":{"lines":{"type":"string"},"says":{"type":"string"}},"required":["lines","says"],"additionalProperties":false}},"was":{"type":"string"},"now":{"type":"string"},"why":{"type":"string"},"check":{"type":"string"},"justification":{"type":"string"}},"required":["change","kind","order","what","steps","was","now","why","check","justification"],"additionalProperties":false}}},"required":["what","why","justification","changes"],"additionalProperties":false}"#
+        r#"{"type":"object","properties":{"what":{"type":"string"},"why":{"type":"string"},"justification":{"type":"string"},"changes":{"type":"array","items":{"type":"object","properties":{"change":{"type":"integer"},"kind":{"type":"string","enum":["behavior","fix","refactor","rename","mechanical","test"]},"order":{"type":"integer"},"what":{"type":"string"},"steps":{"type":"array","items":{"type":"object","properties":{"lines":{"type":"string"},"says":{"type":"string"}},"required":["lines","says"],"additionalProperties":false}},"was":{"type":"string"},"now":{"type":"string"},"why":{"type":"string"},"check":{"type":"string"},"risk":{"type":"integer"},"justification":{"type":"string"}},"required":["change","kind","order","what","steps","was","now","why","check","risk","justification"],"additionalProperties":false}}},"required":["what","why","justification","changes"],"additionalProperties":false}"#
     );
     assert_eq!(
         infer::UNCOMMITTED_SCHEMA.to_string(),
-        r#"{"type":"object","properties":{"changes":{"type":"array","items":{"type":"object","properties":{"change":{"type":"integer"},"kind":{"type":"string","enum":["behavior","fix","refactor","rename","mechanical","test"]},"order":{"type":"integer"},"what":{"type":"string"},"steps":{"type":"array","items":{"type":"object","properties":{"lines":{"type":"string"},"says":{"type":"string"}},"required":["lines","says"],"additionalProperties":false}},"was":{"type":"string"},"now":{"type":"string"},"why":{"type":"string"},"check":{"type":"string"},"justification":{"type":"string"}},"required":["change","kind","order","what","steps","was","now","why","check","justification"],"additionalProperties":false}}},"required":["changes"],"additionalProperties":false}"#
+        r#"{"type":"object","properties":{"changes":{"type":"array","items":{"type":"object","properties":{"change":{"type":"integer"},"kind":{"type":"string","enum":["behavior","fix","refactor","rename","mechanical","test"]},"order":{"type":"integer"},"what":{"type":"string"},"steps":{"type":"array","items":{"type":"object","properties":{"lines":{"type":"string"},"says":{"type":"string"}},"required":["lines","says"],"additionalProperties":false}},"was":{"type":"string"},"now":{"type":"string"},"why":{"type":"string"},"check":{"type":"string"},"risk":{"type":"integer"},"justification":{"type":"string"}},"required":["change","kind","order","what","steps","was","now","why","check","risk","justification"],"additionalProperties":false}}},"required":["changes"],"additionalProperties":false}"#
     );
 }
 

@@ -1463,7 +1463,7 @@ fn label(
 
 /// A card's guide from those of the changes it shows: the kind of the
 /// first change to read closely (else of the first change), the earliest
-/// reading order, and the texts joined
+/// reading order, the highest risk, and the texts joined
 ///
 /// Was and Now are joined in pairs, one per change that has either, so
 /// that the n-th Was goes with the n-th Now: a change with only one of them
@@ -1475,6 +1475,7 @@ fn set_guide<'a>(card: &mut Card, guides: impl Iterator<Item = &'a ChangeGuide> 
         .find(|kind| !kind.skimmable())
         .or_else(|| guides.clone().find_map(|g| g.kind));
     card.change_order = guides.clone().filter_map(|g| g.order).min();
+    card.change_risk = guides.clone().filter_map(|g| g.risk).max();
     let text = |value: &Option<String>| {
         value
             .as_deref()
@@ -1701,6 +1702,22 @@ mod tests {
         ];
         set_guide(&mut card, guides.iter());
         assert_eq!(card.change_kind, Some(ChangeKind::Rename));
+    }
+
+    #[test]
+    fn a_card_takes_the_highest_risk_of_its_changes() {
+        let mut card = Card::default();
+        let risky = |risk| ChangeGuide {
+            risk,
+            ..Default::default()
+        };
+        set_guide(
+            &mut card,
+            [risky(Some(2)), risky(None), risky(Some(4))].iter(),
+        );
+        assert_eq!(card.change_risk, Some(4));
+        set_guide(&mut card, [risky(None)].iter());
+        assert_eq!(card.change_risk, None);
     }
 
     #[test]

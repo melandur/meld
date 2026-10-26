@@ -61,6 +61,7 @@ impl FakeClaude {
                     "what": format!("Change {n} what"),
                     "why": format!("Change {n} why"),
                     "justification": format!("Change {n} justification"),
+                    "risk": 4,
                     "steps": first_added_tag(&request.prompt, *n)
                         .map(|tag| vec![json!({"lines": tag, "says": format!("Change {n} step")})])
                         .unwrap_or_default(),
@@ -270,6 +271,8 @@ fn explain_commit_saves_note_and_updates_cards() {
             text: "Change 1 step".into(),
         }]
     );
+    assert!(note.contains("Risk: 4\nWhat: Change 1 what"), "{note}");
+    assert_eq!(agent.change_risk, Some(4));
     assert!(
         note.contains("Why: Inferred why\nJustification: Inferred justification\n")
             && note.contains("Why: Change 1 why\nJustification: Change 1 justification"),

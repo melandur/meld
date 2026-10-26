@@ -716,6 +716,9 @@ pub struct ChangeGuide {
     pub now: Option<String>,
     /// What a reviewer should verify about the change
     pub check: Option<String>,
+    /// How much the change needs checking, from 1 (not worth the reader's
+    /// time) to 5 (to check and verify); see [`ChangeGuide::RISKS`]
+    pub risk: Option<u8>,
     /// The change read line by line, in reading order
     pub steps: Vec<ChangeStep>,
 }
@@ -783,6 +786,16 @@ impl StepLines {
 }
 
 impl ChangeGuide {
+    /// The range of [`ChangeGuide::risk`]
+    pub const RISKS: std::ops::RangeInclusive<u8> = 1..=5;
+
+    /// A risk read from an answer or a note: None outside 1 to 5
+    pub fn parse_risk(value: i64) -> Option<u8> {
+        u8::try_from(value)
+            .ok()
+            .filter(|risk| Self::RISKS.contains(risk))
+    }
+
     pub fn is_empty(&self) -> bool {
         *self == Self::default()
     }

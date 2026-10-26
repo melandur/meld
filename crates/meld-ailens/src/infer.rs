@@ -46,6 +46,10 @@ macro_rules! change_fields_prompt {
     Don't repeat the overall reason.
   - "check": one plain sentence on what a reviewer should verify about the change: an edge case, a caller, an
     assumption it makes; empty for rename, mechanical and test changes that need no checking.
+  - "risk": how much the reader needs to check and verify the change, from 1 to 5: 1 is not worth their time
+    (formatting, renames, imports, generated code), 2 is plain and safe, 3 is worth a careful read, 4 should be
+    checked against its callers and edge cases, 5 must be checked and verified (security, data loss, concurrency,
+    money, public interfaces, subtle logic). Judge the change itself, not how big it is.
   - "justification": one to three plain sentences on why that change is the right one: the evidence for it in the
     diff and the code around it, and which alternatives or simpler fixes it rules out.
 A justification uses only the evidence you are given; if that evidence is thin, say so plainly instead of inventing
@@ -110,11 +114,14 @@ fn changes_schema() -> Value {
                 "now": {"type": "string"},
                 "why": {"type": "string"},
                 "check": {"type": "string"},
+                // 1 to 5, as the prompt says: numeric bounds aren't
+                // supported in structured outputs; parse_changes drops others
+                "risk": {"type": "integer"},
                 "justification": {"type": "string"},
             },
             "required": [
                 "change", "kind", "order", "what", "steps", "was", "now", "why", "check",
-                "justification"
+                "risk", "justification"
             ],
             "additionalProperties": false,
         },
@@ -427,6 +434,10 @@ pub fn parse_changes(answer: Option<&Value>, hunks: &[CommitHunk]) -> Vec<Change
             was: text("was"),
             now: text("now"),
             check: text("check"),
+            risk: match item.get("risk") {
+                Some(Value::Number(risk)) => integer(risk).and_then(ChangeGuide::parse_risk),
+                _ => None,
+            },
             steps: Vec::new(),
         };
         by_hunk.insert(

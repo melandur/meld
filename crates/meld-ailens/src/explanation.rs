@@ -32,8 +32,9 @@ static CHANGE_UNIT_LINE: LazyLock<Regex> = LazyLock::new(|| regex(r"\AChange-Uni
 const CHANGE_UNIT_BLOCK: &str = "block";
 static CHANGE_LINE: LazyLock<Regex> =
     LazyLock::new(|| regex(r"\AChange: -([0-9]+)(?:,([0-9]+))? \+([0-9]+)(?:,([0-9]+))? (.+)\z"));
-static CHANGE_FIELD: LazyLock<Regex> =
-    LazyLock::new(|| regex(r"\A(Change-From|Kind|Order|What|Was|Now|Check|Step|Why):[ \t]*(.*)\z"));
+static CHANGE_FIELD: LazyLock<Regex> = LazyLock::new(|| {
+    regex(r"\A(Change-From|Kind|Order|Risk|What|Was|Now|Check|Step|Why):[ \t]*(.*)\z")
+});
 static JUSTIFICATION_LINE: LazyLock<Regex> =
     LazyLock::new(|| regex(r"(?i)\AJustification:[ \t]*(.*)\z"));
 static TRAILER_LINE: LazyLock<Regex> = LazyLock::new(|| regex(r"\A[A-Za-z0-9][A-Za-z0-9_-]*:\s"));
@@ -271,7 +272,8 @@ impl ParsedNote {
 /// before, with every justification None.
 ///
 /// Before `Why:` a change may also have the one-line fields of its
-/// [`ChangeGuide`]: `Kind:`, `Order:`, `Was:`, `Now:` and `Check:`, and a
+/// [`ChangeGuide`]: `Kind:`, `Order:`, `Risk:`, `Was:`, `Now:` and `Check:`,
+/// and a
 /// `Step:` line per step of reading it line by line (`Step: +3-5 text`, see
 /// [`StepLines::label`]; `Step: text` for a step without lines, or
 /// `Step: ~ text` when its text starts like a label). Readers
@@ -383,6 +385,7 @@ pub fn parse_note(text: &str) -> ParsedNote {
             "Was" => guide.was = text(),
             "Now" => guide.now = text(),
             "Check" => guide.check = text(),
+            "Risk" => guide.risk = value.trim().parse().ok().and_then(ChangeGuide::parse_risk),
             "Step" => guide.steps.extend(parse_step(value)),
             _ => why = Some(vec![value]),
         }
@@ -537,6 +540,9 @@ pub fn compose_note(head: &str, model: &str, changes: &[ChangeExplanation]) -> S
         }
         if let Some(order) = guide.order {
             lines.push(format!("Order: {order}"));
+        }
+        if let Some(risk) = guide.risk {
+            lines.push(format!("Risk: {risk}"));
         }
         lines.push(format!("What: {}", change.what.replace('\n', " ")));
         for (label, value) in [

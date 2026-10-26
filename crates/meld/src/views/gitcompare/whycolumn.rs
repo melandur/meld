@@ -529,6 +529,37 @@ fn kind_chip<'a, M: 'a>(kind: ChangeKind, font: CardFont) -> Element<'a, M> {
     )
 }
 
+/// The chip of a change's risk: how much it needs checking, from grey (1,
+/// not worth the time) to red (5, to check and verify).
+fn risk_chip<'a, M: 'a>(risk: u8, font: CardFont) -> Element<'a, M> {
+    let (rgb, tip) = match risk {
+        1 => (0x9a9996, tr!("Not worth your time")),
+        2 => (0x77767b, tr!("Plain and safe")),
+        3 => (0xc88800, tr!("Worth a careful read")),
+        4 => (0xe66100, tr!("Check it against its callers and edge cases")),
+        _ => (0xc01c28, tr!("Check and verify it")),
+    };
+    let color = hex(rgb);
+    let chip = badge(
+        tr!("risk {risk}/5", risk = risk),
+        color.scale_alpha(if risk >= 4 { 0.25 } else { 0.15 }),
+        Some(color),
+        false,
+        CardFont {
+            font: if risk >= 4 { font.bold() } else { font.font },
+            ..font
+        },
+    );
+    tooltip(
+        chip,
+        container(text(tip).size(12))
+            .padding([4, 8])
+            .style(ui::tooltip_box),
+        tooltip::Position::Bottom,
+    )
+    .into()
+}
+
 fn long_text<'a, M: Clone + 'a>(
     body: String,
     key: &str,
@@ -1002,6 +1033,9 @@ pub fn card_view<'a, M: Clone + 'a>(
     let mut top = row![].spacing(6).align_y(iced::Center);
     if let Some(kind) = card.change_kind {
         top = top.push(kind_chip(kind, font));
+    }
+    if let Some(risk) = card.change_risk {
+        top = top.push(risk_chip(risk, font));
     }
     if let Some((number, total)) = reading {
         let label = if number == 1 {

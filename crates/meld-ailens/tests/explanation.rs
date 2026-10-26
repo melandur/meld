@@ -793,6 +793,7 @@ fn a_change_guide_round_trips_before_its_why() {
         was: Some("one card per hunk".into()),
         now: Some("one card\nper block".into()),
         check: Some("Old notes still match.".into()),
+        risk: Some(4),
         steps: vec![
             ChangeStep {
                 lines: Some(StepLines {
@@ -818,7 +819,7 @@ fn a_change_guide_round_trips_before_its_why() {
     };
     let text = compose_note("", "m", &[guided.clone(), bottom()]);
     assert!(text.contains(
-        "Kind: behavior\nOrder: 3\nWhat: top\nWas: one card per hunk\nNow: one card per block\nCheck: Old notes still match.\nStep: +1-3 Reads the settings.\nStep: -2 Drops the cache.\nStep: Ends early.\nWhy: Needed."
+        "Kind: behavior\nOrder: 3\nRisk: 4\nWhat: top\nWas: one card per hunk\nNow: one card per block\nCheck: Old notes still match.\nStep: +1-3 Reads the settings.\nStep: -2 Drops the cache.\nStep: Ends early.\nWhy: Needed."
     ));
     let parsed = parse_note(&text);
     guided.guide.now = Some("one card per block".into());
@@ -1311,4 +1312,21 @@ fn note_steps_without_text_or_with_odd_labels() {
     );
     // A Step line after the Why is part of the Why
     assert_eq!(parsed.changes[0].why, "Y\nStep: +1 in the Why");
+}
+
+#[test]
+fn risks_outside_one_to_five_are_none() {
+    let risk = |value: &str| {
+        let note = format!("Change-Model: m\nChange: -1 +1 a.rs\nWhat: W\nRisk: {value}\nWhy: Y\n");
+        parse_note(&note).changes[0].guide.risk
+    };
+    assert_eq!(risk("1"), Some(1));
+    assert_eq!(risk(" 5 "), Some(5));
+    for bad in ["0", "6", "-1", "high", "", "3.5"] {
+        assert_eq!(risk(bad), None, "{bad}");
+    }
+    // In the Why, it is the Why's
+    let parsed = parse_note("Change-Model: m\nChange: -1 +1 a.rs\nWhy: Y\nRisk: 5\n");
+    assert_eq!(parsed.changes[0].guide.risk, None);
+    assert_eq!(parsed.changes[0].why, "Y\nRisk: 5");
 }

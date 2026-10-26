@@ -1178,6 +1178,7 @@ fn the_prompts_and_schemas_ask_for_justifications() {
                 "now",
                 "why",
                 "check",
+                "risk",
                 "justification"
             ])
         );
@@ -1203,6 +1204,11 @@ fn the_prompts_ask_for_a_guide_to_each_change() {
         assert!(prompt.contains("\"nN\" for line N of the new version"));
         assert!(prompt.contains("\"was\": what the code did before the change"));
         assert!(prompt.contains("\"check\": one plain sentence on what a reviewer should verify"));
+        assert!(prompt.contains(
+            "\"risk\": how much the reader needs to check and verify the change, from 1 to 5"
+        ));
+        assert!(prompt.contains("1 is not worth their time"));
+        assert!(prompt.contains("5 must be checked and verified"));
         assert!(prompt.contains("in backticks"));
     }
     assert!(SYSTEM_PROMPT.ends_with("the commit message and diff you are given."));
@@ -1215,11 +1221,11 @@ fn answers_give_each_change_its_guide() {
         {
             "change": 1, "kind": "Fix", "order": 2, "what": "Stops at the end",
             "was": " loops forever ", "now": "stops at `end`", "why": "Hangs.",
-            "check": "Callers with an empty list.", "justification": "",
+            "check": "Callers with an empty list.", "justification": "", "risk": 4,
         },
         {
             "change": 2, "kind": "sideways", "order": 0, "what": "Renames",
-            "was": "", "now": "", "why": "Clearer.", "check": "",
+            "was": "", "now": "", "why": "Clearer.", "check": "", "risk": 9,
         },
     ]);
     let changes = parse_changes(Some(&answer), &hunks);
@@ -1231,11 +1237,13 @@ fn answers_give_each_change_its_guide() {
             was: Some("loops forever".into()),
             now: Some("stops at `end`".into()),
             check: Some("Callers with an empty list.".into()),
+            risk: Some(4),
             steps: Vec::new(),
         }
     );
     assert_eq!(changes[0].justification, None);
-    // Unknown kinds, orders below 1 and empty texts are left out
+    // Unknown kinds, orders below 1, risks outside 1 to 5 and empty texts
+    // are left out
     assert!(changes[1].guide.is_empty());
 }
 
