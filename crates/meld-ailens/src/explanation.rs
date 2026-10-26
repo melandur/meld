@@ -273,7 +273,8 @@ impl ParsedNote {
 /// Before `Why:` a change may also have the one-line fields of its
 /// [`ChangeGuide`]: `Kind:`, `Order:`, `Was:`, `Now:` and `Check:`, and a
 /// `Step:` line per step of reading it line by line (`Step: +3-5 text`, see
-/// [`StepLines::label`]; `Step: text` for a step without lines). Readers
+/// [`StepLines::label`]; `Step: text` for a step without lines, or
+/// `Step: ~ text` when its text starts like a label). Readers
 /// that don't know them skip them, as they skip any line before `Why:`.
 pub fn parse_note(text: &str) -> ParsedNote {
     let normalized = normalize(text);
@@ -390,10 +391,14 @@ pub fn parse_note(text: &str) -> ParsedNote {
     note
 }
 
+/// What marks a step without lines whose text starts like a label
+const NO_LINES: &str = "~";
+
 /// A `Step:` line's value; None when it has no text
 fn parse_step(value: &str) -> Option<ChangeStep> {
     let value = value.trim();
     let (lines, text) = match value.split_once(char::is_whitespace) {
+        Some((NO_LINES, text)) => (None, text.trim()),
         Some((label, text)) => match StepLines::parse(label) {
             Some(lines) => (Some(lines), text.trim()),
             None => (None, value),
@@ -548,8 +553,13 @@ pub fn compose_note(head: &str, model: &str, changes: &[ChangeExplanation]) -> S
             if text.is_empty() {
                 continue;
             }
+            let looks_labeled = |text: &str| {
+                let first = text.split_whitespace().next().unwrap_or("");
+                first == NO_LINES || StepLines::parse(first).is_some()
+            };
             lines.push(match &step.lines {
                 Some(at) => format!("Step: {} {text}", at.label()),
+                None if looks_labeled(&text) => format!("Step: {NO_LINES} {text}"),
                 None => format!("Step: {text}"),
             });
         }

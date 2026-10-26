@@ -487,7 +487,8 @@ fn parse_steps(steps: Option<&Value>, hunk: &CommitHunk) -> Vec<ChangeStep> {
         .collect()
 }
 
-/// Tags such as `n12`, `n12-n14` or `o7-9` as lines of the change at `hunk`
+/// Tags such as `n12`, `n12-n14` or `o7-9` as lines of the change at `hunk`,
+/// cut to the part inside it; None when no part is
 fn step_lines(tags: &str, hunk: &CommitHunk) -> Option<StepLines> {
     let tag = |tag: &str| -> Option<(Option<Side>, usize)> {
         let tag = tag.trim();
@@ -511,14 +512,19 @@ fn step_lines(tags: &str, hunk: &CommitHunk) -> Option<StepLines> {
         Side::Old => (hunk.old_start, hunk.old_count),
         Side::New => (hunk.new_start, hunk.new_count),
     };
-    let (first, last) = (first.1.min(last.1), first.1.max(last.1));
-    if first < start || first >= start + count {
+    if count == 0 {
+        return None;
+    }
+    // The part of the range inside the change
+    let (low, high) = (first.1.min(last.1), first.1.max(last.1));
+    let (first, last) = (low.max(start), high.min(start + count - 1));
+    if first > last {
         return None;
     }
     Some(StepLines {
         side,
         first: first - start + 1,
-        last: last.min(start + count - 1) - start + 1,
+        last: last - start + 1,
     })
 }
 
@@ -693,7 +699,11 @@ fn render_file(
                     (_, _, Some(new)) => format!("n{new}"),
                     _ => String::new(),
                 };
-                lines.push(format!("{tag:<6}{}{}", line.kind.prefix(), line.content));
+                lines.push(format!(
+                    "{tag:<TAG_WIDTH$}{}{}",
+                    line.kind.prefix(),
+                    line.content
+                ));
                 if line.no_newline_at_end {
                     lines.push("\\ No newline at end of file".into());
                 }
@@ -703,23 +713,74 @@ fn render_file(
     lines.join("\n") + "\n"
 }
 
+/// How wide the line tags of the prompt are, padding included (`n12   `)
+const TAG_WIDTH: usize = 6;
+
+/// How many leading characters of a prompt line are its tag and the tag's
+/// padding; 0 for lines without one
+fn tag_length(line: &str) -> usize {
+    let bytes = line.as_bytes();
+    if !matches!(bytes.first(), Some(b'n' | b'o')) {
+        return 0;
+    }
+    let digits = bytes[1..].iter().take_while(|b| b.is_ascii_digit()).count();
+    if digits == 0 {
+        return 0;
+    }
+    let tag = 1 + digits;
+    let padding = bytes[tag..]
+        .iter()
+        .take_while(|&&b| b == b' ')
+        .count()
+        .min(TAG_WIDTH.saturating_sub(tag));
+    tag + padding
+}
+
+/// Characters of a patch without its line tags: what the caps count, so
+/// tagging the lines doesn't shrink how much of the diff fits
+fn untagged_length(text: &str) -> usize {
+    text.chars().count() - text.lines().map(tag_length).sum::<usize>()
+}
+
+/// `text` cut after `max` characters not counting line tags
+fn untagged_prefix(text: &str, max: usize) -> &str {
+    let mut counted = 0;
+    let mut start = 0;
+    for line in text.split_inclusive('\n') {
+        let tag = tag_length(line);
+        let rest = &line[tag..];
+        let length = rest.chars().count();
+        if counted + length > max {
+            let keep = rest
+                .char_indices()
+                .nth(max - counted)
+                .map_or(rest.len(), |(index, _)| index);
+            return &text[..start + tag + keep];
+        }
+        counted += length;
+        start += line.len();
+    }
+    text
+}
+
 /// Keep each file's patch and the whole patch under the caps
 ///
 /// `files` holds each file's patch and name. Returns the patch and the
-/// names of the files that were cut. Lengths count characters.
+/// names of the files that were cut. Lengths count characters, not the
+/// line tags.
 fn cap_patch(files: &[(String, String)]) -> (String, Vec<String>) {
     let mut cut: Vec<String> = Vec::new();
     let mut total = 0;
     let mut kept = String::new();
     for (text, name) in files {
         let mut text = text.clone();
-        let mut length = text.chars().count();
+        let mut length = untagged_length(&text);
         if length > MAX_PATCH_CHARS_PER_FILE {
             text = format!(
                 "{}\n[… rest of {name} left out]\n",
-                crate::claude::prefix(&text, MAX_PATCH_CHARS_PER_FILE)
+                untagged_prefix(&text, MAX_PATCH_CHARS_PER_FILE)
             );
-            length = text.chars().count();
+            length = untagged_length(&text);
             cut.push(name.clone());
         }
         if total + length > MAX_PATCH_CHARS {

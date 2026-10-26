@@ -642,6 +642,27 @@ fn unicode_paths_and_content() {
     assert!(prompt.text.contains("o1    -☃\nn1    +雪"));
 }
 
+/// A prompt's diff without its line tags (`n12   `, `o7    `), on lines
+/// of added or deleted text
+fn untagged(diff: &str) -> String {
+    regex::Regex::new(r"(?m)^[no][0-9]+ *([-+])")
+        .unwrap()
+        .replace_all(diff, "$1")
+        .into_owned()
+}
+
+#[test]
+fn line_tags_do_not_count_against_the_caps() {
+    // Fits the cap without its tags, not with them
+    let line = "x".repeat(40);
+    let count = MAX_PATCH_CHARS_PER_FILE / (line.len() + 2) - 20;
+    let lines: Vec<String> = (0..count).map(|_| format!("+{line}")).collect();
+    let file = modified("a.txt", vec![hunk_owned(1, 1, &lines)]);
+    let prompt = build_prompt(&commit(), &[file], None);
+    assert!(!prompt.text.contains("left out"), "cut short");
+    assert!(prompt.text.chars().count() > MAX_PATCH_CHARS_PER_FILE);
+}
+
 #[test]
 fn a_huge_file_is_cut_and_listed() {
     let lines: Vec<String> = (0..2000).map(|i| format!("+line {i:05}")).collect();
@@ -661,9 +682,9 @@ fn a_huge_file_is_cut_and_listed() {
     assert_eq!(prompt.hunks.len(), 2);
     let diff = prompt.text.split_once("\nDiff:\n").unwrap().1;
     let big_part = diff.split_once("diff --git a/small.txt").unwrap().0;
-    // Python's len() counts characters
+    // Python's len() counts characters; the line tags don't count
     assert_eq!(
-        big_part.chars().count(),
+        untagged(big_part).chars().count(),
         MAX_PATCH_CHARS_PER_FILE + "\n[… rest of big.txt left out]\n".chars().count()
     );
 }
@@ -679,7 +700,7 @@ fn files_past_the_total_budget_are_left_out() {
     let prompt = build_prompt(&commit(), &files, None);
     let diff = prompt.text.split_once("\nDiff:\n").unwrap().1;
 
-    assert!(diff.chars().count() <= MAX_PATCH_CHARS);
+    assert!(untagged(diff).chars().count() <= MAX_PATCH_CHARS);
     // Each file is cut to its cap, so four fit; the rest are left out
     assert_eq!(diff.matches("diff --git ").count(), 4);
     assert!(
@@ -1269,7 +1290,9 @@ fn step_tags_are_read_leniently_but_only_as_lines_of_the_change() {
     };
     let at = |side, first, last| Some(StepLines { side, first, last });
     assert_eq!(
-        steps(&["N11", "n13-11", "n12-14", "o7-8", " o8 ", "n14-n20"]),
+        steps(&[
+            "N11", "n13-11", "n12-14", "o7-8", " o8 ", "n14-n20", "n8-n11"
+        ]),
         [
             at(Side::New, 2, 2),
             // Backwards ranges are turned round
@@ -1278,8 +1301,9 @@ fn step_tags_are_read_leniently_but_only_as_lines_of_the_change() {
             at(Side::New, 3, 5),
             at(Side::Old, 1, 2),
             at(Side::Old, 2, 2),
-            // Cut to the change's last line
+            // Cut to the change's last line, or its first
             at(Side::New, 5, 5),
+            at(Side::New, 1, 2),
         ]
     );
     // No side, unknown side, not numbers, lines before or after the change

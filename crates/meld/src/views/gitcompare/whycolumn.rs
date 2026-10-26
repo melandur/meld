@@ -112,10 +112,11 @@ pub fn place_cards(wanted: &[f32], heights: &[f32], gap: f32) -> Vec<f32> {
 /// the last cards would hang below the column, where scrolling the panes
 /// can't bring them. Cards in view (`wanted` above `bottom`) are pulled
 /// back up just enough to end at `bottom`, the cards above them with them.
-/// A card whose line (`lines`, where it is anchored) is below `top` (the
-/// column's header) never goes above `top`, and pushes the cards after it
-/// down instead; one whose line scrolled up to or above `top` may stay
-/// there, partly hidden, so the cards after it keep their lines. Cards
+/// A card whose line (`lines`, where it is anchored) is in view, at or
+/// below the column's top, never goes above `top` (under the column's
+/// pinned header, which would hide it for good at the start of a file) and
+/// pushes the cards after it down instead; one whose line scrolled above
+/// the column may go along. Cards
 /// further down are left alone.
 pub fn fit_cards(
     wanted: &[f32],
@@ -136,7 +137,7 @@ pub fn fit_cards(
     let floors: Vec<f32> = in_view
         .iter()
         .map(|&i| {
-            if lines[i] >= top {
+            if lines[i] >= 0.0 {
                 top
             } else {
                 tops[i].min(top)
@@ -184,21 +185,31 @@ pub fn wanted_starts(
         })
         .collect();
     let mut lines = wanted.to_vec();
-    let mut order: Vec<usize> = (0..wanted.len()).collect();
-    order.sort_by(|&a, &b| starts[a].total_cmp(&starts[b]).then(a.cmp(&b)));
+    // Cards still to place, by where they start; a header that moves under
+    // its block goes back in at its new place, so the cards after it see it
+    let mut pending: Vec<usize> = (0..wanted.len()).collect();
+    let mut moved = vec![false; wanted.len()];
     // Where the cards placed so far end, as place_cards will place them
     let mut bottom = f32::NEG_INFINITY;
-    for index in order {
-        if let Some(after) = below(index) {
+    while !pending.is_empty() {
+        let next = (0..pending.len())
+            .min_by(|&a, &b| {
+                let (a, b) = (pending[a], pending[b]);
+                starts[a].total_cmp(&starts[b]).then(a.cmp(&b))
+            })
+            .unwrap_or(0);
+        let index = pending.remove(next);
+        if let (Some(after), false) = (below(index), moved[index]) {
             let floor = if wanted[index] >= 0.0 {
                 bottom.max(top)
             } else {
                 bottom
             };
             if starts[index] < floor {
-                // Placed with the cards under its block
                 starts[index] = after;
                 lines[index] = after;
+                moved[index] = true;
+                pending.push(index);
                 continue;
             }
         }
@@ -307,6 +318,8 @@ pub struct CardStates {
     /// ([`commit_key`]) and long texts shown in full, by key
     pub expanded: HashSet<String>,
     pub hovered: Option<String>,
+    /// The step of the hovered card under the pointer, if any
+    pub hovered_step: Option<usize>,
 }
 
 /// The key in [`CardStates::expanded`] of an open card.
@@ -331,11 +344,14 @@ pub struct Callbacks<M> {
     pub commit: fn(String) -> M,
     pub build: fn(String) -> M,
     pub hover: fn(Option<String>) -> M,
+    /// The pointer left a card (its key)
+    pub leave: fn(String) -> M,
     pub expand: fn(String) -> M,
     /// A name from the code was clicked: find it in the panes
     pub jump: fn(String) -> M,
-    /// The pointer went over a step of a card (its index) or left it
-    pub hover_step: fn(String, Option<usize>) -> M,
+    /// The pointer went over a step of a card (its index), or left it
+    /// (false)
+    pub hover_step: fn(String, usize, bool) -> M,
 }
 
 impl<M> Clone for Callbacks<M> {
@@ -347,7 +363,8 @@ impl<M> Copy for Callbacks<M> {}
 
 /// Where to read each card: its number and how many cards are numbered.
 ///
-/// Cards are numbered by their commit, oldest first, then staged and
+/// Cards are numbered by their commit, oldest first (commits outside the
+/// range, which have no place in it, by SHA), then staged and
 /// unstaged changes, and within those by the reading order the model gave
 /// their changes. None for cards without an order, and for all of them
 /// when fewer than two have one.
@@ -367,7 +384,15 @@ pub fn reading_order(cards: &[Card]) -> Vec<Option<(usize, usize)>> {
     };
     ordered.sort_by_key(|&i| {
         let card = &cards[i];
-        (rank(card), card.color_index, card.change_order, i)
+        // Commits outside the range all have color -1: keep each one's
+        // changes together
+        (
+            rank(card),
+            card.color_index,
+            card.sha.clone(),
+            card.change_order,
+            i,
+        )
     });
     let total = ordered.len();
     for (number, index) in ordered.into_iter().enumerate() {
@@ -542,15 +567,7 @@ fn labeled<'a, M: Clone + 'a>(
     body: Element<'a, M>,
     font: CardFont,
 ) -> Element<'a, M> {
-    column![
-        text(label)
-            .size(font.smaller(2.0))
-            .font(font.font)
-            .style(ui::dim_text),
-        body,
-    ]
-    .spacing(1)
-    .into()
+    column![small_label(label, font), body].spacing(1).into()
 }
 
 /// What the code did before and does now, `label` beside the text.
@@ -561,10 +578,7 @@ fn before_after<'a, M: Clone + 'a>(
     font: CardFont,
 ) -> Element<'a, M> {
     row![
-        text(label)
-            .size(font.smaller(2.0))
-            .font(font.font)
-            .style(ui::dim_text)
+        small_label(label, font)
             .width(font.size * 2.4)
             .wrapping(text::Wrapping::None),
         rich(&reflow(body), font.size, font.font, false, callbacks.jump),
@@ -596,34 +610,62 @@ fn step_view<'a, M: Clone + 'a>(
         callbacks.jump,
         Some(line_height),
     );
-    let hovered = states.hovered.as_deref() == Some(card.key.as_str());
-    let color = card.clone();
-    let edge = container(space::vertical())
-        .width(2)
-        .height(Length::Fill)
-        .style(move |theme: &Theme| container::Style {
-            background: Some(Background::Color(
-                card_color(&color, theme.extended_palette().background.base.text).scale_alpha(0.6),
-            )),
-            ..container::Style::default()
-        });
+    // The step itself, or all of its card's
+    let tint = match (
+        states.hovered.as_deref() == Some(card.key.as_str()),
+        states.hovered_step,
+    ) {
+        (true, Some(hovered)) if hovered == index => Some(0.14),
+        (true, None) => Some(0.06),
+        _ => None,
+    };
     let line = container(row![
-        edge,
+        edge(card, 2.0, Border::default()),
         container(body).padding([0, 6]).width(Length::Fill)
     ])
     .width(Length::Fill)
     .style(move |theme: &Theme| {
         let palette = theme.extended_palette();
         container::Style {
-            background: hovered
-                .then(|| Background::Color(palette.primary.base.color.scale_alpha(0.08))),
+            background: tint
+                .map(|alpha| Background::Color(palette.primary.base.color.scale_alpha(alpha))),
             ..container::Style::default()
         }
     });
     mouse_area(container(line).padding([0, 6]))
-        .on_enter((callbacks.hover_step)(card.key.clone(), Some(index)))
-        .on_exit((callbacks.hover_step)(card.key.clone(), None))
+        .on_enter((callbacks.hover_step)(card.key.clone(), index, true))
+        .on_exit((callbacks.hover_step)(card.key.clone(), index, false))
         .into()
+}
+
+/// A card's colored edge, `width` wide: the color of its commit.
+fn edge<'a, M: 'a>(card: &Card, width: f32, border: Border) -> Element<'a, M> {
+    // Only what the color depends on, not the whole card
+    let color = Card {
+        kind: card.kind,
+        color_index: card.color_index,
+        ..Card::default()
+    };
+    container(space::vertical())
+        .width(width)
+        .height(Length::Fill)
+        .style(move |theme: &Theme| container::Style {
+            background: Some(Background::Color(card_color(
+                &color,
+                theme.extended_palette().background.base.text,
+            ))),
+            border,
+            ..container::Style::default()
+        })
+        .into()
+}
+
+/// A small dim label, e.g. Check or Was.
+fn small_label<'a>(label: &'a str, font: CardFont) -> iced::widget::Text<'a> {
+    text(label)
+        .size(font.smaller(2.0))
+        .font(font.font)
+        .style(ui::dim_text)
 }
 
 /// The line that opens and closes a card: quiet until hovered.
@@ -899,6 +941,26 @@ fn headline(card: &Card) -> &str {
     }
 }
 
+/// Characters of a closed card's headline.
+const HEADLINE_TEXT: usize = 160;
+
+/// A headline for a closed card: its first paragraph (a card covering
+/// several changes joins theirs), cut near [`HEADLINE_TEXT`] characters,
+/// with an ellipsis when anything is left out.
+pub fn short_headline(title: &str) -> String {
+    let title = title.trim();
+    let (first, more) = match title.split_once("\n\n") {
+        Some((first, _)) => (first.trim(), true),
+        None => (title, false),
+    };
+    let short = shorten(first, HEADLINE_TEXT);
+    if more && !short.ends_with('…') {
+        format!("{short} …")
+    } else {
+        short
+    }
+}
+
 /// Whether the card has its own explanation of the change.
 fn has_change(card: &Card) -> bool {
     !card.change_what.is_empty() || !card.change_why.is_empty()
@@ -955,7 +1017,13 @@ pub fn card_view<'a, M: Clone + 'a>(
     let title = headline(card);
     if !title.is_empty() {
         let title_font = if skim { font.font } else { font.bold() };
-        body = body.push(rich(title, font.size, title_font, skim, callbacks.jump));
+        // At a glance, its first paragraph cut short; all of it when open
+        let title = if open {
+            title.to_string()
+        } else {
+            short_headline(title)
+        };
+        body = body.push(rich(&title, font.size, title_font, skim, callbacks.jump));
     }
     let steps = !card.change_steps.is_empty();
     // With steps, the before and after wait until the card is opened
@@ -1142,7 +1210,7 @@ pub fn card_view<'a, M: Clone + 'a>(
 
     framed(card, body, states.hovered.as_deref() == Some(key))
         .on_enter((callbacks.hover)(Some(card.key.clone())))
-        .on_exit((callbacks.hover)(None))
+        .on_exit((callbacks.leave)(card.key.clone()))
         .on_press((callbacks.expand)(open_key(key)))
         .into()
 }
@@ -1153,18 +1221,11 @@ fn framed<'a, M: 'a>(
     body: iced::widget::Column<'a, M>,
     hovered: bool,
 ) -> iced::widget::MouseArea<'a, M> {
-    let color = card.clone();
-    let edge = container(space::vertical())
-        .width(4)
-        .height(Length::Fill)
-        .style(move |theme: &Theme| container::Style {
-            background: Some(Background::Color(card_color(
-                &color,
-                theme.extended_palette().background.base.text,
-            ))),
-            border: Border::default().rounded(iced::border::Radius::default().left(6)),
-            ..container::Style::default()
-        });
+    let edge = edge(
+        card,
+        4.0,
+        Border::default().rounded(iced::border::Radius::default().left(6)),
+    );
     let boxed = container(row![
         edge,
         container(body).padding([6, 8]).width(Length::Fill)
@@ -1215,7 +1276,12 @@ pub fn commit_summary<'a, M: Clone + 'a>(
     if commits.is_empty() {
         return None;
     }
-    commits.sort_by_key(|card| card.color_index);
+    // Oldest first: by place in the range, else by date
+    commits.sort_by(|a, b| {
+        a.color_index
+            .cmp(&b.color_index)
+            .then_with(|| a.date.cmp(&b.date))
+    });
     let all = states.expanded.contains(ALL_COMMITS_KEY);
     let shown = if all { commits.len() } else { SUMMARY_COMMITS };
     let mut list = column![].spacing(4).width(Length::Fill);
@@ -1226,9 +1292,12 @@ pub fn commit_summary<'a, M: Clone + 'a>(
         let label = if all {
             tr!("Fewer commits").to_string()
         } else {
-            tr!(
+            let count = commits.len() - SUMMARY_COMMITS;
+            trn!(
+                "{count} more commit",
                 "{count} more commits",
-                count = commits.len() - SUMMARY_COMMITS
+                count,
+                count = count
             )
         };
         list = list.push(
@@ -1261,7 +1330,9 @@ fn commit_row<'a, M: Clone + 'a>(
     let opened = states.expanded.contains(&key);
     let what = button(
         row![
-            ellipsized(card.what.as_str(), Mode::End)
+            // Names from the code without their backticks: one line has no
+            // room to set them apart
+            ellipsized(card.what.replace('`', ""), Mode::End)
                 .size(font.smaller(1.0))
                 .font(font.bold())
                 .width(Length::Fill),
@@ -1329,19 +1400,9 @@ fn commit_row<'a, M: Clone + 'a>(
             details = details.push(link);
         }
     }
-    let color = card.clone();
-    let edge = container(space::vertical())
-        .width(3)
-        .height(Length::Fill)
-        .style(move |theme: &Theme| container::Style {
-            background: Some(Background::Color(card_color(
-                &color,
-                theme.extended_palette().background.base.text,
-            ))),
-            border: Border::default().rounded(2),
-            ..container::Style::default()
-        });
-    row![edge, details].spacing(6).into()
+    row![edge(card, 3.0, Border::default().rounded(2)), details]
+        .spacing(6)
+        .into()
 }
 
 fn badge_line<'a, M: 'a>(label: String, font: CardFont) -> Element<'a, M> {
@@ -1373,21 +1434,24 @@ fn mix(a: Color, b: Color, t: f32) -> Color {
     )
 }
 
-/// Lays out cards at the tops they want, pushed down to clear each other,
-/// clipped to its bounds. Takes all the space it gets and never asks for
-/// height: the cards scroll with the panes. An optional header stays at the
-/// top, over the cards scrolling past it.
 /// How far the cards are scrolled up, when those in view don't fit.
 #[derive(Default)]
 struct ColumnState {
     offset: f32,
     /// How far they can be: what the cards in view need beyond the column
     overflow: f32,
+    /// Where the cards wanted to be when they were scrolled: once the
+    /// panes move, the cards follow their lines again
+    scrolled_at: Vec<f32>,
 }
 
 /// Pixels a wheel line scrolls the cards.
 const WHEEL_LINE: f32 = 40.0;
 
+/// Lays out cards at the tops they want, pushed down to clear each other,
+/// clipped to its bounds. Takes all the space it gets and never asks for
+/// height: the cards scroll with the panes. An optional header stays at the
+/// top, over the cards scrolling past it.
 pub struct CardColumn<'a, M> {
     /// The header first, if any, then the cards
     children: Vec<Element<'a, M>>,
@@ -1398,6 +1462,9 @@ pub struct CardColumn<'a, M> {
     below: Vec<Option<f32>>,
     gap: f32,
     header: bool,
+    /// Whether the wheel scrolls the cards between them too, not only over
+    /// them (false over the panes, where it scrolls the code)
+    wheel_between: bool,
 }
 
 /// Cards wanting to be at `wanted` (one per card), plus an optional
@@ -1423,6 +1490,7 @@ pub fn card_column<'a, M: 'a>(
         below: Vec::new(),
         gap: CARD_GAP,
         header: has_header,
+        wheel_between: true,
     }
 }
 
@@ -1431,6 +1499,13 @@ impl<'a, M: 'a> CardColumn<'a, M> {
     /// set)
     pub fn gap(mut self, gap: f32) -> Self {
         self.gap = gap;
+        self
+    }
+
+    /// Whether the wheel scrolls cards that don't fit when the pointer is
+    /// between cards, not only over one (true unless set)
+    pub fn wheel_between(mut self, wheel_between: bool) -> Self {
+        self.wheel_between = wheel_between;
         self
     }
 
@@ -1541,6 +1616,9 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for CardColumn<'a, M> {
             .map(|((_, top), height)| top + height - size.height)
             .fold(0.0_f32, f32::max);
         let state = tree.state.downcast_mut::<ColumnState>();
+        if state.scrolled_at != self.wanted {
+            state.offset = 0.0;
+        }
         state.overflow = overflow;
         state.offset = state.offset.clamp(0.0, overflow);
         let offset = state.offset;
@@ -1602,6 +1680,13 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for CardColumn<'a, M> {
         if shell.is_event_captured() || !cursor.is_over(self.card_area(layout)) {
             return;
         }
+        let over_card = layout
+            .children()
+            .skip(usize::from(self.header))
+            .any(|card| cursor.is_over(card.bounds()));
+        if !self.wheel_between && !over_card {
+            return;
+        }
         if let Event::Mouse(mouse::Event::WheelScrolled { delta }) = event {
             let state = tree.state.downcast_mut::<ColumnState>();
             let dy = match *delta {
@@ -1611,6 +1696,7 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for CardColumn<'a, M> {
             let offset = (state.offset - dy).clamp(0.0, state.overflow);
             if offset != state.offset {
                 state.offset = offset;
+                state.scrolled_at = self.wanted.clone();
                 shell.capture_event();
                 shell.invalidate_layout();
                 shell.request_redraw();
@@ -1848,9 +1934,11 @@ mod tests {
         let (starts, anchors) = wanted_starts(&lines, &header, &heights, 0.0, 24.0);
         assert_eq!(starts, [50.0, 10.0, 30.0]);
         assert_eq!(anchors, [50.0, 10.0, 30.0]);
-        // The steps stay on their lines, the first partly under the summary
+        // A step whose line is under the pinned summary comes out from
+        // under it, pushing what follows: hidden there, it couldn't be
+        // scrolled into view at the start of a file
         let tops = fit_cards(&starts, &anchors, &heights, 0.0, 24.0, 400.0);
-        assert_eq!(tops, [50.0, 10.0, 30.0]);
+        assert_eq!(tops, [64.0, 24.0, 44.0]);
 
         // The previous block's steps are in the way
         let lines = [0.0, 80.0, 80.0, 100.0];
@@ -1877,7 +1965,7 @@ mod tests {
     enum Msg {
         Key(String),
         Hover(Option<String>),
-        Step(String, Option<usize>),
+        Step(String, usize, bool),
     }
 
     fn callbacks() -> Callbacks<Msg> {
@@ -1886,6 +1974,7 @@ mod tests {
             commit: Msg::Key,
             build: Msg::Key,
             hover: Msg::Hover,
+            leave: Msg::Key,
             expand: Msg::Key,
             jump: Msg::Key,
             hover_step: Msg::Step,
@@ -2039,6 +2128,57 @@ mod tests {
         );
         // One ordered card is no order to read in
         assert_eq!(reading_order(&cards[..1]), [None]);
+    }
+
+    #[test]
+    fn commits_outside_the_range_keep_their_changes_together() {
+        let ordered = |sha: &str, order| Card {
+            kind: CardKind::Commit,
+            color_index: -1,
+            sha: Some(sha.into()),
+            change_order: Some(order),
+            ..Default::default()
+        };
+        let cards = [
+            ordered("bbb", 1),
+            ordered("aaa", 2),
+            ordered("bbb", 2),
+            ordered("aaa", 1),
+        ];
+        assert_eq!(
+            reading_order(&cards),
+            [Some((3, 4)), Some((2, 4)), Some((4, 4)), Some((1, 4))]
+        );
+    }
+
+    #[test]
+    fn closed_cards_show_the_start_of_their_headline() {
+        assert_eq!(short_headline("  Adds a cache. "), "Adds a cache.");
+        // A card covering several changes: the first one's, marked
+        assert_eq!(
+            short_headline("Adds a cache.\n\nRetries."),
+            "Adds a cache. …"
+        );
+        let long = "word ".repeat(60);
+        let short = short_headline(&long);
+        assert!(short.ends_with('…') && short.chars().count() <= HEADLINE_TEXT + 1);
+        assert!(!short_headline(&format!("{long}\n\nmore")).ends_with("… …"));
+    }
+
+    #[test]
+    fn a_header_moved_under_its_block_is_in_the_way_of_the_next() {
+        // Block A at line 0 (no room above), ending at 40; block B's line
+        // at 70, with room for its 30 tall header only if A's header (40 to
+        // 70) weren't there
+        let lines = [0.0, 0.0, 20.0, 70.0, 70.0];
+        let heights = [30.0, 20.0, 20.0, 30.0, 20.0];
+        let below = [Some(40.0), None, None, Some(90.0), None];
+        let (starts, anchors) = wanted_starts(&lines, &below, &heights, 0.0, 0.0);
+        // A's header goes under A; B's has no room above B either
+        assert_eq!(starts, [40.0, 0.0, 20.0, 90.0, 70.0]);
+        let tops = fit_cards(&starts, &anchors, &heights, 0.0, 0.0, 400.0);
+        // Every step on its line
+        assert_eq!(tops, [40.0, 0.0, 20.0, 90.0, 70.0]);
     }
 
     #[test]

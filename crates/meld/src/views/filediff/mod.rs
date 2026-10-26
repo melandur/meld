@@ -793,17 +793,14 @@ impl FileDiff {
     /// Where `name` (a name from the code, as an explanation quotes it) is
     /// defined, else first used: the pane, the last one first, and its
     /// 0-based line.
+    ///
+    /// A definition anywhere wins over a use: of the whole name, else of
+    /// its last part (`method` of `Type::method`, which is how it is
+    /// defined), in any pane. Only then is the first use looked for.
     pub fn find_name(&self, name: &str) -> Option<(usize, usize)> {
-        let name = name.trim().trim_end_matches("()");
-        // `Type::method` may only be found by its last part
-        let short = name.rsplit("::").next().unwrap_or(name);
-        let panes: Vec<usize> = (0..self.panes.len()).rev().collect();
-        [name, short].into_iter().find_map(|needle| {
-            panes.iter().find_map(|&pane| {
-                let buffer = &self.panes[pane].buffer;
-                let lines = (0..buffer.line_count()).map(|i| buffer.line(i));
-                name_line(lines, needle).map(|line| (pane, line))
-            })
+        find_name_in(name, self.panes.len(), |pane| {
+            let buffer = &self.panes[pane].buffer;
+            (0..buffer.line_count()).map(move |i| buffer.line(i))
         })
     }
 
@@ -1352,28 +1349,62 @@ pub fn tab_title(labels: &[String], modified: &[bool], tab_label: Option<&str>) 
     names.join(" — ")
 }
 
-/// The 0-based line where `name` is defined (after a keyword such as `fn`,
-/// `struct` or `def`), else the first line that has it as a whole word.
-pub fn name_line<'a>(lines: impl Iterator<Item = &'a str>, name: &str) -> Option<usize> {
-    if name.is_empty() {
-        return None;
+/// [`FileDiff::find_name`] over `pane_count` panes whose lines `lines`
+/// gives: the pane, the last one first, and the 0-based line.
+pub fn find_name_in<'a, I: Iterator<Item = &'a str>>(
+    name: &str,
+    pane_count: usize,
+    lines: impl Fn(usize) -> I,
+) -> Option<(usize, usize)> {
+    let name = name.trim().trim_end_matches("()");
+    let short = name.rsplit("::").next().unwrap_or(name);
+    let mut needles = vec![name];
+    if short != name {
+        needles.push(short);
     }
-    let name = regex::escape(name);
-    let word = regex::Regex::new(&format!(r"(?:^|[^\w]){name}(?:$|[^\w])")).ok()?;
-    let definition = regex::Regex::new(&format!(
-        r"\b(?:fn|struct|enum|trait|type|union|mod|const|static|let|impl|class|def|function|interface|var)\s+(?:mut\s+)?{name}(?:$|[^\w])"
-    ))
-    .ok()?;
-    let mut first = None;
-    for (index, line) in lines.enumerate() {
-        if definition.is_match(line) {
-            return Some(index);
+    let patterns: Vec<NamePatterns> = needles.into_iter().filter_map(NamePatterns::new).collect();
+    let find = |found: fn(&NamePatterns, &str) -> bool| {
+        patterns.iter().find_map(|pattern| {
+            (0..pane_count).rev().find_map(|pane| {
+                lines(pane)
+                    .position(|line| found(pattern, line))
+                    .map(|line| (pane, line))
+            })
+        })
+    };
+    find(NamePatterns::defines).or_else(|| find(NamePatterns::uses))
+}
+
+/// What finds a name from the code in a line: where it is defined, and
+/// any use of it as a whole word. Built once per name.
+struct NamePatterns {
+    definition: regex::Regex,
+    word: regex::Regex,
+}
+
+impl NamePatterns {
+    /// None for an empty name
+    fn new(name: &str) -> Option<Self> {
+        if name.is_empty() {
+            return None;
         }
-        if first.is_none() && word.is_match(line) {
-            first = Some(index);
-        }
+        let name = regex::escape(name);
+        Some(Self {
+            word: regex::Regex::new(&format!(r"(?:^|[^\w]){name}(?:$|[^\w])")).ok()?,
+            definition: regex::Regex::new(&format!(
+                r"\b(?:fn|struct|enum|trait|type|union|mod|const|static|let|impl|class|def|function|interface|var)\s+(?:mut\s+)?{name}(?:$|[^\w])"
+            ))
+            .ok()?,
+        })
     }
-    first
+
+    fn defines(&self, line: &str) -> bool {
+        self.definition.is_match(line)
+    }
+
+    fn uses(&self, line: &str) -> bool {
+        self.word.is_match(line)
+    }
 }
 
 #[cfg(test)]
@@ -1386,11 +1417,40 @@ mod tests {
             "pub fn run() {}",
             "let running = 1;",
         ];
-        assert_eq!(name_line(lines.into_iter(), "run"), Some(2));
-        assert_eq!(name_line(lines.into_iter(), "main"), Some(1));
-        assert_eq!(name_line(lines.into_iter(), "crate::run"), Some(0));
-        assert_eq!(name_line(lines.into_iter(), "runn"), None);
-        assert_eq!(name_line(lines.into_iter(), ""), None);
+        let one = |name| find_name_in(name, 1, |_| lines.into_iter()).map(|(_, line)| line);
+        assert_eq!(one("run"), Some(2));
+        assert_eq!(one("main"), Some(1));
+        assert_eq!(one("runn"), None);
+        assert_eq!(one(""), None);
+        assert_eq!(one("  run() "), Some(2));
+    }
+
+    #[test]
+    fn a_qualified_name_is_found_where_its_last_part_is_defined() {
+        let lines = [
+            "let foo = Foo::new(1);",
+            "impl Foo {",
+            "    pub fn new(x: u8) -> Self {",
+        ];
+        let one = |name| find_name_in(name, 1, |_| lines.into_iter()).map(|(_, line)| line);
+        // Not the call on line 0, though it has the whole name
+        assert_eq!(one("Foo::new"), Some(2));
+        assert_eq!(one("crate::Foo::new()"), Some(2));
+        // Used, never defined: its first use
+        let lines = ["x = Bar::make()", "Bar::make()"];
+        let one = |name| find_name_in(name, 1, |_| lines.into_iter()).map(|(_, line)| line);
+        assert_eq!(one("Bar::make"), Some(0));
+    }
+
+    #[test]
+    fn a_definition_in_any_pane_wins_over_a_use_in_the_last() {
+        let panes = [vec!["fn run() {}"], vec!["run();", "other();"]];
+        let found = find_name_in("run", 2, |pane| panes[pane].iter().copied());
+        assert_eq!(found, Some((0, 0)));
+        // Uses only: the last pane first
+        let panes = [vec!["run();"], vec!["", "run();"]];
+        let found = find_name_in("run", 2, |pane| panes[pane].iter().copied());
+        assert_eq!(found, Some((1, 1)));
     }
 
     use super::*;

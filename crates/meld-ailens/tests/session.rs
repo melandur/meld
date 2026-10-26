@@ -398,6 +398,7 @@ fn note_steps_land_on_their_lines_in_the_comparison() {
          Step: -1 Drops the old b.\n\
          Step: Keeps c as it was.\n\
          Step: +9 Past the change.\n\
+         Step: +2-5 Partly past it.\n\
          Why: Two steps read better.\n";
     let history = shifted_history(note);
     let session = base_main(&history, None);
@@ -419,8 +420,9 @@ fn note_steps_land_on_their_lines_in_the_comparison() {
             // b is line 2 of the base on both
             at(Side::Old, 2, 2),
             None,
-            // Not a line of this card
-            None,
+            // Only the part on this card's lines; a step on none of them
+            // is left out
+            at(Side::New, 5, 5),
         ]
     );
     assert_eq!(split.change_steps[0].text, "Uppercases b.");

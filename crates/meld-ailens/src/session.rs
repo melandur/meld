@@ -1459,13 +1459,49 @@ fn label(
     Ok(ref_name.to_string())
 }
 
-/// A card's guide from those of the changes it shows: the first change's
-/// kind, the earliest reading order, and the texts joined
+/// A card's guide from those of the changes it shows: the kind of the
+/// first change to read closely (else of the first change), the earliest
+/// reading order, and the texts joined
+///
+/// Was and Now are joined in pairs, one per change that has either, so
+/// that the n-th Was goes with the n-th Now: a change with only one of them
+/// gets "—" for the other when there are several.
 fn set_guide<'a>(card: &mut Card, guides: impl Iterator<Item = &'a ChangeGuide> + Clone) {
-    card.change_kind = guides.clone().find_map(|g| g.kind);
+    card.change_kind = guides
+        .clone()
+        .filter_map(|g| g.kind)
+        .find(|kind| !kind.skimmable())
+        .or_else(|| guides.clone().find_map(|g| g.kind));
     card.change_order = guides.clone().filter_map(|g| g.order).min();
-    card.change_was = join_texts(guides.clone().filter_map(|g| g.was.as_deref()));
-    card.change_now = join_texts(guides.clone().filter_map(|g| g.now.as_deref()));
+    let text = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+    };
+    // A change's Was and Now
+    type Pair = (Option<String>, Option<String>);
+    let pairs: Vec<Pair> = guides
+        .clone()
+        .map(|g| (text(&g.was), text(&g.now)))
+        .filter(|(was, now)| was.is_some() || now.is_some())
+        .collect();
+    let side = |pick: fn(&Pair) -> &Option<String>| {
+        if pairs.len() == 1 {
+            return pick(&pairs[0]).clone().unwrap_or_default();
+        }
+        if pairs.iter().all(|pair| pick(pair).is_none()) {
+            return String::new();
+        }
+        pairs
+            .iter()
+            .map(|pair| pick(pair).clone().unwrap_or_else(|| "—".to_string()))
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    };
+    card.change_was = side(|pair| &pair.0);
+    card.change_now = side(|pair| &pair.1);
     card.change_check = join_texts(guides.filter_map(|g| g.check.as_deref()));
 }
 
@@ -1473,7 +1509,9 @@ fn set_guide<'a>(card: &mut Card, guides: impl Iterator<Item = &'a ChangeGuide> 
 /// comparison has them
 ///
 /// A step's lines are found through the group's origins, so only lines of
-/// this card count; a step none of whose lines it has keeps no lines.
+/// this card count. A step on lines of another card (one change can span
+/// several cards) is left to that card; a step without lines is on every
+/// card of its change.
 fn card_steps<'a>(
     group: &ChangeGroup,
     changes: impl Iterator<Item = (&'a CommitHunk, &'a [ChangeStep])>,
@@ -1481,7 +1519,7 @@ fn card_steps<'a>(
     let mut steps = Vec::new();
     for (hunk, change_steps) in changes {
         for step in change_steps {
-            let lines = step.lines.and_then(|at| {
+            let lines = step.lines.map(|at| {
                 let (first, last) = at.in_hunk(hunk);
                 let path = match at.side {
                     Side::Old => hunk.original_path.as_deref().unwrap_or(&hunk.path),
@@ -1505,6 +1543,12 @@ fn card_steps<'a>(
                     });
                 Some((side, LineRange::new(start, end)))
             });
+            let lines = match lines {
+                // On lines, but none of this card's
+                Some(None) => continue,
+                Some(found) => found,
+                None => None,
+            };
             steps.push(CardStep {
                 lines,
                 text: step.text.clone(),
@@ -1610,4 +1654,62 @@ pub fn build_file_tree(entries: &[FileEntry]) -> Vec<FileRow> {
     }
 
     rows(root)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::ChangeKind;
+
+    fn guide(kind: Option<ChangeKind>, was: Option<&str>, now: Option<&str>) -> ChangeGuide {
+        ChangeGuide {
+            kind,
+            was: was.map(str::to_string),
+            now: now.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_card_takes_the_kind_of_its_first_change_to_read_closely() {
+        let mut card = Card::default();
+        let guides = [
+            guide(Some(ChangeKind::Test), None, None),
+            guide(Some(ChangeKind::Fix), None, None),
+        ];
+        set_guide(&mut card, guides.iter());
+        assert_eq!(card.change_kind, Some(ChangeKind::Fix));
+        let guides = [
+            guide(None, None, None),
+            guide(Some(ChangeKind::Rename), None, None),
+            guide(Some(ChangeKind::Test), None, None),
+        ];
+        set_guide(&mut card, guides.iter());
+        assert_eq!(card.change_kind, Some(ChangeKind::Rename));
+    }
+
+    #[test]
+    fn was_and_now_stay_in_pairs() {
+        let mut card = Card::default();
+        let guides = [
+            guide(None, None, Some("adds a cache")),
+            guide(None, None, None),
+            guide(None, Some("retries forever"), Some("retries 3 times")),
+        ];
+        set_guide(&mut card, guides.iter());
+        assert_eq!(card.change_was, "—\n\nretries forever");
+        assert_eq!(card.change_now, "adds a cache\n\nretries 3 times");
+        // One change: no stand-ins
+        set_guide(&mut card, guides[..1].iter());
+        assert_eq!(card.change_was, "");
+        assert_eq!(card.change_now, "adds a cache");
+        // Only Nows: no column of stand-ins either
+        let guides = [
+            guide(None, None, Some("one")),
+            guide(None, Some("  "), Some("two")),
+        ];
+        set_guide(&mut card, guides.iter());
+        assert_eq!(card.change_was, "");
+        assert_eq!(card.change_now, "one\n\ntwo");
+    }
 }

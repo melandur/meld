@@ -1246,6 +1246,22 @@ fn step_lines_labels_round_trip() {
 }
 
 #[test]
+fn steps_without_lines_that_start_like_a_label_round_trip() {
+    let mut change = top();
+    change.guide.steps = ["-1 is returned on error", "+2 retries", "~ stays", "plain"]
+        .into_iter()
+        .map(|text| ChangeStep {
+            lines: None,
+            text: text.into(),
+        })
+        .collect();
+    let text = compose_note("", "m", std::slice::from_ref(&change));
+    assert!(text.contains("Step: ~ -1 is returned on error\nStep: ~ +2 retries\n"));
+    assert!(text.contains("Step: ~ ~ stays\nStep: plain\n"));
+    assert_eq!(parse_note(&text).changes[0], change);
+}
+
+#[test]
 fn step_lines_are_placed_in_their_hunk() {
     let hunk = CommitHunk {
         path: "a.rs".into(),

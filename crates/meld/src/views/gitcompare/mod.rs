@@ -275,8 +275,11 @@ pub enum Message {
     CompareWithParent(String),
     OpenBuild(String),
     HoverCard(Option<String>),
+    /// The pointer left a card (its key)
+    LeaveCard(String),
     /// The pointer went over a step of a card (its index), or left it
-    HoverStep(String, Option<usize>),
+    /// (false)
+    HoverStep(String, usize, bool),
     ExpandCard(String),
     /// Show the explanations in a column, over the target pane, or not at all
     SetExplainLayout(ExplainLayout),
@@ -1626,17 +1629,17 @@ impl GitCompare {
         };
         self.diff.set_hover(lines);
         self.cards.hovered = key;
+        self.cards.hovered_step = None;
     }
 
-    /// Highlights the lines of a card's step, or the whole card's when the
-    /// pointer left the step (it is still over the card).
-    fn hover_step(&mut self, key: String, step: Option<usize>) {
+    /// Highlights the lines of a card's step; a step without lines
+    /// highlights its whole card.
+    fn hover_step(&mut self, key: String, step: usize) {
         let lines = self
             .view
             .as_ref()
             .and_then(|view| view.cards.iter().find(|c| c.key == key))
-            .zip(step)
-            .and_then(|(card, step)| card.change_steps.get(step)?.lines);
+            .and_then(|card| card.change_steps.get(step)?.lines);
         match lines {
             Some((side, range)) => {
                 let mut lines = [Vec::new(), Vec::new()];
@@ -1646,10 +1649,11 @@ impl GitCompare {
                 };
                 lines[pane] = zero_based(&[range]);
                 self.diff.set_hover(lines);
-                self.cards.hovered = Some(key);
             }
-            None => self.hover_card(Some(key)),
+            None => self.hover_card(Some(key.clone())),
         }
+        self.cards.hovered = Some(key);
+        self.cards.hovered_step = Some(step);
     }
 
     // -- status --
@@ -2049,8 +2053,26 @@ impl GitCompare {
                 }
                 Task::none()
             }
-            Message::HoverStep(key, step) => {
+            Message::LeaveCard(key) => {
+                // Only when nothing else took the pointer: the next card or
+                // step reports entering before this one leaving
+                if self.cards.hovered.as_deref() == Some(key.as_str())
+                    && self.cards.hovered_step.is_none()
+                {
+                    self.hover_card(None);
+                }
+                Task::none()
+            }
+            Message::HoverStep(key, step, true) => {
                 self.hover_step(key, step);
+                Task::none()
+            }
+            Message::HoverStep(key, step, false) => {
+                if self.cards.hovered.as_deref() == Some(key.as_str())
+                    && self.cards.hovered_step == Some(step)
+                {
+                    self.hover_card(None);
+                }
                 Task::none()
             }
             Message::SetExplainLayout(layout) => {
@@ -2762,6 +2784,7 @@ impl GitCompare {
             expand: Message::ExpandCard,
             jump: Message::JumpToName,
             hover_step: Message::HoverStep,
+            leave: Message::LeaveCard,
         };
         let cards: &[Card] = match (&self.view, self.diff.is_loading()) {
             (Some(view), false) => &view.cards,
@@ -2782,6 +2805,8 @@ impl GitCompare {
             below.push(item.below);
             elements.push(item.element);
         }
+        // In a column of its own: the overlay lies over the code
+        let in_column = summary;
         let summary = summary
             .then(|| whycolumn::commit_summary(cards, &self.cards, callbacks, now, font))
             .flatten();
@@ -2819,6 +2844,8 @@ impl GitCompare {
             });
         whycolumn::card_column(elements, wanted, placeholder, summary)
             .below(below)
+            // Over the code, the wheel scrolls the code
+            .wheel_between(in_column)
             .gap(0.0)
             .into()
     }
