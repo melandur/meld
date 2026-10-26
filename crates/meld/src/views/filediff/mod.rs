@@ -794,9 +794,10 @@ impl FileDiff {
     /// defined, else first used: the pane, the last one first, and its
     /// 0-based line.
     ///
-    /// A definition anywhere wins over a use: of the whole name, else of
-    /// its last part (`method` of `Type::method`, which is how it is
-    /// defined), in any pane. Only then is the first use looked for.
+    /// In order, in any pane: a definition of the whole name; for
+    /// `Type::method`, a definition of `method` after where `Type` is
+    /// implemented (`impl Type`, `class Type`, …); a use of the whole name;
+    /// a definition of `method` anywhere; a use of it.
     pub fn find_name(&self, name: &str) -> Option<(usize, usize)> {
         find_name_in(name, self.panes.len(), |pane| {
             let buffer = &self.panes[pane].buffer;
@@ -1357,22 +1358,50 @@ pub fn find_name_in<'a, I: Iterator<Item = &'a str>>(
     lines: impl Fn(usize) -> I,
 ) -> Option<(usize, usize)> {
     let name = name.trim().trim_end_matches("()");
-    let short = name.rsplit("::").next().unwrap_or(name);
-    let mut needles = vec![name];
-    if short != name {
-        needles.push(short);
-    }
-    let patterns: Vec<NamePatterns> = needles.into_iter().filter_map(NamePatterns::new).collect();
-    let find = |found: fn(&NamePatterns, &str) -> bool| {
-        patterns.iter().find_map(|pattern| {
-            (0..pane_count).rev().find_map(|pane| {
-                lines(pane)
-                    .position(|line| found(pattern, line))
-                    .map(|line| (pane, line))
-            })
+    let mut parts = name.rsplit("::");
+    let short = parts.next().unwrap_or(name);
+    let owner = parts.next().filter(|owner| !owner.is_empty());
+    let full = NamePatterns::new(name)?;
+    let short = (short != name).then(|| NamePatterns::new(short)).flatten();
+    // Each pane, the last one first: the first line `found` matches, from
+    // the line `from` gives (0 without it)
+    let find = |found: &dyn Fn(&str) -> bool, from: &dyn Fn(usize) -> Option<usize>| {
+        (0..pane_count).rev().find_map(|pane| {
+            let from = from(pane)?;
+            lines(pane)
+                .enumerate()
+                .skip(from)
+                .find(|(_, line)| found(line))
+                .map(|(line, _)| (pane, line))
         })
     };
-    find(NamePatterns::defines).or_else(|| find(NamePatterns::uses))
+    let anywhere = |_: usize| Some(0);
+    let owner_line = owner.and_then(owner_pattern);
+    let in_owner = |pane: usize| {
+        let owner = owner_line.as_ref()?;
+        lines(pane).position(|line| owner.is_match(line))
+    };
+    find(&|line| full.defines(line), &anywhere)
+        .or_else(|| {
+            let short = short.as_ref()?;
+            find(&|line| short.defines(line), &in_owner)
+        })
+        .or_else(|| find(&|line| full.uses(line), &anywhere))
+        .or_else(|| {
+            let short = short.as_ref()?;
+            find(&|line| short.defines(line), &anywhere)
+                .or_else(|| find(&|line| short.uses(line), &anywhere))
+        })
+}
+
+/// What finds where `owner` (`Type` of `Type::method`) has its methods:
+/// `impl Type`, `impl Trait for Type`, `class Type` and the like
+fn owner_pattern(owner: &str) -> Option<regex::Regex> {
+    let owner = regex::escape(owner);
+    regex::Regex::new(&format!(
+        r"\b(?:impl|class|struct|enum|trait|interface|object|module|namespace)\b[^{{;]*\b{owner}\b"
+    ))
+    .ok()
 }
 
 /// What finds a name from the code in a line: where it is defined, and
@@ -1436,6 +1465,23 @@ mod tests {
         // Not the call on line 0, though it has the whole name
         assert_eq!(one("Foo::new"), Some(2));
         assert_eq!(one("crate::Foo::new()"), Some(2));
+        // Another type's method of the same name comes first in the file
+        let lines = [
+            "impl Bar {",
+            "    fn new() -> Self {}",
+            "}",
+            "impl Default for Foo {",
+            "    fn new() -> Self {}",
+            "}",
+            "let x = Foo::new();",
+        ];
+        let one = |name| find_name_in(name, 1, |_| lines.into_iter()).map(|(_, line)| line);
+        assert_eq!(one("Foo::new"), Some(4));
+        // A type neither implemented nor used here: any `new`
+        assert_eq!(one("Baz::new"), Some(1));
+        let lines = ["impl Bar {", "    fn new() {}", "}", "Qux::new();"];
+        let one = |name| find_name_in(name, 1, |_| lines.into_iter()).map(|(_, line)| line);
+        assert_eq!(one("Qux::new"), Some(3));
         // Used, never defined: its first use
         let lines = ["x = Bar::make()", "Bar::make()"];
         let one = |name| find_name_in(name, 1, |_| lines.into_iter()).map(|(_, line)| line);

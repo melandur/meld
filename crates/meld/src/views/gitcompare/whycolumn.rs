@@ -188,17 +188,14 @@ pub fn wanted_starts(
     // Cards still to place, by where they start; a header that moves under
     // its block goes back in at its new place, so the cards after it see it
     let mut pending: Vec<usize> = (0..wanted.len()).collect();
+    let order =
+        |starts: &[f32], a: usize, b: usize| starts[a].total_cmp(&starts[b]).then(a.cmp(&b));
+    // Last to place at the end, to pop
+    pending.sort_by(|&a, &b| order(&starts, b, a));
     let mut moved = vec![false; wanted.len()];
     // Where the cards placed so far end, as place_cards will place them
     let mut bottom = f32::NEG_INFINITY;
-    while !pending.is_empty() {
-        let next = (0..pending.len())
-            .min_by(|&a, &b| {
-                let (a, b) = (pending[a], pending[b]);
-                starts[a].total_cmp(&starts[b]).then(a.cmp(&b))
-            })
-            .unwrap_or(0);
-        let index = pending.remove(next);
+    while let Some(index) = pending.pop() {
         if let (Some(after), false) = (below(index), moved[index]) {
             let floor = if wanted[index] >= 0.0 {
                 bottom.max(top)
@@ -209,7 +206,8 @@ pub fn wanted_starts(
                 starts[index] = after;
                 lines[index] = after;
                 moved[index] = true;
-                pending.push(index);
+                let at = pending.partition_point(|&other| order(&starts, other, index).is_gt());
+                pending.insert(at, index);
                 continue;
             }
         }
@@ -382,23 +380,28 @@ pub fn reading_order(cards: &[Card]) -> Vec<Option<(usize, usize)>> {
         CardKind::Unstaged => 2,
         CardKind::Unknown => 3,
     };
-    ordered.sort_by_key(|&i| {
-        let card = &cards[i];
-        // Commits outside the range all have color -1: keep each one's
-        // changes together
-        (
-            rank(card),
-            card.color_index,
-            card.sha.clone(),
-            card.change_order,
-            i,
-        )
+    ordered.sort_by(|&a, &b| {
+        let (x, y) = (&cards[a], &cards[b]);
+        rank(x)
+            .cmp(&rank(y))
+            .then_with(|| commit_order(x, y))
+            .then_with(|| x.change_order.cmp(&y.change_order))
+            .then_with(|| a.cmp(&b))
     });
     let total = ordered.len();
     for (number, index) in ordered.into_iter().enumerate() {
         numbers[index] = Some((number + 1, total));
     }
     numbers
+}
+
+/// The order of commits, oldest first: by place in the range; commits
+/// outside it (all color -1) by SHA, which keeps each one's cards together,
+/// in the summary and the reading order alike.
+fn commit_order(a: &Card, b: &Card) -> std::cmp::Ordering {
+    a.color_index
+        .cmp(&b.color_index)
+        .then_with(|| a.sha.as_deref().cmp(&b.sha.as_deref()))
 }
 
 /// `body` cut into plain text and names from the code (in backticks, which
@@ -620,7 +623,8 @@ fn step_view<'a, M: Clone + 'a>(
         _ => None,
     };
     let line = container(row![
-        edge(card, 2.0, Border::default()),
+        // Fainter than the card's own: a step, not a card
+        edge(card, 2.0, 0.6, Border::default()),
         container(body).padding([0, 6]).width(Length::Fill)
     ])
     .width(Length::Fill)
@@ -639,7 +643,7 @@ fn step_view<'a, M: Clone + 'a>(
 }
 
 /// A card's colored edge, `width` wide: the color of its commit.
-fn edge<'a, M: 'a>(card: &Card, width: f32, border: Border) -> Element<'a, M> {
+fn edge<'a, M: 'a>(card: &Card, width: f32, alpha: f32, border: Border) -> Element<'a, M> {
     // Only what the color depends on, not the whole card
     let color = Card {
         kind: card.kind,
@@ -650,10 +654,10 @@ fn edge<'a, M: 'a>(card: &Card, width: f32, border: Border) -> Element<'a, M> {
         .width(width)
         .height(Length::Fill)
         .style(move |theme: &Theme| container::Style {
-            background: Some(Background::Color(card_color(
-                &color,
-                theme.extended_palette().background.base.text,
-            ))),
+            background: Some(Background::Color(
+                card_color(&color, theme.extended_palette().background.base.text)
+                    .scale_alpha(alpha),
+            )),
             border,
             ..container::Style::default()
         })
@@ -953,7 +957,14 @@ pub fn short_headline(title: &str) -> String {
         Some((first, _)) => (first.trim(), true),
         None => (title, false),
     };
-    let short = shorten(first, HEADLINE_TEXT);
+    let mut short = shorten(first, HEADLINE_TEXT);
+    // Cut inside a name from the code: cut before it instead, so its
+    // backtick isn't left without its pair
+    if short.matches('`').count() % 2 == 1
+        && let Some(open) = short.rfind('`')
+    {
+        short = format!("{}…", short[..open].trim_end());
+    }
     if more && !short.ends_with('…') {
         format!("{short} …")
     } else {
@@ -1224,6 +1235,7 @@ fn framed<'a, M: 'a>(
     let edge = edge(
         card,
         4.0,
+        1.0,
         Border::default().rounded(iced::border::Radius::default().left(6)),
     );
     let boxed = container(row![
@@ -1276,12 +1288,8 @@ pub fn commit_summary<'a, M: Clone + 'a>(
     if commits.is_empty() {
         return None;
     }
-    // Oldest first: by place in the range, else by date
-    commits.sort_by(|a, b| {
-        a.color_index
-            .cmp(&b.color_index)
-            .then_with(|| a.date.cmp(&b.date))
-    });
+    // In the order the cards are numbered in
+    commits.sort_by(|a, b| commit_order(a, b));
     let all = states.expanded.contains(ALL_COMMITS_KEY);
     let shown = if all { commits.len() } else { SUMMARY_COMMITS };
     let mut list = column![].spacing(4).width(Length::Fill);
@@ -1400,7 +1408,7 @@ fn commit_row<'a, M: Clone + 'a>(
             details = details.push(link);
         }
     }
-    row![edge(card, 3.0, Border::default().rounded(2)), details]
+    row![edge(card, 3.0, 1.0, Border::default().rounded(2)), details]
         .spacing(6)
         .into()
 }
@@ -1462,9 +1470,10 @@ pub struct CardColumn<'a, M> {
     below: Vec<Option<f32>>,
     gap: f32,
     header: bool,
-    /// Whether the wheel scrolls the cards between them too, not only over
-    /// them (false over the panes, where it scrolls the code)
-    wheel_between: bool,
+    /// Whether the wheel scrolls cards that don't fit (false over the
+    /// panes, where the wheel always scrolls the code: cards and code
+    /// taking turns would jitter)
+    wheel: bool,
 }
 
 /// Cards wanting to be at `wanted` (one per card), plus an optional
@@ -1490,7 +1499,7 @@ pub fn card_column<'a, M: 'a>(
         below: Vec::new(),
         gap: CARD_GAP,
         header: has_header,
-        wheel_between: true,
+        wheel: true,
     }
 }
 
@@ -1502,10 +1511,9 @@ impl<'a, M: 'a> CardColumn<'a, M> {
         self
     }
 
-    /// Whether the wheel scrolls cards that don't fit when the pointer is
-    /// between cards, not only over one (true unless set)
-    pub fn wheel_between(mut self, wheel_between: bool) -> Self {
-        self.wheel_between = wheel_between;
+    /// Whether the wheel scrolls cards that don't fit (true unless set)
+    pub fn wheel(mut self, wheel: bool) -> Self {
+        self.wheel = wheel;
         self
     }
 
@@ -1676,18 +1684,14 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for CardColumn<'a, M> {
             );
         }
         // Cards in view that don't fit scroll with the wheel; at either end
-        // the wheel goes on to what is below (the panes, in the overlay)
-        if shell.is_event_captured() || !cursor.is_over(self.card_area(layout)) {
-            return;
-        }
-        let over_card = layout
-            .children()
-            .skip(usize::from(self.header))
-            .any(|card| cursor.is_over(card.bounds()));
-        if !self.wheel_between && !over_card {
+        // the wheel goes on to what is below
+        if !self.wheel || shell.is_event_captured() {
             return;
         }
         if let Event::Mouse(mouse::Event::WheelScrolled { delta }) = event {
+            if !cursor.is_over(self.card_area(layout)) {
+                return;
+            }
             let state = tree.state.downcast_mut::<ColumnState>();
             let dy = match *delta {
                 mouse::ScrollDelta::Lines { y, .. } => y * WHEEL_LINE,
@@ -2163,6 +2167,13 @@ mod tests {
         let short = short_headline(&long);
         assert!(short.ends_with('…') && short.chars().count() <= HEADLINE_TEXT + 1);
         assert!(!short_headline(&format!("{long}\n\nmore")).ends_with("… …"));
+        // Not cut inside a name from the code
+        let code = format!("{} `fn parse(a: &str, b: usize)` here", "word ".repeat(30));
+        let short = short_headline(&code);
+        assert_eq!(short.matches('`').count(), 0, "{short}");
+        assert!(short.ends_with("word…"), "{short}");
+        let whole = format!("{} `parse` here", "word ".repeat(10));
+        assert_eq!(short_headline(&whole), whole.trim());
     }
 
     #[test]

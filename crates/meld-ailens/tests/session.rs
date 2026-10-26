@@ -351,6 +351,39 @@ fn changes_explained_as_one_hunk_can_be_explained_again_apart() {
 }
 
 #[test]
+fn a_change_spanning_two_cards_gives_each_its_own_steps() {
+    // One change covers both blocks; each step is on one of them
+    let note = JOINED_NOTE.replace(
+        "Why: One why for both.\n",
+        "Step: +4 Spells five.\nStep: +11 Adds a line.\nStep: Reads better.\n\
+         Why: One why for both.\n",
+    );
+    let history = joined_history(&note);
+    let session = base_main(&history, None);
+    let entry = entry_for(&session, "app.py");
+    let view = session.file_view(&entry.change, &never()).unwrap();
+    type Step<'a> = (Option<(Side, LineRange)>, &'a str);
+    let steps: Vec<Vec<Step>> = view
+        .cards
+        .iter()
+        .map(|card| {
+            card.change_steps
+                .iter()
+                .map(|step| (step.lines, step.text.as_str()))
+                .collect()
+        })
+        .collect();
+    let at = |line| Some((Side::New, LineRange::new(line, line)));
+    assert_eq!(
+        steps,
+        [
+            vec![(at(5), "Spells five."), (None, "Reads better.")],
+            vec![(at(12), "Adds a line."), (None, "Reads better.")],
+        ]
+    );
+}
+
+#[test]
 fn a_note_of_change_blocks_is_not_explained_again() {
     // Two cards on one explanation, but the note says it is one change block
     let note = JOINED_NOTE.replace(
@@ -420,8 +453,10 @@ fn note_steps_land_on_their_lines_in_the_comparison() {
             // b is line 2 of the base on both
             at(Side::Old, 2, 2),
             None,
-            // Only the part on this card's lines; a step on none of them
-            // is left out
+            // On no card's lines (line 10 of the commit is past the file):
+            // kept, without lines
+            None,
+            // Only the part on this card's lines
             at(Side::New, 5, 5),
         ]
     );

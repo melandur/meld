@@ -664,6 +664,29 @@ fn line_tags_do_not_count_against_the_caps() {
 }
 
 #[test]
+fn line_tags_count_up_to_a_ceiling() {
+    // Short lines: the tags would make the patch twice as long
+    let count = MAX_PATCH_CHARS_PER_FILE / 7;
+    let lines: Vec<String> = (0..count).map(|n| format!("+{:05}", n % 100_000)).collect();
+    let file = modified("lock.json", vec![hunk_owned(1, 1, &lines)]);
+    let prompt = build_prompt(&commit(), &[file], None);
+    assert!(prompt.text.contains("[… rest of lock.json left out]"));
+    let diff = prompt.text.split_once("\nDiff:\n").unwrap().1;
+    let marker = "\n[… rest of lock.json left out]\n".chars().count();
+    assert!(diff.chars().count() <= MAX_PATCH_CHARS_PER_FILE * 3 / 2 + marker);
+    // Cut at a line: no tag without its line
+    let before = diff.split("\n[… rest").next().unwrap();
+    let last = before.lines().last().unwrap();
+    // The last line kept has its tag, if cut short
+    assert!(
+        regex::Regex::new(r"^n[0-9]+ +\+?[0-9]{0,5}$")
+            .unwrap()
+            .is_match(last),
+        "{last}"
+    );
+}
+
+#[test]
 fn a_huge_file_is_cut_and_listed() {
     let lines: Vec<String> = (0..2000).map(|i| format!("+line {i:05}")).collect();
     let big = modified("big.txt", vec![hunk_owned(1, 1, &lines)]);

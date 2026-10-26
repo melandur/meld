@@ -711,13 +711,18 @@ impl GitCompare {
         self.view_generation += 1;
         if same {
             // Same contents: only the cards may have changed. Reloading the
-            // files would lose the scroll position.
+            // files would lose the scroll position. A hovered step may be
+            // another one now: the card's hover stands in
             self.view = Some(view);
+            if self.cards.hovered_step.take().is_some() {
+                self.hover_card(self.cards.hovered.clone());
+            }
             return Task::none();
         }
         self.cards.errors.clear();
         self.cards.expanded.clear();
         self.cards.hovered = None;
+        self.cards.hovered_step = None;
         if !view.message.is_empty() {
             let message = view.message.clone();
             self.view = Some(view);
@@ -2845,7 +2850,7 @@ impl GitCompare {
         whycolumn::card_column(elements, wanted, placeholder, summary)
             .below(below)
             // Over the code, the wheel scrolls the code
-            .wheel_between(in_column)
+            .wheel(in_column)
             .gap(0.0)
             .into()
     }

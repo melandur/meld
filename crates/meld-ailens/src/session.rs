@@ -941,7 +941,8 @@ impl CompareSession {
             };
             set_guide(&mut card, changes.iter().map(|c| &c.guide));
             card.change_steps = card_steps(
-                group,
+                groups,
+                index,
                 changes.iter().map(|c| (&c.hunk, c.guide.steps.as_slice())),
             );
             return Ok(card);
@@ -1017,7 +1018,8 @@ impl CompareSession {
         };
         set_guide(&mut card, changes.iter().map(|c| &c.guide));
         card.change_steps = card_steps(
-            group,
+            groups,
+            index,
             changes.iter().map(|c| (&c.hunk, c.guide.steps.as_slice())),
         );
         Ok(card)
@@ -1509,44 +1511,57 @@ fn set_guide<'a>(card: &mut Card, guides: impl Iterator<Item = &'a ChangeGuide> 
 /// comparison has them
 ///
 /// A step's lines are found through the group's origins, so only lines of
-/// this card count. A step on lines of another card (one change can span
-/// several cards) is left to that card; a step without lines is on every
-/// card of its change.
+/// the card (`groups[index]`) count. A step on lines another card shows
+/// (one change can span several cards) is left to that card; a step whose
+/// lines no card shows (a later commit changed them again), or without
+/// lines, is on every card of its change, without lines.
 fn card_steps<'a>(
-    group: &ChangeGroup,
+    groups: &[ChangeGroup],
+    index: usize,
     changes: impl Iterator<Item = (&'a CommitHunk, &'a [ChangeStep])>,
 ) -> Vec<CardStep> {
+    let group = &groups[index];
     let mut steps = Vec::new();
     for (hunk, change_steps) in changes {
         for step in change_steps {
+            // None: without lines; Some(None): another card's step;
+            // Some(Some(lines)): its lines on this card, if any
             let lines = step.lines.map(|at| {
                 let (first, last) = at.in_hunk(hunk);
                 let path = match at.side {
                     Side::Old => hunk.original_path.as_deref().unwrap_or(&hunk.path),
                     Side::New => hunk.path.as_str(),
                 };
+                let covers = |origin: &crate::models::LineOrigin| {
+                    origin.side == at.side
+                        && origin.path == path
+                        && (first..=last).contains(&origin.line)
+                };
                 let mut places = group
                     .origins
                     .iter()
                     .zip(&group.origin_places)
-                    .filter(|(origin, _)| {
-                        origin.side == at.side
-                            && origin.path == path
-                            && (first..=last).contains(&origin.line)
-                    })
+                    .filter(|(origin, _)| covers(origin))
                     .map(|(_, place)| *place);
-                let (side, line) = places.next()?;
+                let Some((side, line)) = places.next() else {
+                    // Another card's step, or on no card's lines
+                    let elsewhere = groups
+                        .iter()
+                        .enumerate()
+                        .any(|(other, group)| other != index && group.origins.iter().any(covers));
+                    return (!elsewhere).then_some(None);
+                };
                 let (start, end) = places
                     .filter(|(other, _)| *other == side)
                     .fold((line, line), |(start, end), (_, line)| {
                         (start.min(line), end.max(line))
                     });
-                Some((side, LineRange::new(start, end)))
+                Some(Some((side, LineRange::new(start, end))))
             });
             let lines = match lines {
-                // On lines, but none of this card's
+                // On lines another card shows
                 Some(None) => continue,
-                Some(found) => found,
+                Some(Some(found)) => found,
                 None => None,
             };
             steps.push(CardStep {

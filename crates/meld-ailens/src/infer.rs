@@ -742,22 +742,46 @@ fn untagged_length(text: &str) -> usize {
     text.chars().count() - text.lines().map(tag_length).sum::<usize>()
 }
 
-/// `text` cut after `max` characters not counting line tags
+/// How much bigger than a cap a patch may be with its line tags: a diff of
+/// short lines (lockfiles, JSON) would otherwise be up to twice the cap
+const TAGGED_CAP_PERCENT: usize = 150;
+
+/// The cap `max` with the line tags counted
+fn tagged_cap(max: usize) -> usize {
+    max * TAGGED_CAP_PERCENT / 100
+}
+
+/// Whether a patch of `untagged` characters without its tags and `tagged`
+/// with them is over the cap `max`
+fn over_cap(untagged: usize, tagged: usize, max: usize) -> bool {
+    untagged > max || tagged > tagged_cap(max)
+}
+
+/// `text` cut after `max` characters not counting line tags, or
+/// [`tagged_cap`] counting them, whichever comes first
 fn untagged_prefix(text: &str, max: usize) -> &str {
     let mut counted = 0;
+    let mut all = 0;
     let mut start = 0;
     for line in text.split_inclusive('\n') {
         let tag = tag_length(line);
         let rest = &line[tag..];
         let length = rest.chars().count();
-        if counted + length > max {
+        if counted + length > max || all + tag + length > tagged_cap(max) {
+            let tagged_room = tagged_cap(max).saturating_sub(all);
+            if tag > tagged_room {
+                // Not even the tag fits: cut before the line
+                return &text[..start];
+            }
+            let room = (max - counted).min(tagged_room - tag);
             let keep = rest
                 .char_indices()
-                .nth(max - counted)
+                .nth(room)
                 .map_or(rest.len(), |(index, _)| index);
             return &text[..start + tag + keep];
         }
         counted += length;
+        all += tag + length;
         start += line.len();
     }
     text
@@ -767,28 +791,31 @@ fn untagged_prefix(text: &str, max: usize) -> &str {
 ///
 /// `files` holds each file's patch and name. Returns the patch and the
 /// names of the files that were cut. Lengths count characters, not the
-/// line tags.
+/// line tags, up to [`tagged_cap`] counting them.
 fn cap_patch(files: &[(String, String)]) -> (String, Vec<String>) {
     let mut cut: Vec<String> = Vec::new();
-    let mut total = 0;
+    let (mut total, mut total_tagged) = (0, 0);
     let mut kept = String::new();
     for (text, name) in files {
         let mut text = text.clone();
         let mut length = untagged_length(&text);
-        if length > MAX_PATCH_CHARS_PER_FILE {
+        let mut tagged = text.chars().count();
+        if over_cap(length, tagged, MAX_PATCH_CHARS_PER_FILE) {
             text = format!(
                 "{}\n[… rest of {name} left out]\n",
                 untagged_prefix(&text, MAX_PATCH_CHARS_PER_FILE)
             );
             length = untagged_length(&text);
+            tagged = text.chars().count();
             cut.push(name.clone());
         }
-        if total + length > MAX_PATCH_CHARS {
+        if over_cap(total + length, total_tagged + tagged, MAX_PATCH_CHARS) {
             cut.push(name.clone());
             continue;
         }
         kept.push_str(&text);
         total += length;
+        total_tagged += tagged;
     }
     (kept, cut)
 }
