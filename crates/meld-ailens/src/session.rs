@@ -993,6 +993,7 @@ impl CompareSession {
             message,
             author: commit.author.name.clone(),
             date: commit.author.date.clone(),
+            committed: commit.committer.date.clone(),
             agent_name: agent
                 .as_ref()
                 .map(|a| a.display_name.clone())
@@ -1513,9 +1514,6 @@ fn set_guide<'a>(card: &mut Card, guides: impl Iterator<Item = &'a ChangeGuide> 
     card.change_check = join_texts(guides.filter_map(|g| g.check.as_deref()));
 }
 
-/// The steps of the changes a card shows, with their lines where the
-/// comparison has them
-///
 /// Lines of the commits' own diffs (and the uncommitted layers' diffs) the
 /// file's cards show: per commit or layer, side and path, each line's
 /// group. Line numbers of one commit's diff mean nothing in another's.
@@ -1543,6 +1541,9 @@ fn covered_lines(groups: &[ChangeGroup]) -> CoveredLines {
     covered
 }
 
+/// The steps of the changes a card shows, with their lines where the
+/// comparison has them
+///
 /// A step's lines are found through the group's origins, so only lines of
 /// the card (`groups[index]`) count. A step on lines another card of the
 /// same commit or layer shows (one change can span several cards) is left

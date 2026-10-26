@@ -44,6 +44,9 @@ pub struct Card {
     pub author: String,
     /// Author date, strict ISO 8601
     pub date: String,
+    /// Committer date, strict ISO 8601: when the commit was made as it is,
+    /// which a rebase or cherry-pick updates, unlike the author date
+    pub committed: String,
     /// e.g. "Claude Opus 5.5"; empty for people
     pub agent_name: String,
     pub agent_model: String,

@@ -785,9 +785,9 @@ fn untagged_prefix(text: &str, max: usize) -> &str {
                 return &text[..start];
             }
             let room = (max - counted).min(tagged_room - tag);
-            if room == 0 && tag > 0 {
-                // Its tag without any of the line would read as an empty
-                // line: cut before the line
+            if room <= 1 && tag > 0 {
+                // Its tag with no more than the line's +, - or space would
+                // read as an empty line: cut before the line
                 return &text[..start];
             }
             let keep = rest
@@ -849,6 +849,8 @@ mod tests {
         // Room for some of it: the tag and what fits
         // The tagged cap (12) leaves 6 after the tag
         assert_eq!(untagged_prefix("n1    +abcdefghij\n", 8), "n1    +abcde");
+        // Room for the + alone is no room for the line either
+        assert_eq!(untagged_prefix("abcd\nn2    +xyz\n", 8), "abcd\n");
         assert_eq!(untagged_prefix("short\n", 8), "short\n");
     }
 

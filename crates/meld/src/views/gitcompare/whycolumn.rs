@@ -17,6 +17,7 @@ use iced::advanced::overlay;
 use iced::advanced::renderer;
 use iced::advanced::widget::{self, Tree, Widget};
 use iced::advanced::{Clipboard, Shell, mouse};
+use iced::keyboard;
 use iced::widget::{
     button, column, container, mouse_area, rich_text, row, space, span, text, tooltip,
 };
@@ -27,7 +28,9 @@ use iced::{
 pub use meld_ailens::cards::CARD_GAP;
 use meld_ailens::cards::{layout_cards, reflow};
 use meld_ailens::picker::parse_iso_date;
-use meld_ailens::{Card, CardKind, CardStep, ChangeKind, ExplainAction, ExplanationSource, Side};
+use meld_ailens::{
+    Card, CardKind, CardStep, ChangeGuide, ChangeKind, ExplainAction, ExplanationSource, Side,
+};
 
 use super::diffhost::PaneGeometry;
 use crate::ui;
@@ -361,8 +364,8 @@ impl<M> Copy for Callbacks<M> {}
 
 /// Where to read each card: its number and how many cards are numbered.
 ///
-/// Cards are numbered by their commit, oldest first (commits outside the
-/// range, which have no place in it, by SHA), then staged and
+/// Cards are numbered by their commit, oldest first ([`commit_sort_key`]), then
+/// staged and
 /// unstaged changes, and within those by the reading order the model gave
 /// their changes. None for cards without an order, and for all of them
 /// when fewer than two have one.
@@ -380,13 +383,9 @@ pub fn reading_order(cards: &[Card]) -> Vec<Option<(usize, usize)>> {
         CardKind::Unstaged => 2,
         CardKind::Unknown => 3,
     };
-    ordered.sort_by(|&a, &b| {
-        let (x, y) = (&cards[a], &cards[b]);
-        rank(x)
-            .cmp(&rank(y))
-            .then_with(|| commit_order(x, y))
-            .then_with(|| x.change_order.cmp(&y.change_order))
-            .then_with(|| a.cmp(&b))
+    ordered.sort_by_cached_key(|&i| {
+        let card = &cards[i];
+        (rank(card), commit_sort_key(card), card.change_order, i)
     });
     let total = ordered.len();
     for (number, index) in ordered.into_iter().enumerate() {
@@ -395,15 +394,15 @@ pub fn reading_order(cards: &[Card]) -> Vec<Option<(usize, usize)>> {
     numbers
 }
 
-/// The order of commits, oldest first, in the summary and the reading
+/// Where a commit sorts, oldest first, in the summary and the reading
 /// order alike: by place in the range; commits outside it (all color -1)
-/// by date, then by SHA, which keeps each one's cards together.
-fn commit_order(a: &Card, b: &Card) -> std::cmp::Ordering {
-    let date = |card: &Card| parse_iso_date(&card.date).unwrap_or(f64::INFINITY);
-    a.color_index
-        .cmp(&b.color_index)
-        .then_with(|| date(a).total_cmp(&date(b)))
-        .then_with(|| a.sha.as_deref().cmp(&b.sha.as_deref()))
+/// by when they were committed (a rebase or cherry-pick updates that, not
+/// the author date), then by SHA, which keeps each one's cards together.
+/// Parsed once per card: sort with `sort_by_cached_key`.
+fn commit_sort_key(card: &Card) -> (i32, i64, Option<&str>) {
+    // Milliseconds; undated last
+    let committed = parse_iso_date(&card.committed).map_or(i64::MAX, |date| (date * 1000.0) as i64);
+    (card.color_index, committed, card.sha.as_deref())
 }
 
 /// `body` cut into plain text and names from the code (in backticks, which
@@ -535,17 +534,24 @@ fn kind_chip<'a, M: 'a>(kind: ChangeKind, font: CardFont) -> Element<'a, M> {
 /// not worth the time) to red (5, to check and verify).
 /// None outside 1 to 5.
 fn risk_chip<'a, M: 'a>(risk: u8, font: CardFont) -> Option<Element<'a, M>> {
+    // The range is the model's, checked where risks are read
+    if !ChangeGuide::RISKS.contains(&risk) {
+        return None;
+    }
     let (rgb, tip) = match risk {
         1 => (0x9a9996, tr!("Not worth your time")),
         2 => (0x77767b, tr!("Plain and safe")),
         3 => (0xc88800, tr!("Worth a careful read")),
         4 => (0xe66100, tr!("Check it against its callers and edge cases")),
-        5 => (0xc01c28, tr!("Check and verify it")),
-        _ => return None,
+        _ => (0xc01c28, tr!("Check and verify it")),
     };
     let color = hex(rgb);
     let chip = badge(
-        tr!("risk {risk}/5", risk = risk),
+        tr!(
+            "risk {risk}/{most}",
+            risk = risk,
+            most = ChangeGuide::RISKS.end()
+        ),
         color.scale_alpha(if risk >= 4 { 0.25 } else { 0.15 }),
         Some(color),
         false,
@@ -1336,7 +1342,7 @@ pub fn commit_summary<'a, M: Clone + 'a>(
         return None;
     }
     // In the order the cards are numbered in
-    commits.sort_by(|a, b| commit_order(a, b));
+    commits.sort_by_cached_key(|card| commit_sort_key(card));
     let all = states.expanded.contains(ALL_COMMITS_KEY);
     let shown = if all { commits.len() } else { SUMMARY_COMMITS };
     let mut list = column![].spacing(4).width(Length::Fill);
@@ -1498,6 +1504,8 @@ struct ColumnState {
     /// Where the cards wanted to be when they were scrolled: once the
     /// panes move, the cards follow their lines again
     scrolled_at: Vec<f32>,
+    /// Whether Shift is held, for [`Wheel::WithShift`]
+    shift: bool,
 }
 
 /// Where the wheel scrolls cards that don't fit.
@@ -1506,9 +1514,9 @@ pub enum Wheel {
     /// Anywhere over the column; once the panes scroll, the cards follow
     /// their lines again
     Anywhere,
-    /// Only over a card, the panes being under the column; the cards stay
-    /// scrolled while the panes scroll, or cards and code would take turns
-    OverCards,
+    /// Only with Shift held, the panes being under the column: the plain
+    /// wheel always scrolls the code, so cards and code never take turns
+    WithShift,
 }
 
 /// Pixels a wheel line scrolls the cards.
@@ -1681,7 +1689,7 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for CardColumn<'a, M> {
             .map(|((_, top), height)| top + height - size.height)
             .fold(0.0_f32, f32::max);
         let state = tree.state.downcast_mut::<ColumnState>();
-        if self.wheel == Wheel::Anywhere && state.scrolled_at != self.wanted {
+        if state.scrolled_at != self.wanted {
             state.offset = 0.0;
         }
         state.overflow = overflow;
@@ -1742,6 +1750,9 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for CardColumn<'a, M> {
         }
         // Cards in view that don't fit scroll with the wheel; at either end
         // the wheel goes on to what is below
+        if let Event::Keyboard(keyboard::Event::ModifiersChanged(modifiers)) = event {
+            tree.state.downcast_mut::<ColumnState>().shift = modifiers.shift();
+        }
         if shell.is_event_captured() {
             return;
         }
@@ -1749,19 +1760,16 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for CardColumn<'a, M> {
             if !cursor.is_over(self.card_area(layout)) {
                 return;
             }
-            if self.wheel == Wheel::OverCards
-                && !layout
-                    .children()
-                    .skip(usize::from(self.header))
-                    .any(|card| cursor.is_over(card.bounds()))
-            {
+            let state = tree.state.downcast_mut::<ColumnState>();
+            if self.wheel == Wheel::WithShift && !state.shift {
                 return;
             }
-            let state = tree.state.downcast_mut::<ColumnState>();
-            let dy = match *delta {
-                mouse::ScrollDelta::Lines { y, .. } => y * WHEEL_LINE,
-                mouse::ScrollDelta::Pixels { y, .. } => y,
+            // Some systems turn Shift+wheel into a sideways scroll
+            let (dx, dy) = match *delta {
+                mouse::ScrollDelta::Lines { x, y } => (x * WHEEL_LINE, y * WHEEL_LINE),
+                mouse::ScrollDelta::Pixels { x, y } => (x, y),
             };
+            let dy = if dy == 0.0 { dx } else { dy };
             let offset = (state.offset - dy).clamp(0.0, state.overflow);
             if offset != state.offset {
                 state.offset = offset;
@@ -2205,10 +2213,16 @@ mod tests {
             kind: CardKind::Commit,
             color_index: -1,
             sha: Some(sha.into()),
-            date: if sha == "aaa" {
+            committed: if sha == "aaa" {
                 "2026-03-01T10:00:00+02:00".into()
             } else {
                 "2026-01-01T10:00:00+00:00".into()
+            },
+            // Authored the other way round: a rebase keeps author dates
+            date: if sha == "aaa" {
+                "2025-01-01T10:00:00+00:00".into()
+            } else {
+                "2025-06-01T10:00:00+00:00".into()
             },
             change_order: Some(order),
             ..Default::default()
@@ -2226,15 +2240,12 @@ mod tests {
         );
         // Times are compared as times, not as text
         let at = |date: &str| Card {
-            date: date.into(),
+            committed: date.into(),
             ..Default::default()
         };
         assert!(
-            commit_order(
-                &at("2026-01-01T10:00:00+02:00"),
-                &at("2026-01-01T09:30:00+00:00")
-            )
-            .is_lt()
+            commit_sort_key(&at("2026-01-01T10:00:00+02:00"))
+                < commit_sort_key(&at("2026-01-01T09:30:00+00:00"))
         );
     }
 

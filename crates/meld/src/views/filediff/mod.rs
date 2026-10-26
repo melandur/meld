@@ -795,9 +795,11 @@ impl FileDiff {
     /// 0-based line.
     ///
     /// In order, in any pane: a definition of the whole name; for
-    /// `Type::method`, a definition of `method` after where `Type` is
-    /// implemented (`impl Type`, `class Type`, …); a use of the whole name;
-    /// a definition of `method` anywhere; a use of it.
+    /// `Type::method` with `Type`'s blocks here (`impl Type`, `class Type`,
+    /// …), `method` inside them; for a module path (`crate::run`,
+    /// `utils::parse`), a definition of its last part; a use of the whole
+    /// name; then, without `Type`'s blocks here, `method`'s definition or
+    /// use anywhere, and with them, the start of `Type`'s block.
     pub fn find_name(&self, name: &str) -> Option<(usize, usize)> {
         find_name_in(name, self.panes.len(), |pane| {
             let buffer = &self.panes[pane].buffer;
@@ -1361,12 +1363,6 @@ pub fn find_name_in<'a, I: Iterator<Item = &'a str>>(
     let mut parts = name.rsplit("::");
     let short = parts.next().unwrap_or(name);
     let owner = parts.next().filter(|owner| !owner.is_empty());
-    // `crate::run`, `utils::parse`, `Self::new`: a module (or the type
-    // being implemented), not a type whose block can be found
-    let module = owner.is_some_and(|owner| {
-        matches!(owner, "crate" | "super" | "self" | "Self")
-            || owner.starts_with(|c: char| c.is_lowercase())
-    });
     let full = NamePatterns::new(name)?;
     let short = (short != name).then(|| NamePatterns::new(short)).flatten();
     // Each pane, the last one first: the first line `found` matches
@@ -1375,12 +1371,21 @@ pub fn find_name_in<'a, I: Iterator<Item = &'a str>>(
             .rev()
             .find_map(|pane| lines(pane).position(found).map(|line| (pane, line)))
     };
-    // A definition of the last part inside the owner's blocks: from a line
-    // that starts the owner's (`impl Type`, `class Type`) to the next that
-    // starts any type's
-    let owner = owner.filter(|_| !module).and_then(OwnerPatterns::new);
-    let in_owner = |short: &NamePatterns| {
-        let owner = owner.as_ref()?;
+    let keyword = owner.is_some_and(|owner| matches!(owner, "crate" | "super" | "self" | "Self"));
+    // `Type` of `Type::method` when the panes have its blocks (`impl Type`,
+    // `class Type`), whatever its case
+    let blocks = owner
+        .filter(|_| !keyword)
+        .and_then(OwnerPatterns::new)
+        .filter(|owner| find(&|line| owner.starts_own.is_match(line)).is_some());
+    // Else a module (`crate::run`, `utils::parse`, `Self::new`), or a type
+    // defined elsewhere (`Qux::new`), whose use here is the better place
+    let module = blocks.is_none()
+        && (keyword || owner.is_some_and(|owner| owner.starts_with(|c: char| c.is_lowercase())));
+    // The last part inside the owner's blocks, from a line that starts one
+    // of them to the next line that starts any type's: its definition, else
+    // its first mention there (`void draw();` has no keyword to tell it)
+    let in_owner = |owner: &OwnerPatterns, found: &dyn Fn(&str) -> bool| {
         (0..pane_count).rev().find_map(|pane| {
             let mut inside = false;
             lines(pane)
@@ -1388,41 +1393,56 @@ pub fn find_name_in<'a, I: Iterator<Item = &'a str>>(
                     if owner.starts_any.is_match(line) {
                         inside = owner.starts_own.is_match(line);
                     }
-                    inside && short.defines(line)
+                    inside && found(line)
                 })
                 .map(|line| (pane, line))
         })
     };
+    let owner = blocks;
     find(&|line| full.defines(line))
-        .or_else(|| in_owner(short.as_ref()?))
-        .or_else(|| {
-            let short = short.as_ref().filter(|_| module)?;
-            find(&|line| short.defines(line))
+        .or_else(|| match (&owner, &short) {
+            (Some(owner), Some(short)) => in_owner(owner, &|line| short.defines(line))
+                .or_else(|| in_owner(owner, &|line| short.uses(line))),
+            // A module's name is defined as its last part
+            (None, Some(short)) if module => find(&|line| short.defines(line)),
+            _ => None,
         })
         .or_else(|| find(&|line| full.uses(line)))
-        .or_else(|| {
-            let short = short.as_ref()?;
-            find(&|line| short.defines(line)).or_else(|| find(&|line| short.uses(line)))
+        .or_else(|| match &owner {
+            // The type is here, without the method: the type, not another
+            // type's method of that name
+            Some(owner) => find(&|line| owner.starts_own.is_match(line)),
+            None => {
+                let short = short.as_ref()?;
+                find(&|line| short.defines(line)).or_else(|| find(&|line| short.uses(line)))
+            }
         })
 }
 
 /// What finds the blocks of `owner` (`Type` of `Type::method`): lines that
-/// start a type's block (`impl …`, `class …`, `struct …` at the start of a
-/// line, after modifiers), and those that start the owner's
-/// (`impl Type`, `impl Trait for Type`, `class Type`)
+/// start a type's block, and those that start the owner's (`impl Type`,
+/// `impl Trait for Type`, `class Type`, `template <…> class Type`,
+/// `public partial class Type`, `extension Type`)
+///
+/// A type's keyword counts when a name follows it (not `object.method()`
+/// or `struct.pack`); `impl` only at the start of a line, after Rust's
+/// modifiers, so that `-> impl Iterator` in a signature doesn't count.
 struct OwnerPatterns {
     starts_any: regex::Regex,
     starts_own: regex::Regex,
 }
 
 impl OwnerPatterns {
-    const START: &str = r"^\s*(?:(?:pub(?:\([^)]*\))?|export|public|private|protected|internal|abstract|final|sealed|static|unsafe|default|data|open)\s+)*(?:impl|class|struct|enum|trait|interface|object|module|namespace)\b";
+    /// Where a type's block starts, up to its name
+    const KEYWORD: &str = r"(?:^\s*(?:(?:pub(?:\([^)]*\))?|unsafe|default)\s+)*impl\b|(?:^|[\s;}>])(?:class|struct|enum|trait|interface|extension|object|record|union|protocol)\s+)";
 
     fn new(owner: &str) -> Option<Self> {
         let owner = regex::escape(owner);
         Some(Self {
-            starts_any: regex::Regex::new(Self::START).ok()?,
-            starts_own: regex::Regex::new(&format!(r"{}[^{{;]*\b{owner}\b", Self::START)).ok()?,
+            // A name follows (`impl` may have `<T>` or a space first)
+            starts_any: regex::Regex::new(&format!(r"{}\s*[A-Za-z_<]", Self::KEYWORD)).ok()?,
+            starts_own: regex::Regex::new(&format!(r"{}[^{{;(]*\b{owner}\b", Self::KEYWORD))
+                .ok()?,
         })
     }
 }
@@ -1529,6 +1549,45 @@ mod tests {
         assert_eq!(one("Foo::new"), Some(6));
         // Bar's own
         assert_eq!(one("Bar::new"), Some(2));
+    }
+
+    #[test]
+    fn blocks_start_where_a_type_s_keyword_is_followed_by_a_name() {
+        let lines = [
+            "public class Foo {",
+            "    void Other() {}",
+            "}",
+            "public partial class Bar {",
+            "    void New() {}",
+            "}",
+            "template <typename T> class Baz {",
+            "  void New();",
+            "};",
+            "class Foo2:",
+            "    def __init__(self):",
+            "        object.__setattr__(self, 'x', 1)",
+            "        struct.pack('i', 1)",
+            "    def New(self): pass",
+        ];
+        let one = |name| find_name_in(name, 1, |_| lines.into_iter()).map(|(_, line)| line);
+        // Bar's block ends Foo's, which has no New: Foo, not Bar's New
+        assert_eq!(one("Foo::New"), Some(0));
+        assert_eq!(one("Bar::New"), Some(4));
+        assert_eq!(one("Baz::New"), Some(7));
+        // `object.` and `struct.` in a body don't end it
+        assert_eq!(one("Foo2::New"), Some(13));
+    }
+
+    #[test]
+    fn a_lowercase_type_with_blocks_is_a_type() {
+        let lines = [
+            "class canvas { void draw(); };",
+            "class widget {",
+            "  void draw();",
+            "};",
+        ];
+        let one = |name| find_name_in(name, 1, |_| lines.into_iter()).map(|(_, line)| line);
+        assert_eq!(one("widget::draw"), Some(2));
     }
 
     #[test]

@@ -2683,7 +2683,9 @@ impl GitCompare {
                 space::horizontal(),
                 self.layout_button(
                     tr!("Overlay"),
-                    tr!("Show the explanations over the code, beside the lines they explain"),
+                    tr!(
+                        "Show the explanations over the code, beside the lines they explain; Shift+wheel scrolls them"
+                    ),
                     ExplainLayout::Overlay,
                 ),
                 self.layout_button(
@@ -2849,12 +2851,12 @@ impl GitCompare {
             });
         whycolumn::card_column(elements, wanted, placeholder, summary)
             .below(below)
-            // Over the code, the wheel scrolls the code, and the cards only
-            // when it is over one
+            // Over the code, the wheel scrolls the code; Shift+wheel the
+            // cards that don't fit
             .wheel(if in_column {
                 whycolumn::Wheel::Anywhere
             } else {
-                whycolumn::Wheel::OverCards
+                whycolumn::Wheel::WithShift
             })
             .gap(0.0)
             .into()
