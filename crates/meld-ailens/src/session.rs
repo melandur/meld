@@ -876,11 +876,13 @@ impl CompareSession {
             .iter()
             .map(|&layer| (layer, self.info.uncommitted.place(layer, layers.get(layer))))
             .collect();
+        let covered = covered_lines(&attribution.groups);
         let mut cards = Vec::new();
         for index in 0..attribution.groups.len() {
             cards.push(self.card(
                 &attribution.groups,
                 index,
+                &covered,
                 &range_order,
                 &builds,
                 layers,
@@ -896,6 +898,7 @@ impl CompareSession {
         &self,
         groups: &[ChangeGroup],
         index: usize,
+        covered: &CoveredLines,
         range_order: &HashMap<String, i32>,
         builds: &HashMap<String, Vec<String>>,
         layers: &LayerDiffsUsed,
@@ -943,6 +946,7 @@ impl CompareSession {
             card.change_steps = card_steps(
                 groups,
                 index,
+                covered,
                 changes.iter().map(|c| (&c.hunk, c.guide.steps.as_slice())),
             );
             return Ok(card);
@@ -1020,6 +1024,7 @@ impl CompareSession {
         card.change_steps = card_steps(
             groups,
             index,
+            covered,
             changes.iter().map(|c| (&c.hunk, c.guide.steps.as_slice())),
         );
         Ok(card)
@@ -1511,14 +1516,43 @@ fn set_guide<'a>(card: &mut Card, guides: impl Iterator<Item = &'a ChangeGuide> 
 /// The steps of the changes a card shows, with their lines where the
 /// comparison has them
 ///
+/// Lines of the commits' own diffs (and the uncommitted layers' diffs) the
+/// file's cards show: per commit or layer, side and path, each line's
+/// group. Line numbers of one commit's diff mean nothing in another's.
+type CoveredLines = HashMap<
+    (Option<String>, Option<UncommittedLayer>, Side, String),
+    std::collections::BTreeMap<usize, usize>,
+>;
+
+/// The [`CoveredLines`] of a file's groups, built once for all its cards
+fn covered_lines(groups: &[ChangeGroup]) -> CoveredLines {
+    let mut covered = CoveredLines::new();
+    for (index, group) in groups.iter().enumerate() {
+        for origin in &group.origins {
+            covered
+                .entry((
+                    group.sha.clone(),
+                    group.uncommitted,
+                    origin.side,
+                    origin.path.clone(),
+                ))
+                .or_default()
+                .insert(origin.line, index);
+        }
+    }
+    covered
+}
+
 /// A step's lines are found through the group's origins, so only lines of
-/// the card (`groups[index]`) count. A step on lines another card shows
-/// (one change can span several cards) is left to that card; a step whose
-/// lines no card shows (a later commit changed them again), or without
-/// lines, is on every card of its change, without lines.
+/// the card (`groups[index]`) count. A step on lines another card of the
+/// same commit or layer shows (one change can span several cards) is left
+/// to that card; a step whose lines no such card shows (a later commit
+/// changed them again), or without lines, is on every card of its change,
+/// without lines.
 fn card_steps<'a>(
     groups: &[ChangeGroup],
     index: usize,
+    covered: &CoveredLines,
     changes: impl Iterator<Item = (&'a CommitHunk, &'a [ChangeStep])>,
 ) -> Vec<CardStep> {
     let group = &groups[index];
@@ -1546,10 +1580,15 @@ fn card_steps<'a>(
                     .map(|(_, place)| *place);
                 let Some((side, line)) = places.next() else {
                     // Another card's step, or on no card's lines
-                    let elsewhere = groups
-                        .iter()
-                        .enumerate()
-                        .any(|(other, group)| other != index && group.origins.iter().any(covers));
+                    let key = (
+                        group.sha.clone(),
+                        group.uncommitted,
+                        at.side,
+                        path.to_string(),
+                    );
+                    let elsewhere = covered.get(&key).is_some_and(|lines| {
+                        lines.range(first..=last).any(|(_, &other)| other != index)
+                    });
                     return (!elsewhere).then_some(None);
                 };
                 let (start, end) = places

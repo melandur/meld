@@ -395,12 +395,14 @@ pub fn reading_order(cards: &[Card]) -> Vec<Option<(usize, usize)>> {
     numbers
 }
 
-/// The order of commits, oldest first: by place in the range; commits
-/// outside it (all color -1) by SHA, which keeps each one's cards together,
-/// in the summary and the reading order alike.
+/// The order of commits, oldest first, in the summary and the reading
+/// order alike: by place in the range; commits outside it (all color -1)
+/// by date, then by SHA, which keeps each one's cards together.
 fn commit_order(a: &Card, b: &Card) -> std::cmp::Ordering {
+    let date = |card: &Card| parse_iso_date(&card.date).unwrap_or(f64::INFINITY);
     a.color_index
         .cmp(&b.color_index)
+        .then_with(|| date(a).total_cmp(&date(b)))
         .then_with(|| a.sha.as_deref().cmp(&b.sha.as_deref()))
 }
 
@@ -531,13 +533,15 @@ fn kind_chip<'a, M: 'a>(kind: ChangeKind, font: CardFont) -> Element<'a, M> {
 
 /// The chip of a change's risk: how much it needs checking, from grey (1,
 /// not worth the time) to red (5, to check and verify).
-fn risk_chip<'a, M: 'a>(risk: u8, font: CardFont) -> Element<'a, M> {
+/// None outside 1 to 5.
+fn risk_chip<'a, M: 'a>(risk: u8, font: CardFont) -> Option<Element<'a, M>> {
     let (rgb, tip) = match risk {
         1 => (0x9a9996, tr!("Not worth your time")),
         2 => (0x77767b, tr!("Plain and safe")),
         3 => (0xc88800, tr!("Worth a careful read")),
         4 => (0xe66100, tr!("Check it against its callers and edge cases")),
-        _ => (0xc01c28, tr!("Check and verify it")),
+        5 => (0xc01c28, tr!("Check and verify it")),
+        _ => return None,
     };
     let color = hex(rgb);
     let chip = badge(
@@ -550,14 +554,16 @@ fn risk_chip<'a, M: 'a>(risk: u8, font: CardFont) -> Element<'a, M> {
             ..font
         },
     );
-    tooltip(
-        chip,
-        container(text(tip).size(12))
-            .padding([4, 8])
-            .style(ui::tooltip_box),
-        tooltip::Position::Bottom,
+    Some(
+        tooltip(
+            chip,
+            container(text(tip).size(12))
+                .padding([4, 8])
+                .style(ui::tooltip_box),
+            tooltip::Position::Bottom,
+        )
+        .into(),
     )
-    .into()
 }
 
 fn long_text<'a, M: Clone + 'a>(
@@ -990,11 +996,18 @@ pub fn short_headline(title: &str) -> String {
     };
     let mut short = shorten(first, HEADLINE_TEXT);
     // Cut inside a name from the code: cut before it instead, so its
-    // backtick isn't left without its pair
-    if short.matches('`').count() % 2 == 1
+    // backtick isn't left without its pair; with nothing before it, show
+    // it as plain text
+    if short != first
+        && short.matches('`').count() % 2 == 1
         && let Some(open) = short.rfind('`')
     {
-        short = format!("{}…", short[..open].trim_end());
+        let before = short[..open].trim_end();
+        short = if before.is_empty() {
+            short.replace('`', "")
+        } else {
+            format!("{before}…")
+        };
     }
     if more && !short.ends_with('…') {
         format!("{short} …")
@@ -1034,8 +1047,8 @@ pub fn card_view<'a, M: Clone + 'a>(
     if let Some(kind) = card.change_kind {
         top = top.push(kind_chip(kind, font));
     }
-    if let Some(risk) = card.change_risk {
-        top = top.push(risk_chip(risk, font));
+    if let Some(chip) = card.change_risk.and_then(|risk| risk_chip(risk, font)) {
+        top = top.push(chip);
     }
     if let Some((number, total)) = reading {
         let label = if number == 1 {
@@ -1487,6 +1500,17 @@ struct ColumnState {
     scrolled_at: Vec<f32>,
 }
 
+/// Where the wheel scrolls cards that don't fit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Wheel {
+    /// Anywhere over the column; once the panes scroll, the cards follow
+    /// their lines again
+    Anywhere,
+    /// Only over a card, the panes being under the column; the cards stay
+    /// scrolled while the panes scroll, or cards and code would take turns
+    OverCards,
+}
+
 /// Pixels a wheel line scrolls the cards.
 const WHEEL_LINE: f32 = 40.0;
 
@@ -1504,10 +1528,8 @@ pub struct CardColumn<'a, M> {
     below: Vec<Option<f32>>,
     gap: f32,
     header: bool,
-    /// Whether the wheel scrolls cards that don't fit (false over the
-    /// panes, where the wheel always scrolls the code: cards and code
-    /// taking turns would jitter)
-    wheel: bool,
+    /// Where the wheel scrolls cards that don't fit
+    wheel: Wheel,
 }
 
 /// Cards wanting to be at `wanted` (one per card), plus an optional
@@ -1533,7 +1555,7 @@ pub fn card_column<'a, M: 'a>(
         below: Vec::new(),
         gap: CARD_GAP,
         header: has_header,
-        wheel: true,
+        wheel: Wheel::Anywhere,
     }
 }
 
@@ -1545,8 +1567,9 @@ impl<'a, M: 'a> CardColumn<'a, M> {
         self
     }
 
-    /// Whether the wheel scrolls cards that don't fit (true unless set)
-    pub fn wheel(mut self, wheel: bool) -> Self {
+    /// Where the wheel scrolls cards that don't fit ([`Wheel::Anywhere`]
+    /// unless set)
+    pub fn wheel(mut self, wheel: Wheel) -> Self {
         self.wheel = wheel;
         self
     }
@@ -1658,7 +1681,7 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for CardColumn<'a, M> {
             .map(|((_, top), height)| top + height - size.height)
             .fold(0.0_f32, f32::max);
         let state = tree.state.downcast_mut::<ColumnState>();
-        if state.scrolled_at != self.wanted {
+        if self.wheel == Wheel::Anywhere && state.scrolled_at != self.wanted {
             state.offset = 0.0;
         }
         state.overflow = overflow;
@@ -1719,11 +1742,19 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for CardColumn<'a, M> {
         }
         // Cards in view that don't fit scroll with the wheel; at either end
         // the wheel goes on to what is below
-        if !self.wheel || shell.is_event_captured() {
+        if shell.is_event_captured() {
             return;
         }
         if let Event::Mouse(mouse::Event::WheelScrolled { delta }) = event {
             if !cursor.is_over(self.card_area(layout)) {
+                return;
+            }
+            if self.wheel == Wheel::OverCards
+                && !layout
+                    .children()
+                    .skip(usize::from(self.header))
+                    .any(|card| cursor.is_over(card.bounds()))
+            {
                 return;
             }
             let state = tree.state.downcast_mut::<ColumnState>();
@@ -2174,6 +2205,11 @@ mod tests {
             kind: CardKind::Commit,
             color_index: -1,
             sha: Some(sha.into()),
+            date: if sha == "aaa" {
+                "2026-03-01T10:00:00+02:00".into()
+            } else {
+                "2026-01-01T10:00:00+00:00".into()
+            },
             change_order: Some(order),
             ..Default::default()
         };
@@ -2183,10 +2219,37 @@ mod tests {
             ordered("bbb", 2),
             ordered("aaa", 1),
         ];
+        // bbb is older, though its SHA comes later
         assert_eq!(
             reading_order(&cards),
-            [Some((3, 4)), Some((2, 4)), Some((4, 4)), Some((1, 4))]
+            [Some((1, 4)), Some((4, 4)), Some((2, 4)), Some((3, 4))]
         );
+        // Times are compared as times, not as text
+        let at = |date: &str| Card {
+            date: date.into(),
+            ..Default::default()
+        };
+        assert!(
+            commit_order(
+                &at("2026-01-01T10:00:00+02:00"),
+                &at("2026-01-01T09:30:00+00:00")
+            )
+            .is_lt()
+        );
+    }
+
+    #[test]
+    fn only_risks_from_one_to_five_get_a_chip() {
+        let font = CardFont {
+            font: Font::MONOSPACE,
+            size: 14.0,
+        };
+        for risk in 1..=5 {
+            assert!(risk_chip::<Msg>(risk, font).is_some(), "{risk}");
+        }
+        for risk in [0, 6, 9] {
+            assert!(risk_chip::<Msg>(risk, font).is_none(), "{risk}");
+        }
     }
 
     #[test]
@@ -2208,6 +2271,18 @@ mod tests {
         assert!(short.ends_with("word…"), "{short}");
         let whole = format!("{} `parse` here", "word ".repeat(10));
         assert_eq!(short_headline(&whole), whole.trim());
+        // A lone backtick in a headline not cut short stays
+        assert_eq!(
+            short_headline("Quotes the ` character"),
+            "Quotes the ` character"
+        );
+        // Cut inside a name it starts with: the name, as plain text
+        let leading = format!("`fn refresh({})` now caches", "a: u8, ".repeat(40));
+        let short = short_headline(&leading);
+        assert!(
+            short.starts_with("fn refresh(a: u8") && !short.contains('`'),
+            "{short}"
+        );
     }
 
     #[test]

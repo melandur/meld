@@ -387,6 +387,52 @@ fn a_change_spanning_two_cards_gives_each_its_own_steps() {
 }
 
 #[test]
+fn steps_on_lines_a_later_commit_rewrote_stay_without_lines() {
+    let mut repo = FixtureRepo::new();
+    repo.commit(
+        "Adds the app",
+        files![("app.py", "a\nb\nc\n")],
+        Some("base"),
+    );
+    repo.commit(
+        "Uppercases b and c",
+        files![("app.py", "a\nB\nC\n")],
+        Some("upper"),
+    );
+    // Rewrites line 2 again: in its own diff, line 2 too
+    repo.commit("Renames B", files![("app.py", "a\nX\nC\n")], Some("rename"));
+    repo.note(
+        "upper",
+        "Change-Model: m\nChange-Unit: block\n\n\
+         Change: -2,2 +2,2 app.py\nWhat: Uppercases\n\
+         Step: +1 Uppercases b.\nStep: +2 Uppercases c.\nWhy: Louder.\n",
+        "ai-lens",
+    );
+    let session = base_main(&repo, None);
+    let entry = entry_for(&session, "app.py");
+    let view = session.file_view(&entry.change, &never()).unwrap();
+    let upper = view
+        .cards
+        .iter()
+        .find(|c| c.sha.as_deref() == Some(&repo.sha("upper")))
+        .unwrap();
+    let steps: Vec<_> = upper
+        .change_steps
+        .iter()
+        .map(|s| (s.lines, s.text.as_str()))
+        .collect();
+    // B's line is the later commit's now, whose line 2 is another diff's:
+    // the step stays, without lines
+    assert_eq!(
+        steps,
+        [
+            (None, "Uppercases b."),
+            (Some((Side::New, LineRange::new(3, 3))), "Uppercases c."),
+        ]
+    );
+}
+
+#[test]
 fn a_note_of_change_blocks_is_not_explained_again() {
     // Two cards on one explanation, but the note says it is one change block
     let note = JOINED_NOTE.replace(

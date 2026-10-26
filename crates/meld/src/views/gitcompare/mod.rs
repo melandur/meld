@@ -2849,8 +2849,13 @@ impl GitCompare {
             });
         whycolumn::card_column(elements, wanted, placeholder, summary)
             .below(below)
-            // Over the code, the wheel scrolls the code
-            .wheel(in_column)
+            // Over the code, the wheel scrolls the code, and the cards only
+            // when it is over one
+            .wheel(if in_column {
+                whycolumn::Wheel::Anywhere
+            } else {
+                whycolumn::Wheel::OverCards
+            })
             .gap(0.0)
             .into()
     }

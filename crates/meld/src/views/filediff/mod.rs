@@ -1361,47 +1361,70 @@ pub fn find_name_in<'a, I: Iterator<Item = &'a str>>(
     let mut parts = name.rsplit("::");
     let short = parts.next().unwrap_or(name);
     let owner = parts.next().filter(|owner| !owner.is_empty());
+    // `crate::run`, `utils::parse`, `Self::new`: a module (or the type
+    // being implemented), not a type whose block can be found
+    let module = owner.is_some_and(|owner| {
+        matches!(owner, "crate" | "super" | "self" | "Self")
+            || owner.starts_with(|c: char| c.is_lowercase())
+    });
     let full = NamePatterns::new(name)?;
     let short = (short != name).then(|| NamePatterns::new(short)).flatten();
-    // Each pane, the last one first: the first line `found` matches, from
-    // the line `from` gives (0 without it)
-    let find = |found: &dyn Fn(&str) -> bool, from: &dyn Fn(usize) -> Option<usize>| {
+    // Each pane, the last one first: the first line `found` matches
+    let find = |found: &dyn Fn(&str) -> bool| {
+        (0..pane_count)
+            .rev()
+            .find_map(|pane| lines(pane).position(found).map(|line| (pane, line)))
+    };
+    // A definition of the last part inside the owner's blocks: from a line
+    // that starts the owner's (`impl Type`, `class Type`) to the next that
+    // starts any type's
+    let owner = owner.filter(|_| !module).and_then(OwnerPatterns::new);
+    let in_owner = |short: &NamePatterns| {
+        let owner = owner.as_ref()?;
         (0..pane_count).rev().find_map(|pane| {
-            let from = from(pane)?;
+            let mut inside = false;
             lines(pane)
-                .enumerate()
-                .skip(from)
-                .find(|(_, line)| found(line))
-                .map(|(line, _)| (pane, line))
+                .position(|line| {
+                    if owner.starts_any.is_match(line) {
+                        inside = owner.starts_own.is_match(line);
+                    }
+                    inside && short.defines(line)
+                })
+                .map(|line| (pane, line))
         })
     };
-    let anywhere = |_: usize| Some(0);
-    let owner_line = owner.and_then(owner_pattern);
-    let in_owner = |pane: usize| {
-        let owner = owner_line.as_ref()?;
-        lines(pane).position(|line| owner.is_match(line))
-    };
-    find(&|line| full.defines(line), &anywhere)
+    find(&|line| full.defines(line))
+        .or_else(|| in_owner(short.as_ref()?))
         .or_else(|| {
-            let short = short.as_ref()?;
-            find(&|line| short.defines(line), &in_owner)
+            let short = short.as_ref().filter(|_| module)?;
+            find(&|line| short.defines(line))
         })
-        .or_else(|| find(&|line| full.uses(line), &anywhere))
+        .or_else(|| find(&|line| full.uses(line)))
         .or_else(|| {
             let short = short.as_ref()?;
-            find(&|line| short.defines(line), &anywhere)
-                .or_else(|| find(&|line| short.uses(line), &anywhere))
+            find(&|line| short.defines(line)).or_else(|| find(&|line| short.uses(line)))
         })
 }
 
-/// What finds where `owner` (`Type` of `Type::method`) has its methods:
-/// `impl Type`, `impl Trait for Type`, `class Type` and the like
-fn owner_pattern(owner: &str) -> Option<regex::Regex> {
-    let owner = regex::escape(owner);
-    regex::Regex::new(&format!(
-        r"\b(?:impl|class|struct|enum|trait|interface|object|module|namespace)\b[^{{;]*\b{owner}\b"
-    ))
-    .ok()
+/// What finds the blocks of `owner` (`Type` of `Type::method`): lines that
+/// start a type's block (`impl …`, `class …`, `struct …` at the start of a
+/// line, after modifiers), and those that start the owner's
+/// (`impl Type`, `impl Trait for Type`, `class Type`)
+struct OwnerPatterns {
+    starts_any: regex::Regex,
+    starts_own: regex::Regex,
+}
+
+impl OwnerPatterns {
+    const START: &str = r"^\s*(?:(?:pub(?:\([^)]*\))?|export|public|private|protected|internal|abstract|final|sealed|static|unsafe|default|data|open)\s+)*(?:impl|class|struct|enum|trait|interface|object|module|namespace)\b";
+
+    fn new(owner: &str) -> Option<Self> {
+        let owner = regex::escape(owner);
+        Some(Self {
+            starts_any: regex::Regex::new(Self::START).ok()?,
+            starts_own: regex::Regex::new(&format!(r"{}[^{{;]*\b{owner}\b", Self::START)).ok()?,
+        })
+    }
 }
 
 /// What finds a name from the code in a line: where it is defined, and
@@ -1486,6 +1509,43 @@ mod tests {
         let lines = ["x = Bar::make()", "Bar::make()"];
         let one = |name| find_name_in(name, 1, |_| lines.into_iter()).map(|(_, line)| line);
         assert_eq!(one("Bar::make"), Some(0));
+    }
+
+    #[test]
+    fn a_method_is_looked_for_in_its_own_type_s_blocks_only() {
+        let lines = [
+            "struct Foo {}",
+            "impl Bar {",
+            "    fn new() {}",
+            "}",
+            "pub(crate) impl Foo {",
+            "    fn helper() -> impl Iterator<Item = u8> {}",
+            "    fn new() {}",
+            "}",
+        ];
+        let one = |name| find_name_in(name, 1, |_| lines.into_iter()).map(|(_, line)| line);
+        // Not Bar's, though it comes after `struct Foo`; an `impl` in a
+        // signature doesn't end Foo's block
+        assert_eq!(one("Foo::new"), Some(6));
+        // Bar's own
+        assert_eq!(one("Bar::new"), Some(2));
+    }
+
+    #[test]
+    fn module_paths_find_the_definition_not_the_import() {
+        let lines = [
+            "use crate::run;",
+            "use utils::parse;",
+            "fn main() { run(); Self::make(); }",
+            "pub fn run() {}",
+            "fn parse() {}",
+            "fn make() {}",
+        ];
+        let one = |name| find_name_in(name, 1, |_| lines.into_iter()).map(|(_, line)| line);
+        assert_eq!(one("crate::run"), Some(3));
+        assert_eq!(one("utils::parse"), Some(4));
+        assert_eq!(one("Self::make"), Some(5));
+        assert_eq!(one("super::run"), Some(3));
     }
 
     #[test]

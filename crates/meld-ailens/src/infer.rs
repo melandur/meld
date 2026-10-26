@@ -785,6 +785,11 @@ fn untagged_prefix(text: &str, max: usize) -> &str {
                 return &text[..start];
             }
             let room = (max - counted).min(tagged_room - tag);
+            if room == 0 && tag > 0 {
+                // Its tag without any of the line would read as an empty
+                // line: cut before the line
+                return &text[..start];
+            }
             let keep = rest
                 .char_indices()
                 .nth(room)
@@ -829,4 +834,30 @@ fn cap_patch(files: &[(String, String)]) -> (String, Vec<String>) {
         total_tagged += tagged;
     }
     (kept, cut)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_cut_keeps_no_tag_without_its_line() {
+        // 6 characters, then a tag that fills the tagged cap (12 for 8)
+        // exactly, leaving no room for its line
+        let text = "abcde\nn2    +xyz\n";
+        assert_eq!(untagged_prefix(text, 8), "abcde\n");
+        // Room for some of it: the tag and what fits
+        // The tagged cap (12) leaves 6 after the tag
+        assert_eq!(untagged_prefix("n1    +abcdefghij\n", 8), "n1    +abcde");
+        assert_eq!(untagged_prefix("short\n", 8), "short\n");
+    }
+
+    #[test]
+    fn tags_are_their_name_and_padding() {
+        assert_eq!(tag_length("n12   +x"), 6);
+        assert_eq!(tag_length("o7     ctx"), 6);
+        assert_eq!(tag_length("n1234567+x"), 8);
+        assert_eq!(tag_length("new file mode"), 0);
+        assert_eq!(tag_length("+plain"), 0);
+    }
 }
