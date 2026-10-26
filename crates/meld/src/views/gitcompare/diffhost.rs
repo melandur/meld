@@ -13,6 +13,8 @@
 //!   `cursor_line()` (where a line comment of a review goes)
 //! - [`DiffHost::header_height`]: how far below the top of the view the
 //!   file header row ends, so that the Why column lines up
+//! - [`DiffHost::text_font`]: the compared text's font and size, which
+//!   the Why column's cards use too
 //! - [`DiffHost::set_hover`]: lines of the hovered card, drawn highlighted
 //! - the tab methods, forwarded unchanged
 
@@ -54,6 +56,11 @@ impl DiffHost {
 
     pub fn header_height(&self) -> f32 {
         self.0.header_height()
+    }
+
+    /// The font and size of the compared text, for the Why column.
+    pub fn text_font(&self) -> (iced::Font, f32) {
+        self.0.text_font()
     }
 
     pub fn first_change(&self) -> Option<usize> {

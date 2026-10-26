@@ -17,7 +17,8 @@ use iced::advanced::widget::{self, Tree, Widget};
 use iced::advanced::{Clipboard, Shell, mouse};
 use iced::widget::{button, column, container, mouse_area, row, space, text, tooltip};
 use iced::{
-    Background, Border, Color, Element, Event, Length, Rectangle, Renderer, Size, Theme, Vector,
+    Background, Border, Color, Element, Event, Font, Length, Rectangle, Renderer, Size, Theme,
+    Vector,
 };
 use meld_ailens::cards::{CARD_GAP, layout_cards, reflow};
 use meld_ailens::picker::parse_iso_date;
@@ -159,6 +160,36 @@ pub fn shorten(text: &str, limit: usize) -> String {
     format!("{}…", cut.trim_end())
 }
 
+/// The cards' font: that of the compared text, so that a card reads like
+/// the code beside it and follows its zoom.
+#[derive(Clone, Copy, Debug)]
+pub struct CardFont {
+    pub font: Font,
+    /// Size of the cards' text in logical pixels.
+    pub size: f32,
+}
+
+impl CardFont {
+    fn bold(self) -> Font {
+        Font {
+            weight: iced::font::Weight::Bold,
+            ..self.font
+        }
+    }
+
+    fn italic(self) -> Font {
+        Font {
+            style: iced::font::Style::Italic,
+            ..self.font
+        }
+    }
+
+    /// A size `by` pixels below the text's, for headers and labels.
+    fn smaller(self, by: f32) -> f32 {
+        (self.size - by).max(6.0)
+    }
+}
+
 /// Per-card state the tab keeps across reloads of the cards.
 #[derive(Default)]
 pub struct CardStates {
@@ -189,14 +220,12 @@ fn badge<'a, M: 'a>(
     background: Color,
     color: Option<Color>,
     italic: bool,
+    font: CardFont,
 ) -> Element<'a, M> {
-    let mut t = text(label).size(11).wrapping(text::Wrapping::None);
-    if italic {
-        t = t.font(iced::Font {
-            style: iced::font::Style::Italic,
-            ..iced::Font::DEFAULT
-        });
-    }
+    let mut t = text(label)
+        .size(font.smaller(2.0))
+        .font(if italic { font.italic() } else { font.font })
+        .wrapping(text::Wrapping::None);
     if let Some(c) = color {
         t = t.color(c);
     }
@@ -216,15 +245,16 @@ fn long_text<'a, M: Clone + 'a>(
     states: &CardStates,
     on_expand: fn(String) -> M,
     bold: bool,
+    card_font: CardFont,
 ) -> Element<'a, M> {
     let font = if bold {
-        ui::bold()
+        card_font.bold()
     } else {
-        iced::Font::DEFAULT
+        card_font.font
     };
     if body.chars().count() <= LONG_TEXT {
         return text(body)
-            .size(13)
+            .size(card_font.size)
             .font(font)
             .wrapping(text::Wrapping::WordOrGlyph)
             .into();
@@ -237,7 +267,7 @@ fn long_text<'a, M: Clone + 'a>(
     };
     column![
         text(shown)
-            .size(13)
+            .size(card_font.size)
             .font(font)
             .wrapping(text::Wrapping::WordOrGlyph),
         button(
@@ -246,7 +276,8 @@ fn long_text<'a, M: Clone + 'a>(
             } else {
                 tr!("Show more")
             })
-            .size(12)
+            .size(card_font.smaller(1.0))
+            .font(card_font.font)
         )
         .padding([0, 0])
         .style(link_button)
@@ -277,6 +308,7 @@ pub fn card_view<'a, M: Clone + 'a>(
     states: &'a CardStates,
     callbacks: Callbacks<M>,
     now: f64,
+    font: CardFont,
 ) -> Element<'a, M> {
     let key = card.key.as_str();
     let dim = ui::dim_text;
@@ -286,8 +318,8 @@ pub fn card_view<'a, M: Clone + 'a>(
         (CardKind::Commit, Some(sha)) => {
             let sha_button = button(
                 text(card.short_sha.as_str())
-                    .size(12)
-                    .font(iced::Font::MONOSPACE),
+                    .size(font.smaller(1.0))
+                    .font(font.font),
             )
             .padding([0, 4])
             .style(ui::flat_button)
@@ -308,8 +340,8 @@ pub fn card_view<'a, M: Clone + 'a>(
             };
             header = header.push(
                 text(label)
-                    .size(12)
-                    .font(ui::bold())
+                    .size(font.smaller(1.0))
+                    .font(font.bold())
                     .wrapping(text::Wrapping::None),
             );
         }
@@ -322,6 +354,7 @@ pub fn card_view<'a, M: Clone + 'a>(
                 claude.scale_alpha(0.2),
                 Some(claude),
                 false,
+                font,
             ),
             container(text(card.agent_name.as_str()).size(12))
                 .padding([4, 8])
@@ -339,7 +372,8 @@ pub fn card_view<'a, M: Clone + 'a>(
     if filled {
         header = header.push(
             ellipsized(who.as_str(), Mode::End)
-                .size(12)
+                .size(font.smaller(1.0))
+                .font(font.font)
                 .style(dim)
                 .width(Length::Fill),
         );
@@ -350,7 +384,8 @@ pub fn card_view<'a, M: Clone + 'a>(
         }
         header = header.push(tooltip(
             text(relative_date(date, now))
-                .size(12)
+                .size(font.smaller(1.0))
+                .font(font.font)
                 .style(dim)
                 .wrapping(text::Wrapping::None),
             container(text(local_date(date).unwrap_or_else(|| card.date.clone())).size(12))
@@ -368,6 +403,7 @@ pub fn card_view<'a, M: Clone + 'a>(
             states,
             callbacks.expand,
             true,
+            font,
         ));
     }
     if !card.why.is_empty() {
@@ -381,7 +417,7 @@ pub fn card_view<'a, M: Clone + 'a>(
                         model = card.inferred_by
                     )
                 };
-                body = body.push(badge_line(line));
+                body = body.push(badge_line(line, font));
             }
             Some(source) => {
                 let label = match source {
@@ -389,7 +425,12 @@ pub fn card_view<'a, M: Clone + 'a>(
                     ExplanationSource::Note => tr!("from a note"),
                     ExplanationSource::Inferred => tr!("inferred"),
                 };
-                body = body.push(text(label).size(11).style(dim));
+                body = body.push(
+                    text(label)
+                        .size(font.smaller(2.0))
+                        .font(font.font)
+                        .style(dim),
+                );
             }
             None => {}
         }
@@ -399,6 +440,7 @@ pub fn card_view<'a, M: Clone + 'a>(
             states,
             callbacks.expand,
             false,
+            font,
         ));
     }
     if !card.justification.is_empty() {
@@ -407,6 +449,7 @@ pub fn card_view<'a, M: Clone + 'a>(
             &format!("{key}:justification"),
             states,
             callbacks.expand,
+            font,
         ));
     }
 
@@ -419,9 +462,13 @@ pub fn card_view<'a, M: Clone + 'a>(
                 model = card.change_model
             )
         };
-        let mut change = column![ui::separator(false), badge_line(line),].spacing(3);
+        let mut change = column![ui::separator(false), badge_line(line, font)].spacing(3);
         if !card.change_what.is_empty() {
-            change = change.push(text(card.change_what.as_str()).size(13).font(ui::bold()));
+            change = change.push(
+                text(card.change_what.as_str())
+                    .size(font.size)
+                    .font(font.bold()),
+            );
         }
         if !card.change_why.is_empty() {
             change = change.push(long_text(
@@ -430,6 +477,7 @@ pub fn card_view<'a, M: Clone + 'a>(
                 states,
                 callbacks.expand,
                 false,
+                font,
             ));
         }
         if !card.change_justification.is_empty() {
@@ -438,6 +486,7 @@ pub fn card_view<'a, M: Clone + 'a>(
                 &format!("{key}:change-justification"),
                 states,
                 callbacks.expand,
+                font,
             ));
         }
         body = body.push(change);
@@ -450,7 +499,7 @@ pub fn card_view<'a, M: Clone + 'a>(
             ExplainAction::Changes => tr!("Explain changes"),
         };
         let mut explain = row![
-            button(text(label).size(12))
+            button(text(label).size(font.smaller(1.0)).font(font.font))
                 .padding([3, 10])
                 .style(button::secondary)
                 .on_press_maybe((!busy).then(|| (callbacks.explain)(card.key.clone())))
@@ -458,7 +507,12 @@ pub fn card_view<'a, M: Clone + 'a>(
         .spacing(6)
         .align_y(iced::Center);
         if busy {
-            explain = explain.push(text(tr!("Explaining…")).size(12).style(dim));
+            explain = explain.push(
+                text(tr!("Explaining…"))
+                    .size(font.smaller(1.0))
+                    .font(font.font)
+                    .style(dim),
+            );
         }
         body = body.push(explain);
     }
@@ -468,9 +522,11 @@ pub fn card_view<'a, M: Clone + 'a>(
             Some(rest) => shorten(&format!("{first} {rest}"), 160),
             None => first,
         };
-        body = body.push(text(error).size(12).style(|theme: &Theme| text::Style {
-            color: Some(theme.extended_palette().danger.base.color),
-        }));
+        body = body.push(text(error).size(font.smaller(1.0)).font(font.font).style(
+            |theme: &Theme| text::Style {
+                color: Some(theme.extended_palette().danger.base.color),
+            },
+        ));
     }
     for build in &card.builds {
         body = body.push(
@@ -479,7 +535,8 @@ pub fn card_view<'a, M: Clone + 'a>(
                     "Build {name}",
                     name = build.strip_suffix(".md").unwrap_or(build)
                 ))
-                .size(12),
+                .size(font.smaller(1.0))
+                .font(font.font),
             )
             .padding(0)
             .style(link_button)
@@ -538,34 +595,36 @@ fn justification<'a, M: Clone + 'a>(
     key: &str,
     states: &CardStates,
     on_expand: fn(String) -> M,
+    font: CardFont,
 ) -> Element<'a, M> {
     column![
-        text(tr!("Justification")).size(11).style(ui::dim_text),
-        long_text(reflow(body), key, states, on_expand, false),
+        text(tr!("Justification"))
+            .size(font.smaller(2.0))
+            .font(font.font)
+            .style(ui::dim_text),
+        long_text(reflow(body), key, states, on_expand, false, font),
     ]
     .spacing(1)
     .into()
 }
 
-fn badge_line<'a, M: 'a>(label: String) -> Element<'a, M> {
-    let element: Element<'a, M> = container(text(label).size(11).font(iced::Font {
-        style: iced::font::Style::Italic,
-        ..iced::Font::DEFAULT
-    }))
-    .padding([0, 6])
-    .style(|theme: &Theme| container::Style {
-        background: Some(Background::Color(
-            theme
-                .extended_palette()
-                .background
-                .base
-                .text
-                .scale_alpha(0.08),
-        )),
-        border: Border::default().rounded(9),
-        ..container::Style::default()
-    })
-    .into();
+fn badge_line<'a, M: 'a>(label: String, font: CardFont) -> Element<'a, M> {
+    let element: Element<'a, M> =
+        container(text(label).size(font.smaller(2.0)).font(font.italic()))
+            .padding([0, 6])
+            .style(|theme: &Theme| container::Style {
+                background: Some(Background::Color(
+                    theme
+                        .extended_palette()
+                        .background
+                        .base
+                        .text
+                        .scale_alpha(0.08),
+                )),
+                border: Border::default().rounded(9),
+                ..container::Style::default()
+            })
+            .into();
     row![element].into()
 }
 

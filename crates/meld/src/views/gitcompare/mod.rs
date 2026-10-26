@@ -2583,9 +2583,11 @@ impl GitCompare {
             _ => &[],
         };
         let now = meld_ailens::time::now_timestamp();
+        let (font, size) = self.diff.text_font();
+        let font = whycolumn::CardFont { font, size };
         let mut elements: Vec<Element<'_, Message>> = cards
             .iter()
-            .map(|card| whycolumn::card_view(card, &self.cards, callbacks, now))
+            .map(|card| whycolumn::card_view(card, &self.cards, callbacks, now, font))
             .collect();
         let panes = [self.diff.pane_geometry(0), self.diff.pane_geometry(1)];
         let mut wanted = whycolumn::wanted_tops(cards, panes);
@@ -2608,7 +2610,8 @@ impl GitCompare {
             .map(|v| {
                 container(
                     text(v.cards_placeholder.as_str())
-                        .size(13)
+                        .size(font.size)
+                        .font(font.font)
                         .style(ui::dim_text)
                         .center(),
                 )

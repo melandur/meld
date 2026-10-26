@@ -790,6 +790,11 @@ impl FileDiff {
         chunks::pane_chunk(merged, pane).map(|c| c.start_a)
     }
 
+    /// The panes' text font and size in logical pixels, zoom included.
+    pub fn text_font(&self) -> (Font, f32) {
+        (self.font, self.metrics.text_size)
+    }
+
     /// How far below the top of [`FileDiff::view`] the panes' text starts.
     #[allow(dead_code)] // embedding API
     pub fn header_height(&self) -> f32 {
