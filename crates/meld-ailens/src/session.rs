@@ -34,8 +34,9 @@ use crate::infer::{
     InferOptions, compose_inferred_note, infer_explanation, infer_uncommitted_explanation,
 };
 use crate::models::{
-    ChangeGroup, Comparison, ComparisonRelation, ExplanationSource, FileAttribution, GitCommit,
-    GitFileChange, GitFileStatus, LayerDiffsUsed, Revision, RevisionKind, UncommittedLayer,
+    ChangeExplanation, ChangeGroup, Comparison, ComparisonRelation, ExplanationSource,
+    FileAttribution, GitCommit, GitFileChange, GitFileStatus, LayerDiffsUsed, Revision,
+    RevisionKind, UncommittedLayer,
 };
 use crate::picker::{
     COMMIT_PAGE_SIZE, PickerEntry, PickerSide, PickerSources, build_entries, short_sha,
@@ -876,8 +877,16 @@ impl CompareSession {
             .map(|&layer| (layer, self.info.uncommitted.place(layer, layers.get(layer))))
             .collect();
         let mut cards = Vec::new();
-        for (index, group) in attribution.groups.iter().enumerate() {
-            cards.push(self.card(group, index, &range_order, &builds, layers, &placed, cancel)?);
+        for index in 0..attribution.groups.len() {
+            cards.push(self.card(
+                &attribution.groups,
+                index,
+                &range_order,
+                &builds,
+                layers,
+                &placed,
+                cancel,
+            )?);
         }
         Ok(cards)
     }
@@ -885,7 +894,7 @@ impl CompareSession {
     #[allow(clippy::too_many_arguments)]
     fn card(
         &self,
-        group: &ChangeGroup,
+        groups: &[ChangeGroup],
         index: usize,
         range_order: &HashMap<String, i32>,
         builds: &HashMap<String, Vec<String>>,
@@ -893,6 +902,7 @@ impl CompareSession {
         placed: &HashMap<UncommittedLayer, Vec<PlacedExplanation>>,
         cancel: &CancelToken,
     ) -> Result<Card> {
+        let group = &groups[index];
         let infer = self.config.infer_enabled;
         let by = match (group.uncommitted, &group.sha) {
             (Some(layer), _) => layer.as_str().to_string(),
@@ -950,7 +960,11 @@ impl CompareSession {
             None
         } else if explanation.why.is_none() {
             Some(ExplainAction::Commit)
-        } else if !changes_explained {
+        } else if !changes_explained
+            || note
+                .as_ref()
+                .is_some_and(|note| shares_a_joined_change(note, &changes, groups, index))
+        {
             Some(ExplainAction::Changes)
         } else {
             None
@@ -1380,6 +1394,30 @@ impl CompareSession {
         lock(&self.state).builds = None;
         Ok(built.path)
     }
+}
+
+/// Whether another of the file's changes by the same commit got one of
+/// `changes` too: the note predates explaining change blocks apart and git
+/// joined them into one hunk, so both show the same text until the
+/// commit's changes are explained again
+fn shares_a_joined_change(
+    note: &ParsedNote,
+    changes: &[&ChangeExplanation],
+    groups: &[ChangeGroup],
+    index: usize,
+) -> bool {
+    if note.changes_by_block || changes.is_empty() {
+        return false;
+    }
+    let sha = &groups[index].sha;
+    groups.iter().enumerate().any(|(other, group)| {
+        other != index
+            && group.uncommitted.is_none()
+            && group.sha == *sha
+            && find_change_explanations(&group.origins, &note.changes)
+                .into_iter()
+                .any(|found| changes.iter().any(|&mine| std::ptr::eq(mine, found)))
+    })
 }
 
 fn label(

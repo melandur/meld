@@ -25,6 +25,11 @@ static LABEL: LazyLock<Regex> =
 static HEAD_LINE: LazyLock<Regex> =
     LazyLock::new(|| regex(r"\A([A-Za-z][A-Za-z0-9_-]*):[ \t]*(.*)\z"));
 static CHANGE_MODEL_LINE: LazyLock<Regex> = LazyLock::new(|| regex(r"\AChange-Model:[ \t]*(.*)\z"));
+static CHANGE_UNIT_LINE: LazyLock<Regex> = LazyLock::new(|| regex(r"\AChange-Unit:[ \t]*(.*)\z"));
+/// The `Change-Unit` of notes whose changes are change blocks (see
+/// [`crate::models::GitDiffHunk::blocks`]); older notes have none, and
+/// their changes are git's hunks, which may join several blocks
+const CHANGE_UNIT_BLOCK: &str = "block";
 static CHANGE_LINE: LazyLock<Regex> =
     LazyLock::new(|| regex(r"\AChange: -([0-9]+)(?:,([0-9]+))? \+([0-9]+)(?:,([0-9]+))? (.+)\z"));
 static CHANGE_FIELD: LazyLock<Regex> =
@@ -234,6 +239,10 @@ pub struct ParsedNote {
     pub change_model: Option<String>,
     /// In the order of the commit's diff
     pub changes: Vec<ChangeExplanation>,
+    /// Whether each change is one change block; false in notes written
+    /// before changes were split into blocks, where one change may cover
+    /// several
+    pub changes_by_block: bool,
     /// The note's text before its changes: the commit's own explanation, as
     /// written
     pub head: String,
@@ -254,7 +263,8 @@ impl ParsedNote {
 /// Why, so a plain `git notes add -m "…"` works too.
 ///
 /// Explanations of single changes come after, from a `Change-Model:` line
-/// on: each starts with `Change: -<old> +<new> <path>` (the hunk's ranges in
+/// on (with `Change-Unit: block` under it in notes whose changes are change
+/// blocks): each starts with `Change: -<old> +<new> <path>` (the hunk's ranges in
 /// the commit's own diff), then `Change-From:` for a rename, `What:`,
 /// `Why:`, and optionally `Justification:`, up to the next `Change:`. Notes
 /// written before justifications were asked for have none: they read as
@@ -306,6 +316,12 @@ pub fn parse_note(text: &str) -> ParsedNote {
             && let Some(captures) = CHANGE_MODEL_LINE.captures(line)
         {
             note.change_model = some_if_nonempty(captures[1].trim().to_string());
+            continue;
+        }
+        if hunk.is_none()
+            && let Some(captures) = CHANGE_UNIT_LINE.captures(line)
+        {
+            note.changes_by_block = captures[1].trim().eq_ignore_ascii_case(CHANGE_UNIT_BLOCK);
             continue;
         }
 
@@ -366,6 +382,7 @@ fn parse_note_head(text: &str) -> ParsedNote {
         model: None,
         change_model: None,
         changes: Vec::new(),
+        changes_by_block: false,
         head: text.to_string(),
     };
     let lines: Vec<&str> = text.split('\n').collect();
@@ -464,7 +481,9 @@ pub fn compose_note(head: &str, model: &str, changes: &[ChangeExplanation]) -> S
     if !head.trim().is_empty() {
         parts.push(head.trim().to_string());
     }
-    parts.push(format!("Change-Model: {model}"));
+    parts.push(format!(
+        "Change-Model: {model}\nChange-Unit: {CHANGE_UNIT_BLOCK}"
+    ));
     for change in changes {
         let hunk = &change.hunk;
         let mut lines = vec![format!(

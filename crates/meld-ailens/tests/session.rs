@@ -274,6 +274,70 @@ fn explain_changes_keeps_the_commit_why() {
     assert_eq!(human.explain, None);
 }
 
+/// A commit whose two changes, six lines apart, git prints as one hunk, and
+/// a note on it written before change blocks were explained apart
+fn joined_history(note: &str) -> FixtureRepo {
+    let numbers: Vec<String> = (1..=14).map(|n| n.to_string()).collect();
+    let mut changed = numbers.clone();
+    changed[4] = "five".into();
+    changed.insert(11, "new".into());
+    let mut repo = FixtureRepo::new();
+    repo.commit(
+        "Adds the numbers",
+        files![("app.py", numbers.join("\n") + "\n")],
+        Some("base"),
+    );
+    repo.commit(
+        "Spells five and adds a line\n\nWhy: Easier to read.",
+        files![("app.py", changed.join("\n") + "\n")],
+        Some("joined"),
+    );
+    repo.note("joined", note, "ai-lens");
+    repo
+}
+
+const JOINED_NOTE: &str = "Change-Model: old\n\n\
+     Change: -2,13 +2,14 app.py\nWhat: Both\nWhy: One why for both.\n";
+
+#[test]
+fn changes_explained_as_one_hunk_can_be_explained_again_apart() {
+    let history = joined_history(JOINED_NOTE);
+    let session = base_main(&history, None);
+    let entry = entry_for(&session, "app.py");
+    let view = session.file_view(&entry.change, &never()).unwrap();
+    assert_eq!(view.cards.len(), 2);
+    for card in &view.cards {
+        assert_eq!(card.change_why, "One why for both.");
+        assert_eq!(card.explain, Some(ExplainAction::Changes));
+    }
+
+    session
+        .explain_card(&view, &view.cards[0].key, &never())
+        .unwrap();
+    let cards = session.cards(&view, &never()).unwrap();
+    let whys: Vec<&str> = cards.iter().map(|c| c.change_why.as_str()).collect();
+    assert_eq!(whys, ["Change 1 why", "Change 2 why"]);
+    assert!(cards.iter().all(|c| c.explain.is_none()));
+    assert_eq!(cards[0].why, "Easier to read.");
+    let note = history.git(&["notes", "--ref=ai-lens", "show", &history.sha("joined")]);
+    assert!(note.contains("Change-Unit: block\n"), "{note}");
+}
+
+#[test]
+fn a_note_of_change_blocks_is_not_explained_again() {
+    // Two cards on one explanation, but the note says it is one change block
+    let note = JOINED_NOTE.replace(
+        "Change-Model: old\n",
+        "Change-Model: old\nChange-Unit: block\n",
+    );
+    let history = joined_history(&note);
+    let session = base_main(&history, None);
+    let entry = entry_for(&session, "app.py");
+    let view = session.file_view(&entry.change, &never()).unwrap();
+    assert_eq!(view.cards.len(), 2);
+    assert!(view.cards.iter().all(|c| c.explain.is_none()));
+}
+
 #[test]
 fn explain_all_and_build() {
     let history = history();

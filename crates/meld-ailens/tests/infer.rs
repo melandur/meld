@@ -732,7 +732,7 @@ fn inferred_note_keeps_a_why_from_the_message() {
         &explanation,
         &MessageFormat::default(),
     );
-    assert_eq!(note, "Change-Model: claude-x\n");
+    assert_eq!(note, "Change-Model: claude-x\nChange-Unit: block\n");
 }
 
 #[test]
@@ -742,7 +742,7 @@ fn inferred_note_keeps_a_hand_written_note() {
     with_note.note = Some("By hand.\n\nChange-Model: old\n".into());
     assert_eq!(
         compose_inferred_note(&with_note, &explanation, &MessageFormat::default()),
-        "By hand.\n\nChange-Model: claude-x\n"
+        "By hand.\n\nChange-Model: claude-x\nChange-Unit: block\n"
     );
 }
 

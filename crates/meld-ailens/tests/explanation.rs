@@ -135,6 +135,7 @@ fn note(
         model: model.map(str::to_string),
         change_model: None,
         changes: Vec::new(),
+        changes_by_block: false,
         head: head.into(),
     }
 }
@@ -497,6 +498,7 @@ fn keeps_the_explanations_of_single_changes_after_the_commits_own() {
         "Plain note by hand.",
         "",
         "Change-Model: claude-sonnet-5-5",
+        "Change-Unit: block",
         "",
         "Change: -3,2 +3,4 src/a b.ts",
         "What: Awaits the load",
@@ -515,6 +517,7 @@ fn keeps_the_explanations_of_single_changes_after_the_commits_own() {
         parse_note(&text),
         ParsedNote {
             change_model: Some("claude-sonnet-5-5".into()),
+            changes_by_block: true,
             changes: vec![
                 ChangeExplanation {
                     hunk: changes[0].hunk.clone(),
@@ -566,7 +569,7 @@ fn compose_note_flattens_what_and_skips_a_same_path_change_from() {
     );
     assert_eq!(
         text,
-        "Change-Model: m\n\nChange: -1,0 +1,0 a\nWhat: two lines\nWhy: padded\n"
+        "Change-Model: m\nChange-Unit: block\n\nChange: -1,0 +1,0 a\nWhat: two lines\nWhy: padded\n"
     );
 }
 
@@ -1050,6 +1053,7 @@ fn compose_note_writes_each_changes_justification_after_its_why() {
             "Justification: Evidence.",
             "",
             "Change-Model: m",
+            "Change-Unit: block",
             "",
             "Change: -3,2 +3,4 a.ts",
             "What: w",
@@ -1146,4 +1150,26 @@ fn labeled_messages_can_carry_a_justification() {
     let explanation = explain_commit(&reason, &format);
     assert_eq!(explanation.why.as_deref(), Some("R"));
     assert_eq!(explanation.justification.as_deref(), Some("E"));
+}
+
+#[test]
+fn change_unit_says_whether_changes_are_change_blocks() {
+    let changes = "\n\nChange: -1 +1 a.py\nWhat: W\nWhy: Y\n";
+    assert!(!parse_note(&format!("Change-Model: m{changes}")).changes_by_block);
+    assert!(parse_note(&format!("Change-Model: m\nChange-Unit: block{changes}")).changes_by_block);
+    assert!(
+        parse_note(&format!("Change-Model: m\nChange-Unit:  Block {changes}")).changes_by_block
+    );
+    assert!(!parse_note(&format!("Change-Model: m\nChange-Unit: hunk{changes}")).changes_by_block);
+
+    // Inside a change it is just part of the Why
+    let parsed =
+        parse_note("Change-Model: m\n\nChange: -1 +1 a.py\nWhat: W\nWhy: Y\nChange-Unit: block\n");
+    assert!(!parsed.changes_by_block);
+    assert_eq!(parsed.changes[0].why, "Y\nChange-Unit: block");
+    // A Change-Model line is still what starts a note's changes
+    assert_eq!(
+        parse_note("By hand.\n\nChange-Unit: block\n").head,
+        "By hand.\n\nChange-Unit: block"
+    );
 }
