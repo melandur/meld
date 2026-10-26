@@ -403,6 +403,49 @@ fn hunks_are_numbered_across_files_in_diff_order() {
 }
 
 #[test]
+fn changes_git_joined_into_one_hunk_are_numbered_apart() {
+    // Six lines apart, so git prints them as one hunk
+    let joined = hunk(
+        1,
+        1,
+        &[
+            "-one", "+ONE", " 2", " 3", " 4", " 5", " 6", " 7", "-eight", "+EIGHT",
+        ],
+    );
+    let run = FakeClaude::new(json!({
+        "what": "W",
+        "why": "Y",
+        "changes": [
+            {"change": 1, "what": "first", "why": "a"},
+            {"change": 2, "what": "second", "why": "b"},
+        ],
+    }));
+    let explanation = infer_explanation(
+        &commit(),
+        &[modified("a.py", vec![joined])],
+        &options("m", run.runner()),
+        &never(),
+    )
+    .unwrap();
+
+    let prompt = run.prompt();
+    assert!(prompt.contains("[change 1] @@ -1,4 +1,4 @@\n-one\n+ONE\n 2\n 3\n 4\n"));
+    assert!(prompt.contains("[change 2] @@ -5,4 +5,4 @@\n 5\n 6\n 7\n-eight\n+EIGHT\n"));
+    let got: Vec<(&CommitHunk, &str)> = explanation
+        .changes
+        .iter()
+        .map(|c| (&c.hunk, c.what.as_str()))
+        .collect();
+    assert_eq!(
+        got,
+        [
+            (&hunk_ref("a.py", 1, 4, 1, 4), "first"),
+            (&hunk_ref("a.py", 5, 4, 5, 4), "second"),
+        ]
+    );
+}
+
+#[test]
 fn answers_for_hunks_that_match_nothing_are_dropped() {
     let run = FakeClaude::new(
         json!({"what": "W", "why": "Y", "changes": [{"change": 1, "what": "w", "why": "y"}]}),

@@ -204,6 +204,95 @@ pub struct GitDiffHunk {
     pub lines: Vec<GitDiffLine>,
 }
 
+/// Context lines a change block keeps on each side, as `git diff -U3`
+const BLOCK_CONTEXT: usize = 3;
+
+impl GitDiffHunk {
+    /// The hunk split into one hunk per change block: each run of added and
+    /// deleted lines, with the context around it
+    ///
+    /// git joins changes whose context touches (up to twice the context
+    /// apart) into one hunk, even with `--inter-hunk-context=0`; each block
+    /// is a change of its own, explained apart. Context between two blocks
+    /// is shared out so their ranges don't overlap. A hunk with one block
+    /// comes back as it is.
+    pub fn blocks(&self) -> Vec<GitDiffHunk> {
+        // Each run of changed lines as [start, end) in `lines`
+        let mut runs: Vec<(usize, usize)> = Vec::new();
+        for (index, line) in self.lines.iter().enumerate() {
+            if line.kind == DiffLineKind::Context {
+                continue;
+            }
+            match runs.last_mut() {
+                Some((_, end)) if *end == index => *end = index + 1,
+                _ => runs.push((index, index + 1)),
+            }
+        }
+        if runs.len() <= 1 {
+            return vec![self.clone()];
+        }
+
+        // Where each line starts on each side; an empty side's start is the
+        // line before, as git numbers it
+        let mut old_line = if self.old_count == 0 {
+            self.old_start + 1
+        } else {
+            self.old_start
+        };
+        let mut new_line = if self.new_count == 0 {
+            self.new_start + 1
+        } else {
+            self.new_start
+        };
+        let mut positions = Vec::with_capacity(self.lines.len());
+        for line in &self.lines {
+            positions.push((old_line, new_line));
+            if line.kind != DiffLineKind::Add {
+                old_line += 1;
+            }
+            if line.kind != DiffLineKind::Delete {
+                new_line += 1;
+            }
+        }
+
+        let mut blocks = Vec::with_capacity(runs.len());
+        let mut from = 0;
+        for (index, &(_, end)) in runs.iter().enumerate() {
+            let to = match runs.get(index + 1) {
+                Some(&(next_start, _)) => end + BLOCK_CONTEXT.min((next_start - end).div_ceil(2)),
+                None => self.lines.len(),
+            };
+            let lines = self.lines[from..to].to_vec();
+            let old_count = lines.iter().filter(|l| l.kind != DiffLineKind::Add).count();
+            let new_count = lines
+                .iter()
+                .filter(|l| l.kind != DiffLineKind::Delete)
+                .count();
+            let (old_start, new_start) = positions[from];
+            blocks.push(GitDiffHunk {
+                old_start: if old_count == 0 {
+                    old_start - 1
+                } else {
+                    old_start
+                },
+                old_count,
+                new_start: if new_count == 0 {
+                    new_start - 1
+                } else {
+                    new_start
+                },
+                new_count,
+                section: self.section.clone(),
+                lines,
+            });
+            if let Some(&(next_start, _)) = runs.get(index + 1) {
+                from = to.max(next_start.saturating_sub(BLOCK_CONTEXT));
+            }
+        }
+        blocks
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GitFileDiff {
     /// None for added files

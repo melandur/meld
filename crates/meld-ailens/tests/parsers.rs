@@ -1145,3 +1145,113 @@ fn line_maps_without_hunks_are_identity() {
     assert_eq!(new_to_old(&diff, 3), Some(3));
     assert_eq!(old_to_new(&diff, 3), Some(3));
 }
+
+// -- change blocks --
+
+fn header(hunk: &GitDiffHunk) -> (usize, usize, usize, usize) {
+    (
+        hunk.old_start,
+        hunk.old_count,
+        hunk.new_start,
+        hunk.new_count,
+    )
+}
+
+fn body(hunk: &GitDiffHunk) -> Vec<String> {
+    hunk.lines
+        .iter()
+        .map(|line| format!("{}{}", line.kind.prefix(), line.content))
+        .collect()
+}
+
+#[test]
+fn blocks_split_changes_git_joined_into_one_hunk() {
+    // Six lines apart: git joins them even with --inter-hunk-context=0
+    let diff = one(&text(&[
+        "diff --git a/f b/f",
+        "--- a/f",
+        "+++ b/f",
+        "@@ -2,13 +2,14 @@ fn top",
+        " 2",
+        " 3",
+        " 4",
+        "-5",
+        "+five",
+        " 6",
+        " 7",
+        " 8",
+        " 9",
+        " 10",
+        " 11",
+        "+new",
+        " 12",
+        " 13",
+        " 14",
+    ]));
+    let blocks = diff.hunks[0].blocks();
+
+    // As `git diff -U3` prints each change on its own
+    assert_eq!(
+        blocks.iter().map(header).collect::<Vec<_>>(),
+        [(2, 7, 2, 7), (9, 6, 9, 7)]
+    );
+    assert_eq!(
+        body(&blocks[0]),
+        [" 2", " 3", " 4", "-5", "+five", " 6", " 7", " 8"]
+    );
+    assert_eq!(
+        body(&blocks[1]),
+        [" 9", " 10", " 11", "+new", " 12", " 13", " 14"]
+    );
+    assert!(blocks.iter().all(|block| block.section == "fn top"));
+}
+
+#[test]
+fn blocks_share_out_short_context_without_overlapping() {
+    let diff = one(&text(&[
+        "diff --git a/f b/f",
+        "--- a/f",
+        "+++ b/f",
+        "@@ -1,9 +1,6 @@",
+        "-a",
+        " b",
+        " c",
+        " d",
+        "-e",
+        " f",
+        " g",
+        "-h",
+        " i",
+    ]));
+    let blocks = diff.hunks[0].blocks();
+
+    assert_eq!(
+        blocks.iter().map(header).collect::<Vec<_>>(),
+        [(1, 3, 1, 2), (4, 3, 3, 2), (7, 3, 5, 2)]
+    );
+    assert_eq!(body(&blocks[0]), ["-a", " b", " c"]);
+    assert_eq!(body(&blocks[1]), [" d", "-e", " f"]);
+    assert_eq!(body(&blocks[2]), [" g", "-h", " i"]);
+}
+
+#[test]
+fn a_hunk_with_one_change_block_is_its_own_block() {
+    let diff = one(&text(&[
+        "diff --git a/f b/f",
+        "--- a/f",
+        "+++ b/f",
+        "@@ -1,4 +1,4 @@",
+        " a",
+        "-b",
+        "+B",
+        "-c",
+        "+C",
+        " d",
+    ]));
+    assert_eq!(diff.hunks[0].blocks(), diff.hunks);
+
+    let added = one(
+        "diff --git a/f b/f\nnew file mode 100644\n--- /dev/null\n+++ b/f\n@@ -0,0 +1,2 @@\n+a\n+b\n",
+    );
+    assert_eq!(added.hunks[0].blocks(), added.hunks);
+}

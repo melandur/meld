@@ -357,3 +357,41 @@ fn justifications_are_kept_and_placed() {
     );
     assert_eq!(placed[0].as_change(), changes[0]);
 }
+
+#[test]
+fn changes_git_joined_into_one_hunk_are_explained_apart() {
+    // Six lines apart, so git prints them as one hunk
+    let joined = hunk(
+        1,
+        1,
+        &[
+            "-one", "+ONE", " 2", " 3", " 4", " 5", " 6", " 7", "-eight", "+EIGHT",
+        ],
+    );
+    let diff = file(Some("a.ts"), Some("a.ts"), false, vec![joined]);
+    let change = |old_start, new_start, what: &str| ChangeExplanation {
+        hunk: commit_hunk("a.ts", old_start, 4, new_start, 4, None),
+        what: what.into(),
+        why: format!("Why {what}"),
+        justification: None,
+    };
+
+    let cache = UncommittedExplanations::default();
+    assert_eq!(
+        cache.remember(Unstaged, &diff, &[change(1, 1, "first")], "claude-x"),
+        1
+    );
+    assert!(!cache.is_explained(Unstaged, &diff));
+    cache.remember(Unstaged, &diff, &[change(5, 5, "second")], "claude-x");
+    assert!(cache.is_explained(Unstaged, &diff));
+
+    let placed = cache.place(Unstaged, std::slice::from_ref(&diff));
+    let why_of = |line| {
+        find_change_explanations(&[LineOrigin::new("a.ts", Side::New, line)], &placed)
+            .into_iter()
+            .map(|found| found.why.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(why_of(1), ["Why first"]);
+    assert_eq!(why_of(8), ["Why second"]);
+}

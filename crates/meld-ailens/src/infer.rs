@@ -455,6 +455,8 @@ pub fn build_prompt(commit: &GitCommit, files: &[FileDiff], ignore_rules: Option
     }
 }
 
+/// The diff's changes as they are numbered: one per change block, so each
+/// gets its own explanation even where git joined it with a neighbour
 fn hunks_of(diff: &GitFileDiff) -> Vec<CommitHunk> {
     let Some(path) = diff.new_path.as_deref().or(diff.old_path.as_deref()) else {
         return Vec::new();
@@ -465,6 +467,7 @@ fn hunks_of(diff: &GitFileDiff) -> Vec<CommitHunk> {
     };
     diff.hunks
         .iter()
+        .flat_map(GitDiffHunk::blocks)
         .map(|hunk| CommitHunk {
             path: path.to_string(),
             old_start: hunk.old_start,
@@ -497,8 +500,8 @@ fn hunk_header(hunk: &GitDiffHunk) -> String {
     }
 }
 
-/// One file's diff as `git diff` prints it, with each hunk header prefixed
-/// by `[change N]` (N from `numbering`)
+/// One file's diff as `git diff` prints it, split into change blocks, with
+/// each block's hunk header prefixed by `[change N]` (N from `numbering`)
 fn render_file(
     diff: &GitFileDiff,
     change: Option<&GitFileChange>,
@@ -532,9 +535,9 @@ fn render_file(
     } else if !diff.hunks.is_empty() {
         lines.push(format!("--- {old_name}"));
         lines.push(format!("+++ {new_name}"));
-        for hunk in &diff.hunks {
+        for hunk in diff.hunks.iter().flat_map(GitDiffHunk::blocks) {
             let number = numbering.next().unwrap_or_default();
-            lines.push(format!("[change {number}] {}", hunk_header(hunk)));
+            lines.push(format!("[change {number}] {}", hunk_header(&hunk)));
             for line in &hunk.lines {
                 lines.push(format!("{}{}", line.kind.prefix(), line.content));
                 if line.no_newline_at_end {

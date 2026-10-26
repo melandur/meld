@@ -158,7 +158,8 @@ impl UncommittedExplanations {
 
     /// Keep the explanations a model gave of `diff`'s hunks
     ///
-    /// Each change is matched to the hunk at its position in `diff`.
+    /// Each change is matched to the change block (see
+    /// [`GitDiffHunk::blocks`]) at its position in `diff`.
     /// Returns how many were kept.
     pub fn remember(
         &self,
@@ -169,15 +170,19 @@ impl UncommittedExplanations {
     ) -> usize {
         let mut kept = 0;
         for change in changes {
-            let hunk = diff.hunks.iter().find(|candidate| {
-                candidate.old_start == change.hunk.old_start
-                    && candidate.new_start == change.hunk.new_start
-            });
+            let hunk = diff
+                .hunks
+                .iter()
+                .flat_map(GitDiffHunk::blocks)
+                .find(|candidate| {
+                    candidate.old_start == change.hunk.old_start
+                        && candidate.new_start == change.hunk.new_start
+                });
             if let Some(hunk) = hunk {
                 self.set(
                     layer,
                     diff,
-                    hunk,
+                    &hunk,
                     HunkExplanation {
                         what: change.what.clone(),
                         why: change.why.clone(),
@@ -191,11 +196,12 @@ impl UncommittedExplanations {
         kept
     }
 
-    /// Whether every hunk of `diff` has an explanation
+    /// Whether every change block of `diff` has an explanation
     pub fn is_explained(&self, layer: UncommittedLayer, diff: &GitFileDiff) -> bool {
         diff.hunks
             .iter()
-            .all(|hunk| self.get(layer, diff, hunk).is_some())
+            .flat_map(GitDiffHunk::blocks)
+            .all(|hunk| self.get(layer, diff, &hunk).is_some())
     }
 
     /// The explained hunks of a layer's diffs, where they are now
@@ -206,8 +212,8 @@ impl UncommittedExplanations {
                 continue;
             };
             let original_path = diff.old_path.clone().filter(|old| old != path);
-            for hunk in &diff.hunks {
-                let Some(found) = self.get(layer, diff, hunk) else {
+            for hunk in diff.hunks.iter().flat_map(GitDiffHunk::blocks) {
+                let Some(found) = self.get(layer, diff, &hunk) else {
                     continue;
                 };
                 placed.push(PlacedExplanation {
