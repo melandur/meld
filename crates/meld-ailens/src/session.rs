@@ -25,18 +25,20 @@ use crate::claude::RunClaude;
 use crate::comparison::{changed_files_with_stats, resolve_comparison};
 use crate::error::{Error, Result};
 use crate::explanation::{
-    MessageFormat, ParsedNote, explain_commit, find_change_explanations, parse_note,
+    MessageFormat, ParsedNote, compose_note, explain_commit, find_change_explanations, parse_note,
 };
 use crate::generate_build::write_build;
 use crate::git::{GitOptions, GitRepository, LogQuery, realpath};
 use crate::ignore::{create_ignore_rules, is_ignored};
 use crate::infer::{
-    InferOptions, compose_inferred_note, infer_explanation, infer_uncommitted_explanation,
+    InferOptions, compose_inferred_note, infer_commit_changes, infer_explanation,
+    infer_uncommitted_explanation,
 };
 use crate::models::{
     ChangeExplanation, ChangeGroup, ChangeGuide, ChangeStep, CommitHunk, Comparison,
-    ComparisonRelation, ExplanationSource, FileAttribution, GitCommit, GitFileChange,
-    GitFileStatus, LayerDiffsUsed, LineRange, Revision, RevisionKind, Side, UncommittedLayer,
+    ComparisonRelation, ExplanationSource, FileAttribution, GitCommit, GitDiffHunk, GitFileChange,
+    GitFileDiff, GitFileStatus, LayerDiffsUsed, LineRange, Revision, RevisionKind, Side,
+    UncommittedLayer,
 };
 use crate::picker::{
     COMMIT_PAGE_SIZE, PickerEntry, PickerSide, PickerSources, build_entries, short_sha,
@@ -977,6 +979,9 @@ impl CompareSession {
             })
         {
             Some(ExplainAction::Changes)
+        } else if changes.is_empty() && !group.origins.is_empty() {
+            // Its hunks were left out when the commit was explained
+            Some(ExplainAction::Block)
         } else {
             None
         };
@@ -1057,6 +1062,10 @@ impl CompareSession {
             return Err(Error::msg("That change isn’t in this file any more."));
         };
         match (card.kind, &card.sha) {
+            (CardKind::Commit, Some(sha)) if card.explain == Some(ExplainAction::Block) => {
+                let index = view.cards.iter().position(|c| c.key == key).unwrap_or(0);
+                self.explain_block(view, index, sha, cancel)
+            }
             (CardKind::Commit, Some(sha)) => self.explain_commit(sha, cancel),
             (CardKind::Staged, _) => self
                 .explain_uncommitted(view, UncommittedLayer::Staged, cancel)
@@ -1085,6 +1094,78 @@ impl CompareSession {
         cancel.check()?;
         self.repo
             .write_note(sha, &note, &self.config.notes_ref, cancel)?;
+        self.refresh_commit(sha, cancel)
+    }
+
+    /// Have Claude Code explain the hunks of the commit `sha` that the
+    /// card of `view`'s group `index` shows, which its note doesn't explain
+    /// (left out of the prompt for its size), and add them to the note
+    ///
+    /// Only those hunks are sent, with the commit's message, so no cap cuts
+    /// them. Explanations of the same hunks in the note are replaced.
+    fn explain_block(
+        &self,
+        view: &FileView,
+        index: usize,
+        sha: &str,
+        cancel: &CancelToken,
+    ) -> Result<()> {
+        self.require_infer()?;
+        let group = view
+            .attribution
+            .as_ref()
+            .and_then(|attribution| attribution.groups.get(index))
+            .ok_or_else(|| Error::msg("That change isn’t in this file any more."))?;
+        let commit = self.get_commit(sha, cancel)?;
+        let files: Vec<_> = self
+            .repo
+            .commit_diffs(sha, cancel)?
+            .into_iter()
+            .filter_map(|(change, mut diff)| {
+                // Only the change blocks with the card's lines: those
+                // explained already stay as they are
+                let paths = diff_paths(&diff);
+                diff.hunks = diff
+                    .hunks
+                    .iter()
+                    .flat_map(GitDiffHunk::blocks)
+                    .filter(|block| block_has_lines(&paths, block, &group.origins))
+                    .collect();
+                (!diff.hunks.is_empty()).then_some((change, Some(diff)))
+            })
+            .collect();
+        let ignore_rules = self.info.ignore_rules();
+        let options = self.infer_options(ignore_rules.as_deref());
+        let inferred = infer_commit_changes(&commit, &files, &options, cancel)?;
+        let note = commit.note.as_deref().map(parse_note);
+        let same = |a: &CommitHunk, b: &CommitHunk| {
+            a.path == b.path && a.old_start == b.old_start && a.new_start == b.new_start
+        };
+        let mut changes: Vec<ChangeExplanation> = note
+            .as_ref()
+            .map(|note| note.changes.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|old| {
+                !inferred
+                    .changes
+                    .iter()
+                    .any(|new| same(&old.hunk, &new.hunk))
+            })
+            .collect();
+        changes.extend(inferred.changes);
+        changes.sort_by(|a, b| {
+            (&a.hunk.path, a.hunk.new_start, a.hunk.old_start).cmp(&(
+                &b.hunk.path,
+                b.hunk.new_start,
+                b.hunk.old_start,
+            ))
+        });
+        let head = note.map(|note| note.head).unwrap_or_default();
+        let text = compose_note(&head, &inferred.model, &changes);
+        cancel.check()?;
+        self.repo
+            .write_note(sha, &text, &self.config.notes_ref, cancel)?;
         self.refresh_commit(sha, cancel)
     }
 
@@ -1614,6 +1695,29 @@ fn card_steps<'a>(
         }
     }
     steps
+}
+
+/// A diff's paths: in the old version and the new
+fn diff_paths(diff: &GitFileDiff) -> (Option<String>, Option<String>) {
+    (diff.old_path.clone(), diff.new_path.clone())
+}
+
+/// Whether a change block has one of `origins`' lines (in the diff with
+/// `paths`, old and new)
+fn block_has_lines(
+    paths: &(Option<String>, Option<String>),
+    block: &GitDiffHunk,
+    origins: &[crate::models::LineOrigin],
+) -> bool {
+    origins.iter().any(|origin| {
+        let (path, start, count) = match origin.side {
+            Side::Old => (&paths.0, block.old_start, block.old_count),
+            Side::New => (&paths.1, block.new_start, block.new_count),
+        };
+        path.as_deref() == Some(origin.path.as_str())
+            && start <= origin.line
+            && origin.line < start + count
+    })
 }
 
 fn join_texts<'a>(texts: impl Iterator<Item = &'a str>) -> String {

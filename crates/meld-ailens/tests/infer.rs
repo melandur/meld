@@ -1198,8 +1198,13 @@ fn the_prompts_and_schemas_ask_for_justifications() {
 
 #[test]
 fn the_prompts_ask_for_a_guide_to_each_change() {
-    for prompt in [SYSTEM_PROMPT, meld_ailens::infer::UNCOMMITTED_SYSTEM_PROMPT] {
-        assert!(prompt.contains("\"what\": one plain sentence saying what the changed code does"));
+    for prompt in [
+        SYSTEM_PROMPT,
+        meld_ailens::infer::UNCOMMITTED_SYSTEM_PROMPT,
+        meld_ailens::infer::BLOCKS_SYSTEM_PROMPT,
+    ] {
+        assert!(prompt.contains("\"what\": two or three plain sentences"));
+        assert!(prompt.contains("explaining those lines in one to three plain sentences"));
         assert!(prompt.contains("\"steps\": the changed lines read line by line"));
         assert!(prompt.contains("\"nN\" for line N of the new version"));
         assert!(prompt.contains("\"was\": what the code did before the change"));

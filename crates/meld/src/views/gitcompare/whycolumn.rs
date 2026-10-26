@@ -492,6 +492,7 @@ fn block_header<'a, M: Clone + 'a>(
         let label = match action {
             ExplainAction::Commit | ExplainAction::Uncommitted => tr!("Explain with Claude"),
             ExplainAction::Changes => tr!("Explain changes"),
+            ExplainAction::Block => tr!("Explain this block"),
         };
         let mut explain = row![
             button(text(label).size(font.smaller(1.0)).font(font.font))

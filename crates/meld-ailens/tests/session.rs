@@ -458,6 +458,40 @@ fn notes_from_before_steps_and_risks_are_explained_again() {
 }
 
 #[test]
+fn a_block_left_out_of_the_note_is_explained_on_its_own() {
+    // The note explains the first block only, as if the second had been
+    // cut from the prompt
+    let note = "Change-Model: old\nChange-Unit: block\n\n\
+        Change: -5,1 +5,1 app.py\nRisk: 2\nWhat: Spells five\nWhy: Easier to read.\n";
+    let history = joined_history(note);
+    let fake = Arc::new(FakeClaude::default());
+    let session = base_main(&history, Some(config_with(Some(fake.clone()))));
+    let entry = entry_for(&session, "app.py");
+    let view = session.file_view(&entry.change, &never()).unwrap();
+    let explains: Vec<_> = view.cards.iter().map(|c| c.explain).collect();
+    assert_eq!(explains, [None, Some(ExplainAction::Block)]);
+
+    session
+        .explain_card(&view, &view.cards[1].key, &never())
+        .unwrap();
+    // Only the second block was sent, with the commit's message
+    let sent = fake.requests.lock().unwrap().last().cloned().unwrap();
+    assert_eq!(
+        sent.system_prompt.as_deref(),
+        Some(meld_ailens::infer::BLOCKS_SYSTEM_PROMPT)
+    );
+    assert!(sent.prompt.contains("+new") && !sent.prompt.contains("+five"));
+    assert!(sent.prompt.contains("Spells five and adds a line"));
+
+    let cards = session.cards(&view, &never()).unwrap();
+    assert_eq!(cards[0].change_what, "Spells five");
+    assert_eq!(cards[1].change_what, "Change 1 what");
+    assert!(cards.iter().all(|c| c.explain.is_none()));
+    let note = history.git(&["notes", "--ref=ai-lens", "show", &history.sha("joined")]);
+    assert!(note.contains("What: Spells five") && note.contains("What: Change 1 what"));
+}
+
+#[test]
 fn a_note_of_change_blocks_is_not_explained_again() {
     // Two cards on one explanation, but the note says it is one change block
     let note = JOINED_NOTE

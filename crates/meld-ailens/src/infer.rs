@@ -34,12 +34,14 @@ macro_rules! change_fields_prompt {
     else), "mechanical" (formatting, imports, generated or other changes that need no thought) or "test" (tests only).
   - "order": where to read the change to understand all the changes fastest, 1 first: definitions and the core of
     the change before their callers, mechanical changes last. Every change gets its own number.
-  - "what": one plain sentence saying what the changed code does, as a statement a reader can take in at a glance
-    before reading the lines.
-  - "steps": the changed lines read line by line, top to bottom: one entry per line, or per few lines that do one
-    thing together, with "lines" naming them by their tags ("n12", or "n12-n14" for a run; "o7" for deleted lines)
-    and "says" telling in a few plain words what those lines do. Cover every changed line that does something; skip
-    blank lines, lone closing brackets and unchanged lines. A deleted line gets a step only when its removal matters.
+  - "what": two or three plain sentences a reader takes in before reading the lines: what the changed code does,
+    how it does it, and the part it plays in the file (a test: what it checks and how it sets that up).
+  - "steps": the changed lines read line by line, top to bottom, explained to an engineer new to this code: one
+    entry per line, or per few lines that do one thing together, with "lines" naming them by their tags ("n12", or
+    "n12-n14" for a run; "o7" for deleted lines) and "says" explaining those lines in one to three plain sentences:
+    what they do, what they call, check or build and with which values, and why that matters in the block (what
+    would go wrong without them). Cover every changed line that does something; skip blank lines, lone closing
+    brackets and unchanged lines. A deleted line gets a step only when its removal matters.
   - "was": what the code did before the change, in a few words; empty when the change adds something new.
   - "now": what the code does after the change, in a few words, set against "was".
   - "why": one or two plain sentences on why that change is needed: its part in the whole, specific to it.
@@ -86,6 +88,19 @@ Reply with JSON matching the schema: "changes" has one entry for every numbered 
 number as "change", and
 "#,
     change_fields_prompt!()
+);
+
+pub const BLOCKS_SYSTEM_PROMPT: &str = concat!(
+    r#"You explain some of the changes of a git commit to engineers who want to understand the changed code as fast as possible.
+You are given the commit's message and only the changes to explain; the commit's other changes are left out.
+The diff's hunks are numbered: each hunk header starts with "[change N]".
+Every line of a hunk starts with a tag: "nN" for line N of the new version (added or unchanged lines), "oN" for
+line N of the old version (deleted lines).
+Reply with JSON matching the schema: "changes" has one entry for every numbered change in the diff, with its
+number as "change", and
+"#,
+    change_fields_prompt!(),
+    "\nBase the answer only on the commit message and diff you are given."
 );
 
 fn changes_schema() -> Value {
@@ -303,6 +318,47 @@ pub fn compose_inferred_note(
         }
     };
     compose_note(&head, &inferred.model, &inferred.changes)
+}
+
+/// Ask Claude Code what some of a commit's changes do and why: those of
+/// `files`, each with only the hunks to explain, with the commit's message
+///
+/// For changes left out of [`infer_explanation`]'s prompt for its size.
+/// Fails with [`Error::NothingToExplain`] when `files` has no hunks.
+pub fn infer_commit_changes(
+    commit: &GitCommit,
+    files: &[FileDiff],
+    options: &InferOptions<'_>,
+    cancel: &CancelToken,
+) -> Result<InferredChanges> {
+    let prompt = build_prompt(commit, files, options.ignore_rules);
+    if prompt.hunks.is_empty() {
+        return Err(Error::NothingToExplain(
+            "Those changes have nothing to explain.".into(),
+        ));
+    }
+    let request = ClaudeRequest {
+        prompt: prompt.text.clone(),
+        model: options.model.to_string(),
+        system_prompt: Some(BLOCKS_SYSTEM_PROMPT.to_string()),
+        json_schema: Some(UNCOMMITTED_SCHEMA.clone()),
+        claude_path: options.claude_path.to_string(),
+        cwd: None,
+        timeout: options.timeout,
+        env: None,
+    };
+    let response = options.call(&request, cancel)?;
+    let changes = parse_changes(
+        response.output.as_object().and_then(|o| o.get("changes")),
+        &prompt.hunks,
+    );
+    if changes.is_empty() {
+        return Err(no_explanation());
+    }
+    Ok(InferredChanges {
+        model: response.model,
+        changes,
+    })
 }
 
 /// Ask Claude Code what each hunk of a file's staged or unstaged diff does

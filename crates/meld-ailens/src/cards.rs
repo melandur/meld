@@ -25,6 +25,9 @@ pub enum ExplainAction {
     Changes,
     /// Explain the file's staged or unstaged hunks
     Uncommitted,
+    /// The commit's changes were explained, but not this card's (left out
+    /// of the prompt for its size): explain only its hunks
+    Block,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]

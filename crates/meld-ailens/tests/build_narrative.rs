@@ -464,11 +464,11 @@ fn prompts_match_python() {
     );
     assert_eq!(
         sha1(infer::SYSTEM_PROMPT),
-        "f81fe77a58e200168227814b03c313388e03e566"
+        "76e1b92216e268d3c874e2bf2b7d159fcede2548"
     );
     assert_eq!(
         sha1(infer::UNCOMMITTED_SYSTEM_PROMPT),
-        "b9c46901be36dda1b6ffc3ee1817a49a3bafc938"
+        "b4ff266f19bd83e649782918445dae8bd0489863"
     );
 }
 
