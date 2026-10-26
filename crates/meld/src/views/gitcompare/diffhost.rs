@@ -15,6 +15,7 @@
 //!   file header row ends, so that the Why column lines up
 //! - [`DiffHost::text_font`]: the compared text's font and size, which
 //!   the Why column's cards use too
+//! - [`DiffHost::find_name`]: where a name a card quotes is, to scroll to
 //! - [`DiffHost::set_hover`]: lines of the hovered card, drawn highlighted
 //! - the tab methods, forwarded unchanged
 
@@ -61,6 +62,11 @@ impl DiffHost {
     /// The font and size of the compared text, for the Why column.
     pub fn text_font(&self) -> (iced::Font, f32) {
         self.0.text_font()
+    }
+
+    /// Where a name from the code is: the pane and its 0-based line.
+    pub fn find_name(&self, name: &str) -> Option<(usize, usize)> {
+        self.0.find_name(name)
     }
 
     pub fn first_change(&self) -> Option<usize> {

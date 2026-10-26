@@ -7,12 +7,12 @@ use meld_ailens::explanation::{MessageFormat, compose_note, format_note, parse_n
 use meld_ailens::infer::{
     FileDiff, InferOptions, InferredExplanation, MAX_PATCH_CHARS, MAX_PATCH_CHARS_PER_FILE, SCHEMA,
     SYSTEM_PROMPT, UNCOMMITTED_SCHEMA, build_prompt, compose_inferred_note, infer_explanation,
-    infer_uncommitted_explanation,
+    infer_uncommitted_explanation, parse_changes,
 };
 use meld_ailens::{
-    CancelToken, ChangeExplanation, ClaudeErrorReason, CommitExplanation, CommitHunk, DiffLineKind,
-    Error, ExplanationSource, GitCommit, GitDiffHunk, GitDiffLine, GitFileChange, GitFileDiff,
-    GitFileStatus, GitIdentity, UncommittedLayer,
+    CancelToken, ChangeExplanation, ChangeGuide, ChangeKind, ClaudeErrorReason, CommitExplanation,
+    CommitHunk, DiffLineKind, Error, ExplanationSource, GitCommit, GitDiffHunk, GitDiffLine,
+    GitFileChange, GitFileDiff, GitFileStatus, GitIdentity, UncommittedLayer,
 };
 use serde_json::{Value, json};
 
@@ -253,6 +253,7 @@ fn sends_the_message_and_diff_leaving_out_ignored_and_generated_files() {
             what: "Swaps one for two.".into(),
             why: "Two is right.".into(),
             justification: None,
+            guide: Default::default(),
         }]
     );
 
@@ -805,6 +806,7 @@ fn explains_each_hunk_from_the_patch_alone() {
             what: "Shouts nine.".into(),
             why: "Louder.".into(),
             justification: None,
+            guide: Default::default(),
         }]
     );
 }
@@ -1096,7 +1098,7 @@ fn the_prompts_and_schemas_ask_for_justifications() {
         assert!(prompt.contains("\"justification\": one to three plain sentences"));
         assert!(prompt.contains("which alternatives or simpler fixes it rules out"));
         assert!(prompt.contains("if that evidence is thin, say so plainly"));
-        assert!(prompt.ends_with("No markdown, no headings, no lists."));
+        assert!(prompt.contains("No other markdown, no\nheadings, no lists."));
     }
     assert_eq!(
         SCHEMA["required"],
@@ -1110,7 +1112,69 @@ fn the_prompts_and_schemas_ask_for_justifications() {
         );
         assert_eq!(
             items["required"],
-            json!(["change", "what", "why", "justification"])
+            json!([
+                "change",
+                "kind",
+                "order",
+                "what",
+                "was",
+                "now",
+                "why",
+                "check",
+                "justification"
+            ])
+        );
+        assert_eq!(
+            items["properties"]["kind"]["enum"],
+            json!([
+                "behavior",
+                "fix",
+                "refactor",
+                "rename",
+                "mechanical",
+                "test"
+            ])
         );
     }
+}
+
+#[test]
+fn the_prompts_ask_for_a_guide_to_each_change() {
+    for prompt in [SYSTEM_PROMPT, meld_ailens::infer::UNCOMMITTED_SYSTEM_PROMPT] {
+        assert!(prompt.contains("\"what\": a headline of at most eight words"));
+        assert!(prompt.contains("\"was\": what the code did before the change"));
+        assert!(prompt.contains("\"check\": one plain sentence on what a reviewer should verify"));
+        assert!(prompt.contains("in backticks"));
+    }
+    assert!(SYSTEM_PROMPT.ends_with("the commit message and diff you are given."));
+}
+
+#[test]
+fn answers_give_each_change_its_guide() {
+    let hunks = [hunk_ref("a.rs", 1, 1, 1, 1), hunk_ref("a.rs", 9, 1, 9, 1)];
+    let answer = json!([
+        {
+            "change": 1, "kind": "Fix", "order": 2, "what": "Stops at the end",
+            "was": " loops forever ", "now": "stops at `end`", "why": "Hangs.",
+            "check": "Callers with an empty list.", "justification": "",
+        },
+        {
+            "change": 2, "kind": "sideways", "order": 0, "what": "Renames",
+            "was": "", "now": "", "why": "Clearer.", "check": "",
+        },
+    ]);
+    let changes = parse_changes(Some(&answer), &hunks);
+    assert_eq!(
+        changes[0].guide,
+        ChangeGuide {
+            kind: Some(ChangeKind::Fix),
+            order: Some(2),
+            was: Some("loops forever".into()),
+            now: Some("stops at `end`".into()),
+            check: Some("Callers with an empty list.".into()),
+        }
+    );
+    assert_eq!(changes[0].justification, None);
+    // Unknown kinds, orders below 1 and empty texts are left out
+    assert!(changes[1].guide.is_empty());
 }

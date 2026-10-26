@@ -34,7 +34,7 @@ use crate::infer::{
     InferOptions, compose_inferred_note, infer_explanation, infer_uncommitted_explanation,
 };
 use crate::models::{
-    ChangeExplanation, ChangeGroup, Comparison, ComparisonRelation, ExplanationSource,
+    ChangeExplanation, ChangeGroup, ChangeGuide, Comparison, ComparisonRelation, ExplanationSource,
     FileAttribution, GitCommit, GitFileChange, GitFileStatus, LayerDiffsUsed, Revision,
     RevisionKind, UncommittedLayer,
 };
@@ -84,7 +84,7 @@ impl Default for SessionConfig {
         Self {
             claude_path: "claude".into(),
             infer_enabled: true,
-            infer_model: "claude-sonnet-5-5".into(),
+            infer_model: "claude-opus-5-5".into(),
             build_model: "claude-opus-5-5".into(),
             build_folder: "agent".into(),
             notes_ref: "ai-lens".into(),
@@ -925,7 +925,7 @@ impl CompareSession {
                 .get(layer)
                 .iter()
                 .all(|diff| self.info.uncommitted.is_explained(layer, diff));
-            return Ok(Card {
+            let mut card = Card {
                 kind: match layer {
                     UncommittedLayer::Staged => CardKind::Staged,
                     UncommittedLayer::Unstaged => CardKind::Unstaged,
@@ -938,7 +938,9 @@ impl CompareSession {
                 change_model: changes.first().map(|c| c.model.clone()).unwrap_or_default(),
                 explain: (infer && !explained).then_some(ExplainAction::Uncommitted),
                 ..common
-            });
+            };
+            set_guide(&mut card, changes.iter().map(|c| &c.guide));
+            return Ok(card);
         }
         let Some(sha) = &group.sha else {
             return Ok(Card {
@@ -974,7 +976,7 @@ impl CompareSession {
         } else {
             format!("{}\n\n{}", commit.subject, commit.body)
         };
-        Ok(Card {
+        let mut card = Card {
             kind: CardKind::Commit,
             sha: Some(commit.sha.clone()),
             short_sha: short_sha(&commit.sha).to_string(),
@@ -1008,7 +1010,9 @@ impl CompareSession {
             color_index: range_order.get(&commit.sha).copied().unwrap_or(-1),
             builds: builds.get(&commit.sha).cloned().unwrap_or_default(),
             ..common
-        })
+        };
+        set_guide(&mut card, changes.iter().map(|c| &c.guide));
+        Ok(card)
     }
 
     // -- explaining --
@@ -1445,6 +1449,16 @@ fn label(
         }
     }
     Ok(ref_name.to_string())
+}
+
+/// A card's guide from those of the changes it shows: the first change's
+/// kind, the earliest reading order, and the texts joined
+fn set_guide<'a>(card: &mut Card, guides: impl Iterator<Item = &'a ChangeGuide> + Clone) {
+    card.change_kind = guides.clone().find_map(|g| g.kind);
+    card.change_order = guides.clone().filter_map(|g| g.order).min();
+    card.change_was = join_texts(guides.clone().filter_map(|g| g.was.as_deref()));
+    card.change_now = join_texts(guides.clone().filter_map(|g| g.now.as_deref()));
+    card.change_check = join_texts(guides.filter_map(|g| g.check.as_deref()));
 }
 
 fn join_texts<'a>(texts: impl Iterator<Item = &'a str>) -> String {

@@ -445,7 +445,8 @@ fn schema_and_version() {
 }
 
 // -- The prompts and schemas are pinned: the build ones are byte-identical
-// to the Python ones; the infer ones are too, plus the justification --
+// to the Python ones; the infer ones are too, plus the justification and
+// each change's guide (kind, order, was, now, check) --
 
 fn sha1(text: &str) -> String {
     sha1_smol::Sha1::from(text.as_bytes()).digest().to_string()
@@ -453,7 +454,7 @@ fn sha1(text: &str) -> String {
 
 /// SHA-1s of the prompts, so a stray edit to one is caught: the Python
 /// constant of `build_narrative.py`, and those of `meld/ailens/infer.py`
-/// with the justification added
+/// with the justification and the change guide added
 #[test]
 fn prompts_match_python() {
     assert_eq!(
@@ -462,16 +463,16 @@ fn prompts_match_python() {
     );
     assert_eq!(
         sha1(infer::SYSTEM_PROMPT),
-        "0f7eb926c8095987a34361a526222d332baf63bc"
+        "7b3c834d280074be509d52f6d0ca95dc0c3b09c5"
     );
     assert_eq!(
         sha1(infer::UNCOMMITTED_SYSTEM_PROMPT),
-        "6754f9d28383d8019375d6a3ac237cac2e60b58f"
+        "fabf6c9ec53a58c49428e639c7e2eb91ed6d2909"
     );
 }
 
 /// `json.dumps(schema, separators=(",", ":"))` of the Python schemas (the
-/// infer ones with a required `justification`), as passed to
+/// infer ones with a required `justification` and change guide), as passed to
 /// `claude --json-schema`
 #[test]
 fn schemas_match_python() {
@@ -481,11 +482,11 @@ fn schemas_match_python() {
     );
     assert_eq!(
         infer::SCHEMA.to_string(),
-        r#"{"type":"object","properties":{"what":{"type":"string"},"why":{"type":"string"},"justification":{"type":"string"},"changes":{"type":"array","items":{"type":"object","properties":{"change":{"type":"integer"},"what":{"type":"string"},"why":{"type":"string"},"justification":{"type":"string"}},"required":["change","what","why","justification"],"additionalProperties":false}}},"required":["what","why","justification","changes"],"additionalProperties":false}"#
+        r#"{"type":"object","properties":{"what":{"type":"string"},"why":{"type":"string"},"justification":{"type":"string"},"changes":{"type":"array","items":{"type":"object","properties":{"change":{"type":"integer"},"kind":{"type":"string","enum":["behavior","fix","refactor","rename","mechanical","test"]},"order":{"type":"integer"},"what":{"type":"string"},"was":{"type":"string"},"now":{"type":"string"},"why":{"type":"string"},"check":{"type":"string"},"justification":{"type":"string"}},"required":["change","kind","order","what","was","now","why","check","justification"],"additionalProperties":false}}},"required":["what","why","justification","changes"],"additionalProperties":false}"#
     );
     assert_eq!(
         infer::UNCOMMITTED_SCHEMA.to_string(),
-        r#"{"type":"object","properties":{"changes":{"type":"array","items":{"type":"object","properties":{"change":{"type":"integer"},"what":{"type":"string"},"why":{"type":"string"},"justification":{"type":"string"}},"required":["change","what","why","justification"],"additionalProperties":false}}},"required":["changes"],"additionalProperties":false}"#
+        r#"{"type":"object","properties":{"changes":{"type":"array","items":{"type":"object","properties":{"change":{"type":"integer"},"kind":{"type":"string","enum":["behavior","fix","refactor","rename","mechanical","test"]},"order":{"type":"integer"},"what":{"type":"string"},"was":{"type":"string"},"now":{"type":"string"},"why":{"type":"string"},"check":{"type":"string"},"justification":{"type":"string"}},"required":["change","kind","order","what","was","now","why","check","justification"],"additionalProperties":false}}},"required":["changes"],"additionalProperties":false}"#
     );
 }
 

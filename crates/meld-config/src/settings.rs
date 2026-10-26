@@ -356,7 +356,7 @@ impl Default for Settings {
             text_filters: default_text_filters(),
             ailens_claude_path: "claude".to_string(),
             ailens_infer_enabled: true,
-            ailens_infer_model: "claude-sonnet-5-5".to_string(),
+            ailens_infer_model: "claude-opus-5-5".to_string(),
             ailens_build_model: "claude-opus-5-5".to_string(),
             ailens_build_folder: "agent".to_string(),
             ailens_notes_ref: "ai-lens".to_string(),
@@ -678,7 +678,7 @@ mod tests {
         assert!(s.text_filters.iter().all(|f| !f.active));
         assert_eq!(s.ailens_claude_path, "claude");
         assert!(s.ailens_infer_enabled);
-        assert_eq!(s.ailens_infer_model, "claude-sonnet-5-5");
+        assert_eq!(s.ailens_infer_model, "claude-opus-5-5");
         assert_eq!(s.ailens_build_model, "claude-opus-5-5");
         assert_eq!(s.ailens_build_folder, "agent");
         assert_eq!(s.ailens_notes_ref, "ai-lens");

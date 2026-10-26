@@ -8,7 +8,9 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 
-use crate::models::{ChangeExplanation, CommitHunk, GitDiffHunk, GitFileDiff, UncommittedLayer};
+use crate::models::{
+    ChangeExplanation, ChangeGuide, CommitHunk, GitDiffHunk, GitFileDiff, UncommittedLayer,
+};
 
 pub const MAX_ENTRIES: usize = 2000;
 
@@ -19,6 +21,7 @@ pub struct HunkExplanation {
     pub what: String,
     pub why: String,
     pub justification: Option<String>,
+    pub guide: ChangeGuide,
     pub model: String,
 }
 
@@ -29,6 +32,7 @@ pub struct PlacedExplanation {
     pub what: String,
     pub why: String,
     pub justification: Option<String>,
+    pub guide: ChangeGuide,
     pub model: String,
 }
 
@@ -39,6 +43,7 @@ impl PlacedExplanation {
             what: self.what.clone(),
             why: self.why.clone(),
             justification: self.justification.clone(),
+            guide: self.guide.clone(),
         }
     }
 }
@@ -187,6 +192,7 @@ impl UncommittedExplanations {
                         what: change.what.clone(),
                         why: change.why.clone(),
                         justification: change.justification.clone(),
+                        guide: change.guide.clone(),
                         model: model.to_string(),
                     },
                 );
@@ -228,6 +234,7 @@ impl UncommittedExplanations {
                     what: found.what,
                     why: found.why,
                     justification: found.justification,
+                    guide: found.guide,
                     model: found.model,
                 });
             }

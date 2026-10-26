@@ -15,14 +15,16 @@ use iced::advanced::overlay;
 use iced::advanced::renderer;
 use iced::advanced::widget::{self, Tree, Widget};
 use iced::advanced::{Clipboard, Shell, mouse};
-use iced::widget::{button, column, container, mouse_area, row, space, text, tooltip};
+use iced::widget::{
+    button, column, container, mouse_area, rich_text, row, space, span, text, tooltip,
+};
 use iced::{
     Background, Border, Color, Element, Event, Font, Length, Rectangle, Renderer, Size, Theme,
     Vector,
 };
 use meld_ailens::cards::{CARD_GAP, layout_cards, reflow};
 use meld_ailens::picker::parse_iso_date;
-use meld_ailens::{Card, CardKind, ExplainAction, ExplanationSource, Side};
+use meld_ailens::{Card, CardKind, ChangeKind, ExplainAction, ExplanationSource, Side};
 
 use super::diffhost::PaneGeometry;
 use crate::ui;
@@ -195,9 +197,27 @@ impl CardFont {
 pub struct CardStates {
     pub busy: HashSet<String>,
     pub errors: HashMap<String, String>,
+    /// Open cards ([`open_key`]), open commits of the summary
+    /// ([`commit_key`]) and long texts shown in full, by key
     pub expanded: HashSet<String>,
     pub hovered: Option<String>,
 }
+
+/// The key in [`CardStates::expanded`] of an open card.
+pub fn open_key(key: &str) -> String {
+    format!("{key}:open")
+}
+
+/// The key in [`CardStates::expanded`] of a commit opened in the summary.
+pub fn commit_key(sha: &str) -> String {
+    format!("commit:{sha}")
+}
+
+/// The key in [`CardStates::expanded`] of a summary showing every commit.
+const ALL_COMMITS_KEY: &str = "commits:all";
+
+/// Commits the summary shows until it is told to show them all.
+const SUMMARY_COMMITS: usize = 3;
 
 /// What the cards' buttons send.
 pub struct Callbacks<M> {
@@ -206,6 +226,8 @@ pub struct Callbacks<M> {
     pub build: fn(String) -> M,
     pub hover: fn(Option<String>) -> M,
     pub expand: fn(String) -> M,
+    /// A name from the code was clicked: find it in the panes
+    pub jump: fn(String) -> M,
 }
 
 impl<M> Clone for Callbacks<M> {
@@ -214,6 +236,102 @@ impl<M> Clone for Callbacks<M> {
     }
 }
 impl<M> Copy for Callbacks<M> {}
+
+/// Where to read each card: its number and how many cards are numbered.
+///
+/// Cards are numbered by their commit, oldest first, then staged and
+/// unstaged changes, and within those by the reading order the model gave
+/// their changes. None for cards without an order, and for all of them
+/// when fewer than two have one.
+pub fn reading_order(cards: &[Card]) -> Vec<Option<(usize, usize)>> {
+    let mut numbers = vec![None; cards.len()];
+    let mut ordered: Vec<usize> = (0..cards.len())
+        .filter(|&i| cards[i].change_order.is_some())
+        .collect();
+    if ordered.len() < 2 {
+        return numbers;
+    }
+    let rank = |card: &Card| match card.kind {
+        CardKind::Commit => 0,
+        CardKind::Staged => 1,
+        CardKind::Unstaged => 2,
+        CardKind::Unknown => 3,
+    };
+    ordered.sort_by_key(|&i| {
+        let card = &cards[i];
+        (rank(card), card.color_index, card.change_order, i)
+    });
+    let total = ordered.len();
+    for (number, index) in ordered.into_iter().enumerate() {
+        numbers[index] = Some((number + 1, total));
+    }
+    numbers
+}
+
+/// `body` cut into plain text and names from the code (in backticks, which
+/// are dropped); a backtick without its pair stays text.
+pub fn split_code(body: &str) -> Vec<(String, bool)> {
+    let parts: Vec<&str> = body.split('`').collect();
+    // An even number of parts means an odd number of backticks
+    let unpaired = parts.len().is_multiple_of(2);
+    let mut out: Vec<(String, bool)> = Vec::new();
+    for (index, part) in parts.iter().enumerate() {
+        let last = index == parts.len() - 1;
+        let (part, code) = if index % 2 == 1 && unpaired && last {
+            (format!("`{part}"), false)
+        } else {
+            (part.to_string(), index % 2 == 1)
+        };
+        if part.is_empty() {
+            continue;
+        }
+        match out.last_mut() {
+            Some((previous, false)) if !code => previous.push_str(&part),
+            _ => out.push((part, code)),
+        }
+    }
+    out
+}
+
+/// Behind names from the code, in light and dark themes alike.
+const CODE_BACKGROUND: Color = Color::from_rgba(0.5, 0.5, 0.5, 0.2);
+
+/// `body` with names from the code set apart; clicking one finds it in the
+/// panes.
+fn rich<'a, M: Clone + 'a>(
+    body: &str,
+    size: f32,
+    font: Font,
+    dim: bool,
+    on_jump: fn(String) -> M,
+) -> Element<'a, M> {
+    let spans: Vec<text::Span<'a, String, Font>> = split_code(body)
+        .into_iter()
+        .map(|(part, code)| {
+            if code {
+                let name = part.clone();
+                span(part)
+                    .font(font)
+                    .background(CODE_BACKGROUND)
+                    .border(Border::default().rounded(3))
+                    .padding([0, 2])
+                    .link(name)
+            } else {
+                span(part).font(font)
+            }
+        })
+        .collect();
+    let mut t = rich_text(spans)
+        .size(size)
+        .font(font)
+        .wrapping(text::Wrapping::WordOrGlyph)
+        .width(Length::Fill)
+        .on_link_click(on_jump);
+    if dim {
+        t = t.style(ui::dim_text);
+    }
+    t.into()
+}
 
 fn badge<'a, M: 'a>(
     label: String,
@@ -239,25 +357,36 @@ fn badge<'a, M: 'a>(
         .into()
 }
 
+/// The chip of a change's kind: colored for the kinds to read closely, grey
+/// for those to skim.
+fn kind_chip<'a, M: 'a>(kind: ChangeKind, font: CardFont) -> Element<'a, M> {
+    let (label, rgb) = match kind {
+        ChangeKind::Behavior => (trc!("change kind", "behavior"), 0x3584e4),
+        ChangeKind::Fix => (trc!("change kind", "fix"), 0xc01c28),
+        ChangeKind::Refactor => (trc!("change kind", "refactor"), 0x9141ac),
+        ChangeKind::Rename => (trc!("change kind", "rename"), 0x77767b),
+        ChangeKind::Mechanical => (trc!("change kind", "mechanical"), 0x77767b),
+        ChangeKind::Test => (trc!("change kind", "test"), 0x77767b),
+    };
+    let color = hex(rgb);
+    badge(
+        label.to_string(),
+        color.scale_alpha(0.15),
+        Some(color),
+        false,
+        font,
+    )
+}
+
 fn long_text<'a, M: Clone + 'a>(
     body: String,
     key: &str,
     states: &CardStates,
-    on_expand: fn(String) -> M,
-    bold: bool,
-    card_font: CardFont,
+    callbacks: Callbacks<M>,
+    font: CardFont,
 ) -> Element<'a, M> {
-    let font = if bold {
-        card_font.bold()
-    } else {
-        card_font.font
-    };
     if body.chars().count() <= LONG_TEXT {
-        return text(body)
-            .size(card_font.size)
-            .font(font)
-            .wrapping(text::Wrapping::WordOrGlyph)
-            .into();
+        return rich(&body, font.size, font.font, false, callbacks.jump);
     }
     let expanded = states.expanded.contains(key);
     let shown = if expanded {
@@ -266,25 +395,74 @@ fn long_text<'a, M: Clone + 'a>(
         shorten(&body, SHORT_TEXT)
     };
     column![
-        text(shown)
-            .size(card_font.size)
-            .font(font)
-            .wrapping(text::Wrapping::WordOrGlyph),
+        rich(&shown, font.size, font.font, false, callbacks.jump),
         button(
             text(if expanded {
                 tr!("Show less")
             } else {
                 tr!("Show more")
             })
-            .size(card_font.smaller(1.0))
-            .font(card_font.font)
+            .size(font.smaller(1.0))
+            .font(font.font)
         )
         .padding([0, 0])
         .style(link_button)
-        .on_press(on_expand(key.to_string())),
+        .on_press((callbacks.expand)(key.to_string())),
     ]
     .spacing(2)
     .into()
+}
+
+/// A small label over its text, e.g. Check or Why.
+fn labeled<'a, M: Clone + 'a>(
+    label: &'a str,
+    body: Element<'a, M>,
+    font: CardFont,
+) -> Element<'a, M> {
+    column![
+        text(label)
+            .size(font.smaller(2.0))
+            .font(font.font)
+            .style(ui::dim_text),
+        body,
+    ]
+    .spacing(1)
+    .into()
+}
+
+/// What the code did before and does now, `label` beside the text.
+fn before_after<'a, M: Clone + 'a>(
+    label: &'a str,
+    body: &str,
+    callbacks: Callbacks<M>,
+    font: CardFont,
+) -> Element<'a, M> {
+    row![
+        text(label)
+            .size(font.smaller(2.0))
+            .font(font.font)
+            .style(ui::dim_text)
+            .width(font.size * 2.4)
+            .wrapping(text::Wrapping::None),
+        rich(&reflow(body), font.size, font.font, false, callbacks.jump),
+    ]
+    .spacing(4)
+    .align_y(iced::Alignment::Start)
+    .into()
+}
+
+/// The line that opens and closes a card: quiet until hovered.
+fn toggle_button(theme: &Theme, status: button::Status) -> button::Style {
+    let text = theme.extended_palette().background.base.text;
+    let color = match status {
+        button::Status::Hovered | button::Status::Pressed => text,
+        _ => text.scale_alpha(0.6),
+    };
+    button::Style {
+        background: None,
+        text_color: color,
+        ..button::Style::default()
+    }
 }
 
 fn link_button(theme: &Theme, status: button::Status) -> button::Style {
@@ -300,37 +478,32 @@ fn link_button(theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
-/// One card: its commit, author or agent, What, Why and Justification, the
-/// change's own explanation, the explain button and the builds that cover
-/// it.
-pub fn card_view<'a, M: Clone + 'a>(
+/// The commit's short SHA, which shows its whole message; or what the
+/// change is when it has no commit.
+fn origin<'a, M: Clone + 'a>(
     card: &'a Card,
-    states: &'a CardStates,
     callbacks: Callbacks<M>,
-    now: f64,
     font: CardFont,
 ) -> Element<'a, M> {
-    let key = card.key.as_str();
-    let dim = ui::dim_text;
-
-    let mut header = row![].spacing(6).align_y(iced::Center);
     match (card.kind, &card.sha) {
         (CardKind::Commit, Some(sha)) => {
             let sha_button = button(
                 text(card.short_sha.as_str())
                     .size(font.smaller(1.0))
-                    .font(font.font),
+                    .font(font.font)
+                    .style(ui::dim_text),
             )
             .padding([0, 4])
             .style(ui::flat_button)
             .on_press((callbacks.commit)(sha.clone()));
-            header = header.push(tooltip(
+            tooltip(
                 sha_button,
                 container(text(tr!("Show the full commit message")).size(12))
                     .padding([4, 8])
                     .style(ui::tooltip_box),
                 tooltip::Position::Bottom,
-            ));
+            )
+            .into()
         }
         (kind, _) => {
             let label = match kind {
@@ -338,17 +511,23 @@ pub fn card_view<'a, M: Clone + 'a>(
                 CardKind::Unstaged => tr!("Unstaged"),
                 _ => tr!("Commit unknown"),
             };
-            header = header.push(
-                text(label)
-                    .size(font.smaller(1.0))
-                    .font(font.bold())
-                    .wrapping(text::Wrapping::None),
-            );
+            text(label)
+                .size(font.smaller(1.0))
+                .font(font.bold())
+                .wrapping(text::Wrapping::None)
+                .into()
         }
     }
+}
+
+/// Who made a commit and when: the agent's badge, the model or author and
+/// the date.
+fn people_line<'a, M: 'a>(card: &'a Card, now: f64, font: CardFont) -> Option<Element<'a, M>> {
+    let mut line = row![].spacing(6).align_y(iced::Center);
+    let mut any = false;
     if card.agent() {
         let claude = hex(0xd97757);
-        header = header.push(tooltip(
+        line = line.push(tooltip(
             badge(
                 "Claude".into(),
                 claude.scale_alpha(0.2),
@@ -361,6 +540,7 @@ pub fn card_view<'a, M: Clone + 'a>(
                 .style(ui::tooltip_box),
             tooltip::Position::Bottom,
         ));
+        any = true;
     }
     // The model or author gives way to the date
     let who = if card.agent() {
@@ -370,126 +550,264 @@ pub fn card_view<'a, M: Clone + 'a>(
     };
     let filled = !who.is_empty();
     if filled {
-        header = header.push(
+        line = line.push(
             ellipsized(who.as_str(), Mode::End)
                 .size(font.smaller(1.0))
                 .font(font.font)
-                .style(dim)
+                .style(ui::dim_text)
                 .width(Length::Fill),
         );
+        any = true;
     }
     if let Some(date) = parse_iso_date(&card.date).filter(|_| !card.date.is_empty()) {
         if !filled {
-            header = header.push(space::horizontal());
+            line = line.push(space::horizontal());
         }
-        header = header.push(tooltip(
+        line = line.push(tooltip(
             text(relative_date(date, now))
                 .size(font.smaller(1.0))
                 .font(font.font)
-                .style(dim)
+                .style(ui::dim_text)
                 .wrapping(text::Wrapping::None),
             container(text(local_date(date).unwrap_or_else(|| card.date.clone())).size(12))
                 .padding([4, 8])
                 .style(ui::tooltip_box),
             tooltip::Position::Bottom,
         ));
+        any = true;
     }
+    any.then(|| line.into())
+}
 
-    let mut body = column![header].spacing(3).width(Length::Fill);
-    if !card.what.is_empty() {
-        body = body.push(long_text(
-            reflow(&card.what),
-            &format!("{key}:what"),
-            states,
-            callbacks.expand,
-            true,
-            font,
-        ));
-    }
-    if !card.why.is_empty() {
-        match card.source {
-            Some(ExplanationSource::Inferred) => {
-                let line = if card.inferred_by.is_empty() {
-                    tr!("Inferred by a model, not the author’s words").to_string()
-                } else {
-                    tr!(
-                        "Inferred by {model}, not the author’s words",
-                        model = card.inferred_by
-                    )
-                };
-                body = body.push(badge_line(line, font));
-            }
-            Some(source) => {
-                let label = match source {
-                    ExplanationSource::Commit => tr!("from the commit"),
-                    ExplanationSource::Note => tr!("from a note"),
-                    ExplanationSource::Inferred => tr!("inferred"),
-                };
-                body = body.push(
-                    text(label)
-                        .size(font.smaller(2.0))
-                        .font(font.font)
-                        .style(dim),
-                );
-            }
-            None => {}
+/// Where a commit's Why comes from: its message, a note, or a model.
+fn source_line<'a, M: 'a>(card: &Card, font: CardFont) -> Option<Element<'a, M>> {
+    match card.source? {
+        ExplanationSource::Inferred => {
+            let line = if card.inferred_by.is_empty() {
+                tr!("Inferred by a model, not the author’s words").to_string()
+            } else {
+                tr!(
+                    "Inferred by {model}, not the author’s words",
+                    model = card.inferred_by
+                )
+            };
+            Some(badge_line(line, font))
         }
-        body = body.push(long_text(
-            reflow(&card.why),
-            &format!("{key}:why"),
-            states,
-            callbacks.expand,
-            false,
-            font,
-        ));
-    }
-    if !card.justification.is_empty() {
-        body = body.push(justification(
-            &card.justification,
-            &format!("{key}:justification"),
-            states,
-            callbacks.expand,
-            font,
-        ));
-    }
-
-    if !card.change_what.is_empty() || !card.change_why.is_empty() {
-        let line = if card.change_model.is_empty() {
-            tr!("This change · inferred by a model").to_string()
-        } else {
-            tr!(
-                "This change · inferred by {model}",
-                model = card.change_model
+        source => {
+            let label = match source {
+                ExplanationSource::Commit => tr!("from the commit"),
+                ExplanationSource::Note => tr!("from a note"),
+                ExplanationSource::Inferred => tr!("inferred"),
+            };
+            Some(
+                text(label)
+                    .size(font.smaller(2.0))
+                    .font(font.font)
+                    .style(ui::dim_text)
+                    .into(),
             )
+        }
+    }
+}
+
+fn build_links<'a, M: Clone + 'a>(
+    card: &'a Card,
+    callbacks: Callbacks<M>,
+    font: CardFont,
+) -> Vec<Element<'a, M>> {
+    card.builds
+        .iter()
+        .map(|build| {
+            button(
+                text(tr!(
+                    "Build {name}",
+                    name = build.strip_suffix(".md").unwrap_or(build)
+                ))
+                .size(font.smaller(1.0))
+                .font(font.font),
+            )
+            .padding(0)
+            .style(link_button)
+            .on_press((callbacks.build)(build.clone()))
+            .into()
+        })
+        .collect()
+}
+
+/// The card's headline: what its change does, else what its commit did.
+fn headline(card: &Card) -> &str {
+    if !card.change_what.is_empty() {
+        &card.change_what
+    } else {
+        &card.what
+    }
+}
+
+/// Whether the card has its own explanation of the change.
+fn has_change(card: &Card) -> bool {
+    !card.change_what.is_empty() || !card.change_why.is_empty()
+}
+
+/// One card, read at a glance: the change's kind, its place in the reading
+/// order, a headline and what the code did before and does now. Open, it
+/// adds what to check, the Why and Justification, who made the change and
+/// the builds that cover it. Changes to skim (renames, mechanical changes,
+/// tests) show their headline only until opened. What the commit as a
+/// whole did is in the summary above the cards ([`commit_summary`]).
+pub fn card_view<'a, M: Clone + 'a>(
+    card: &'a Card,
+    states: &'a CardStates,
+    callbacks: Callbacks<M>,
+    now: f64,
+    font: CardFont,
+    reading: Option<(usize, usize)>,
+) -> Element<'a, M> {
+    let key = card.key.as_str();
+    let dim = ui::dim_text;
+    let open = states.expanded.contains(&open_key(key));
+    let skim = !open && card.change_kind.is_some_and(ChangeKind::skimmable);
+
+    let mut top = row![].spacing(6).align_y(iced::Center);
+    if let Some(kind) = card.change_kind {
+        top = top.push(kind_chip(kind, font));
+    }
+    if let Some((number, total)) = reading {
+        let label = if number == 1 {
+            tr!(
+                "Start here · {number}/{total}",
+                number = number,
+                total = total
+            )
+        } else {
+            format!("{number}/{total}")
         };
-        let mut change = column![ui::separator(false), badge_line(line, font)].spacing(3);
-        if !card.change_what.is_empty() {
-            change = change.push(
-                text(card.change_what.as_str())
-                    .size(font.size)
-                    .font(font.bold()),
-            );
+        top = top.push(
+            text(label)
+                .size(font.smaller(2.0))
+                .font(if number == 1 { font.bold() } else { font.font })
+                .style(dim)
+                .wrapping(text::Wrapping::None),
+        );
+    }
+    top = top.push(space::horizontal());
+    top = top.push(origin(card, callbacks, font));
+
+    let mut body = column![top].spacing(3).width(Length::Fill);
+    let title = headline(card);
+    if !title.is_empty() {
+        let title_font = if skim { font.font } else { font.bold() };
+        body = body.push(rich(title, font.size, title_font, skim, callbacks.jump));
+    }
+    if !skim {
+        if !card.change_was.is_empty() {
+            body = body.push(before_after(tr!("Was"), &card.change_was, callbacks, font));
         }
-        if !card.change_why.is_empty() {
-            change = change.push(long_text(
-                reflow(&card.change_why),
-                &format!("{key}:change"),
-                states,
-                callbacks.expand,
+        if !card.change_now.is_empty() {
+            body = body.push(before_after(tr!("Now"), &card.change_now, callbacks, font));
+        }
+        // Notes from before changes had a before and after: the change's
+        // Why stands in, cut short
+        if !open
+            && card.change_was.is_empty()
+            && card.change_now.is_empty()
+            && !card.change_why.is_empty()
+        {
+            body = body.push(rich(
+                &shorten(&reflow(&card.change_why), SHORT_TEXT),
+                font.size,
+                font.font,
                 false,
+                callbacks.jump,
+            ));
+        }
+    }
+
+    if open {
+        if !card.change_check.is_empty() {
+            body = body.push(labeled(
+                tr!("Check"),
+                rich(
+                    &reflow(&card.change_check),
+                    font.size,
+                    font.font,
+                    false,
+                    callbacks.jump,
+                ),
                 font,
             ));
         }
-        if !card.change_justification.is_empty() {
-            change = change.push(justification(
-                &card.change_justification,
-                &format!("{key}:change-justification"),
-                states,
-                callbacks.expand,
+        if has_change(card) {
+            if !card.change_why.is_empty() {
+                body = body.push(labeled(
+                    tr!("Why"),
+                    long_text(
+                        reflow(&card.change_why),
+                        &format!("{key}:change"),
+                        states,
+                        callbacks,
+                        font,
+                    ),
+                    font,
+                ));
+            }
+            if !card.change_justification.is_empty() {
+                body = body.push(labeled(
+                    tr!("Justification"),
+                    long_text(
+                        reflow(&card.change_justification),
+                        &format!("{key}:change-justification"),
+                        states,
+                        callbacks,
+                        font,
+                    ),
+                    font,
+                ));
+            }
+            let line = if card.change_model.is_empty() {
+                tr!("This change · inferred by a model").to_string()
+            } else {
+                tr!(
+                    "This change · inferred by {model}",
+                    model = card.change_model
+                )
+            };
+            body = body.push(badge_line(line, font));
+        } else if !card.why.is_empty() {
+            // No explanation of its own: the commit's stands in
+            if let Some(source) = source_line(card, font) {
+                body = body.push(source);
+            }
+            body = body.push(labeled(
+                tr!("Why"),
+                long_text(
+                    reflow(&card.why),
+                    &format!("{key}:why"),
+                    states,
+                    callbacks,
+                    font,
+                ),
                 font,
             ));
+            if !card.justification.is_empty() {
+                body = body.push(labeled(
+                    tr!("Justification"),
+                    long_text(
+                        reflow(&card.justification),
+                        &format!("{key}:justification"),
+                        states,
+                        callbacks,
+                        font,
+                    ),
+                    font,
+                ));
+            }
         }
-        body = body.push(change);
+        if let Some(people) = people_line(card, now, font) {
+            body = body.push(people);
+        }
+        for link in build_links(card, callbacks, font) {
+            body = body.push(link);
+        }
     }
 
     let busy = states.busy.contains(key);
@@ -528,24 +846,49 @@ pub fn card_view<'a, M: Clone + 'a>(
             },
         ));
     }
-    for build in &card.builds {
+
+    // What opening the card shows
+    let mut more: Vec<String> = Vec::new();
+    if skim && (!card.change_was.is_empty() || !card.change_now.is_empty()) {
+        more.push(tr!("Was/Now").to_string());
+    }
+    if !card.change_check.is_empty() {
+        more.push(tr!("Check").to_string());
+    }
+    if !card.change_why.is_empty() || !card.why.is_empty() {
+        more.push(tr!("Why").to_string());
+    }
+    if card.kind == CardKind::Commit {
+        more.push(tr!("Details").to_string());
+    }
+    if open || !more.is_empty() {
+        let label = if open {
+            format!("▾ {}", tr!("Less"))
+        } else {
+            format!("▸ {}", more.join(" · "))
+        };
         body = body.push(
-            button(
-                text(tr!(
-                    "Build {name}",
-                    name = build.strip_suffix(".md").unwrap_or(build)
-                ))
-                .size(font.smaller(1.0))
-                .font(font.font),
-            )
-            .padding(0)
-            .style(link_button)
-            .on_press((callbacks.build)(build.clone())),
+            button(text(label).size(font.smaller(1.0)).font(font.font))
+                .padding(0)
+                .style(toggle_button)
+                .on_press((callbacks.expand)(open_key(key))),
         );
     }
 
+    framed(card, body, states.hovered.as_deref() == Some(key))
+        .on_enter((callbacks.hover)(Some(card.key.clone())))
+        .on_exit((callbacks.hover)(None))
+        .on_press((callbacks.expand)(open_key(key)))
+        .into()
+}
+
+/// `body` in a card with the commit's color at its left edge.
+fn framed<'a, M: 'a>(
+    card: &Card,
+    body: iced::widget::Column<'a, M>,
+    hovered: bool,
+) -> iced::widget::MouseArea<'a, M> {
     let color = card.clone();
-    let hovered = states.hovered.as_deref() == Some(key);
     let edge = container(space::vertical())
         .width(4)
         .height(Length::Fill)
@@ -583,29 +926,157 @@ pub fn card_view<'a, M: Clone + 'a>(
         }
     });
     mouse_area(container(boxed).padding([0, 6]))
-        .on_enter((callbacks.hover)(Some(card.key.clone())))
-        .on_exit((callbacks.hover)(None))
-        .into()
 }
 
-/// Why the change is the right one, under its Why: a small label and the
-/// text, cut short like the Why until the card is expanded.
-fn justification<'a, M: Clone + 'a>(
-    body: &str,
-    key: &str,
-    states: &CardStates,
-    on_expand: fn(String) -> M,
+/// The commits of the file's cards, once each and oldest first, above the
+/// cards: what each did, and opened, why, by whom and the builds that cover
+/// it. None when no card has a commit.
+pub fn commit_summary<'a, M: Clone + 'a>(
+    cards: &'a [Card],
+    states: &'a CardStates,
+    callbacks: Callbacks<M>,
+    now: f64,
+    font: CardFont,
+) -> Option<Element<'a, M>> {
+    let mut commits: Vec<&Card> = Vec::new();
+    for card in cards {
+        if card.kind == CardKind::Commit
+            && card.sha.is_some()
+            && !commits.iter().any(|c| c.sha == card.sha)
+        {
+            commits.push(card);
+        }
+    }
+    if commits.is_empty() {
+        return None;
+    }
+    commits.sort_by_key(|card| card.color_index);
+    let all = states.expanded.contains(ALL_COMMITS_KEY);
+    let shown = if all { commits.len() } else { SUMMARY_COMMITS };
+    let mut list = column![].spacing(4).width(Length::Fill);
+    for card in commits.iter().take(shown) {
+        list = list.push(commit_row(card, states, callbacks, now, font));
+    }
+    if commits.len() > SUMMARY_COMMITS {
+        let label = if all {
+            tr!("Fewer commits").to_string()
+        } else {
+            tr!(
+                "{count} more commits",
+                count = commits.len() - SUMMARY_COMMITS
+            )
+        };
+        list = list.push(
+            button(text(label).size(font.smaller(1.0)).font(font.font))
+                .padding(0)
+                .style(link_button)
+                .on_press((callbacks.expand)(ALL_COMMITS_KEY.to_string())),
+        );
+    }
+    Some(
+        column![
+            container(list).padding([4, 8]).width(Length::Fill),
+            ui::separator(false),
+        ]
+        .into(),
+    )
+}
+
+/// One commit of the summary: its SHA and What; opened, its Why,
+/// Justification, people and builds.
+fn commit_row<'a, M: Clone + 'a>(
+    card: &'a Card,
+    states: &'a CardStates,
+    callbacks: Callbacks<M>,
+    now: f64,
     font: CardFont,
 ) -> Element<'a, M> {
-    column![
-        text(tr!("Justification"))
-            .size(font.smaller(2.0))
-            .font(font.font)
-            .style(ui::dim_text),
-        long_text(reflow(body), key, states, on_expand, false, font),
+    let sha = card.sha.clone().unwrap_or_default();
+    let key = commit_key(&sha);
+    let opened = states.expanded.contains(&key);
+    let what = button(
+        row![
+            ellipsized(card.what.as_str(), Mode::End)
+                .size(font.smaller(1.0))
+                .font(font.bold())
+                .width(Length::Fill),
+            text(if opened { "▾" } else { "▸" })
+                .size(font.smaller(2.0))
+                .style(ui::dim_text),
+        ]
+        .spacing(4)
+        .align_y(iced::Center),
+    )
+    .padding(0)
+    .width(Length::Fill)
+    .style(ui::flat_button)
+    .on_press((callbacks.expand)(key.clone()));
+    let mut details = column![
+        row![origin(card, callbacks, font), what]
+            .spacing(4)
+            .align_y(iced::Center)
     ]
-    .spacing(1)
-    .into()
+    .spacing(3)
+    .width(Length::Fill);
+    if opened {
+        if let Some(source) = source_line(card, font) {
+            details = details.push(source);
+        }
+        if card.what.chars().count() > 40 {
+            details = details.push(rich(
+                &card.what,
+                font.size,
+                font.font,
+                false,
+                callbacks.jump,
+            ));
+        }
+        if !card.why.is_empty() {
+            details = details.push(labeled(
+                tr!("Why"),
+                long_text(
+                    reflow(&card.why),
+                    &format!("{key}:why"),
+                    states,
+                    callbacks,
+                    font,
+                ),
+                font,
+            ));
+        }
+        if !card.justification.is_empty() {
+            details = details.push(labeled(
+                tr!("Justification"),
+                long_text(
+                    reflow(&card.justification),
+                    &format!("{key}:justification"),
+                    states,
+                    callbacks,
+                    font,
+                ),
+                font,
+            ));
+        }
+        if let Some(people) = people_line(card, now, font) {
+            details = details.push(people);
+        }
+        for link in build_links(card, callbacks, font) {
+            details = details.push(link);
+        }
+    }
+    let color = card.clone();
+    let edge = container(space::vertical())
+        .width(3)
+        .height(Length::Fill)
+        .style(move |theme: &Theme| container::Style {
+            background: Some(Background::Color(card_color(
+                &color,
+                theme.extended_palette().background.base.text,
+            ))),
+            border: Border::default().rounded(2),
+            ..container::Style::default()
+        });
+    row![edge, details].spacing(6).into()
 }
 
 fn badge_line<'a, M: 'a>(label: String, font: CardFont) -> Element<'a, M> {
@@ -639,23 +1110,30 @@ fn mix(a: Color, b: Color, t: f32) -> Color {
 
 /// Lays out cards at the tops they want, pushed down to clear each other,
 /// clipped to its bounds. Takes all the space it gets and never asks for
-/// height: the cards scroll with the panes.
+/// height: the cards scroll with the panes. An optional header stays at the
+/// top, over the cards scrolling past it.
 pub struct CardColumn<'a, M> {
+    /// The header first, if any, then the cards
     children: Vec<Element<'a, M>>,
+    /// One per card
     wanted: Vec<f32>,
     gap: f32,
+    header: bool,
 }
 
 /// Cards wanting to be at `wanted` (one per card), plus an optional
-/// placeholder shown at the top.
+/// placeholder shown at the top and an optional header pinned there.
 pub fn card_column<'a, M: 'a>(
     cards: Vec<Element<'a, M>>,
     wanted: Vec<f32>,
     placeholder: Option<Element<'a, M>>,
+    header: Option<Element<'a, M>>,
 ) -> CardColumn<'a, M> {
-    let mut children = cards;
     let mut wanted = wanted;
-    wanted.resize(children.len(), 0.0);
+    wanted.resize(cards.len(), 0.0);
+    let has_header = header.is_some();
+    let mut children: Vec<Element<'a, M>> = header.into_iter().collect();
+    children.extend(cards);
     if let Some(p) = placeholder {
         children.push(p);
         wanted.push(24.0);
@@ -664,6 +1142,7 @@ pub fn card_column<'a, M: 'a>(
         children,
         wanted,
         gap: CARD_GAP,
+        header: has_header,
     }
 }
 
@@ -676,6 +1155,32 @@ impl<'a, M: 'a> CardColumn<'a, M> {
         } else {
             mouse::Cursor::Unavailable
         }
+    }
+
+    /// The column below its header: where cards can be seen and clicked.
+    fn card_area(&self, layout: Layout<'_>) -> Rectangle {
+        let bounds = layout.bounds();
+        let header = match (self.header, layout.children().next()) {
+            (true, Some(header)) => header.bounds().height.min(bounds.height),
+            _ => 0.0,
+        };
+        Rectangle {
+            y: bounds.y + header,
+            height: bounds.height - header,
+            ..bounds
+        }
+    }
+
+    /// The area each child gets the cursor in.
+    fn areas(&self, layout: Layout<'_>) -> impl Iterator<Item = Rectangle> + use<'a, M> {
+        let bounds = layout.bounds();
+        let cards = self.card_area(layout);
+        let header = self.header;
+        (0..self.children.len()).map(
+            move |index| {
+                if header && index == 0 { bounds } else { cards }
+            },
+        )
     }
 }
 
@@ -713,9 +1218,13 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for CardColumn<'a, M> {
             .zip(&mut tree.children)
             .map(|(child, state)| child.as_widget_mut().layout(state, renderer, &child_limits))
             .collect();
-        let heights: Vec<f32> = nodes.iter().map(|n| n.size().height).collect();
+        let first_card = usize::from(self.header);
+        let heights: Vec<f32> = nodes[first_card..]
+            .iter()
+            .map(|n| n.size().height)
+            .collect();
         let tops = place_cards(&self.wanted, &heights, self.gap);
-        for (node, top) in nodes.iter_mut().zip(tops) {
+        for (node, top) in nodes[first_card..].iter_mut().zip(tops) {
             node.move_to_mut((0.0, top));
         }
         layout::Node::with_children(size, nodes)
@@ -754,15 +1263,16 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for CardColumn<'a, M> {
         shell: &mut Shell<'_, M>,
         viewport: &Rectangle,
     ) {
-        let bounds = layout.bounds();
-        let cursor = Self::cursor_in(bounds, cursor);
-        let viewport = bounds.intersection(viewport).unwrap_or(bounds);
-        for ((child, state), layout) in self
+        let areas: Vec<Rectangle> = self.areas(layout).collect();
+        for (((child, state), layout), area) in self
             .children
             .iter_mut()
             .zip(&mut tree.children)
             .zip(layout.children())
+            .zip(areas)
         {
+            let cursor = Self::cursor_in(area, cursor);
+            let viewport = area.intersection(viewport).unwrap_or(area);
             child.as_widget_mut().update(
                 state, event, layout, cursor, renderer, clipboard, shell, &viewport,
             );
@@ -777,16 +1287,19 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for CardColumn<'a, M> {
         viewport: &Rectangle,
         renderer: &Renderer,
     ) -> mouse::Interaction {
-        let bounds = layout.bounds();
-        let cursor = Self::cursor_in(bounds, cursor);
         self.children
             .iter()
             .zip(&tree.children)
             .zip(layout.children())
-            .map(|((child, state), layout)| {
-                child
-                    .as_widget()
-                    .mouse_interaction(state, layout, cursor, viewport, renderer)
+            .zip(self.areas(layout))
+            .map(|(((child, state), layout), area)| {
+                child.as_widget().mouse_interaction(
+                    state,
+                    layout,
+                    Self::cursor_in(area, cursor),
+                    viewport,
+                    renderer,
+                )
             })
             .max()
             .unwrap_or_default()
@@ -802,25 +1315,62 @@ impl<'a, M: 'a> Widget<M, Theme, Renderer> for CardColumn<'a, M> {
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
+        use iced::advanced::Renderer as _;
         let bounds = layout.bounds();
         let Some(clip) = bounds.intersection(viewport) else {
             return;
         };
-        let cursor = Self::cursor_in(bounds, cursor);
-        use iced::advanced::Renderer as _;
-        renderer.with_layer(clip, |renderer| {
-            for ((child, state), layout) in self
-                .children
-                .iter()
-                .zip(&tree.children)
-                .zip(layout.children())
-                .filter(|(_, l)| l.bounds().intersects(&clip))
-            {
-                child
-                    .as_widget()
-                    .draw(state, renderer, theme, style, layout, cursor, &clip);
-            }
-        });
+        let first_card = usize::from(self.header);
+        if let Some(cards_clip) = self.card_area(layout).intersection(&clip) {
+            let cursor = Self::cursor_in(cards_clip, cursor);
+            renderer.with_layer(cards_clip, |renderer| {
+                for ((child, state), layout) in self
+                    .children
+                    .iter()
+                    .zip(&tree.children)
+                    .zip(layout.children())
+                    .skip(first_card)
+                    .filter(|(_, l)| l.bounds().intersects(&cards_clip))
+                {
+                    child.as_widget().draw(
+                        state,
+                        renderer,
+                        theme,
+                        style,
+                        layout,
+                        cursor,
+                        &cards_clip,
+                    );
+                }
+            });
+        }
+        if let (true, Some(header), Some(state), Some(header_layout)) = (
+            self.header,
+            self.children.first(),
+            tree.children.first(),
+            layout.children().next(),
+        ) {
+            let cursor = Self::cursor_in(bounds, cursor);
+            renderer.with_layer(clip, |renderer| {
+                // Cards scroll under the header: it hides them
+                renderer.fill_quad(
+                    renderer::Quad {
+                        bounds: header_layout.bounds(),
+                        ..renderer::Quad::default()
+                    },
+                    theme.extended_palette().background.weak.color,
+                );
+                header.as_widget().draw(
+                    state,
+                    renderer,
+                    theme,
+                    style,
+                    header_layout,
+                    cursor,
+                    &clip,
+                );
+            });
+        }
     }
 
     fn overlay<'b>(
@@ -932,6 +1482,48 @@ mod tests {
         assert!(date.contains(" Jul 2026 "), "{date}");
         assert_eq!(date.len(), "Wed 15 Jul 2026 12:00:00".len());
         assert_eq!(local_date(f64::NAN), None);
+    }
+
+    #[test]
+    fn cards_are_numbered_in_reading_order_by_commit() {
+        let ordered = |kind, color_index, order| Card {
+            kind,
+            color_index,
+            change_order: order,
+            ..Default::default()
+        };
+        let cards = [
+            ordered(CardKind::Commit, 1, Some(1)),
+            ordered(CardKind::Commit, 0, Some(2)),
+            ordered(CardKind::Staged, -1, Some(1)),
+            ordered(CardKind::Commit, 0, None),
+            ordered(CardKind::Commit, 0, Some(1)),
+        ];
+        assert_eq!(
+            reading_order(&cards),
+            [Some((3, 4)), Some((2, 4)), Some((4, 4)), None, Some((1, 4))]
+        );
+        // One ordered card is no order to read in
+        assert_eq!(reading_order(&cards[..1]), [None]);
+    }
+
+    #[test]
+    fn names_in_backticks_are_code() {
+        let code = |s: &str| (s.to_string(), true);
+        let plain = |s: &str| (s.to_string(), false);
+        assert_eq!(
+            split_code("Calls `run` from `main`."),
+            [
+                plain("Calls "),
+                code("run"),
+                plain(" from "),
+                code("main"),
+                plain(".")
+            ]
+        );
+        assert_eq!(split_code("`a` b `c"), [code("a"), plain(" b `c")]);
+        assert_eq!(split_code("no code"), [plain("no code")]);
+        assert!(split_code("``").is_empty());
     }
 
     #[test]

@@ -790,6 +790,23 @@ impl FileDiff {
         chunks::pane_chunk(merged, pane).map(|c| c.start_a)
     }
 
+    /// Where `name` (a name from the code, as an explanation quotes it) is
+    /// defined, else first used: the pane, the last one first, and its
+    /// 0-based line.
+    pub fn find_name(&self, name: &str) -> Option<(usize, usize)> {
+        let name = name.trim().trim_end_matches("()");
+        // `Type::method` may only be found by its last part
+        let short = name.rsplit("::").next().unwrap_or(name);
+        let panes: Vec<usize> = (0..self.panes.len()).rev().collect();
+        [name, short].into_iter().find_map(|needle| {
+            panes.iter().find_map(|&pane| {
+                let buffer = &self.panes[pane].buffer;
+                let lines = (0..buffer.line_count()).map(|i| buffer.line(i));
+                name_line(lines, needle).map(|line| (pane, line))
+            })
+        })
+    }
+
     /// The panes' text font and size in logical pixels, zoom included.
     pub fn text_font(&self) -> (Font, f32) {
         (self.font, self.metrics.text_size)
@@ -1335,8 +1352,47 @@ pub fn tab_title(labels: &[String], modified: &[bool], tab_label: Option<&str>) 
     names.join(" — ")
 }
 
+/// The 0-based line where `name` is defined (after a keyword such as `fn`,
+/// `struct` or `def`), else the first line that has it as a whole word.
+pub fn name_line<'a>(lines: impl Iterator<Item = &'a str>, name: &str) -> Option<usize> {
+    if name.is_empty() {
+        return None;
+    }
+    let name = regex::escape(name);
+    let word = regex::Regex::new(&format!(r"(?:^|[^\w]){name}(?:$|[^\w])")).ok()?;
+    let definition = regex::Regex::new(&format!(
+        r"\b(?:fn|struct|enum|trait|type|union|mod|const|static|let|impl|class|def|function|interface|var)\s+(?:mut\s+)?{name}(?:$|[^\w])"
+    ))
+    .ok()?;
+    let mut first = None;
+    for (index, line) in lines.enumerate() {
+        if definition.is_match(line) {
+            return Some(index);
+        }
+        if first.is_none() && word.is_match(line) {
+            first = Some(index);
+        }
+    }
+    first
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn names_are_found_where_they_are_defined() {
+        let lines = [
+            "use crate::run;",
+            "fn main() { run(); }",
+            "pub fn run() {}",
+            "let running = 1;",
+        ];
+        assert_eq!(name_line(lines.into_iter(), "run"), Some(2));
+        assert_eq!(name_line(lines.into_iter(), "main"), Some(1));
+        assert_eq!(name_line(lines.into_iter(), "crate::run"), Some(0));
+        assert_eq!(name_line(lines.into_iter(), "runn"), None);
+        assert_eq!(name_line(lines.into_iter(), ""), None);
+    }
+
     use super::*;
 
     #[test]

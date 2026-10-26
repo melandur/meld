@@ -636,6 +636,89 @@ pub struct ChangeExplanation {
     /// Why this change is the right one; None in notes written before
     /// justifications were asked for
     pub justification: Option<String>,
+    pub guide: ChangeGuide,
+}
+
+/// What kind of change a change is, so that a reader knows how closely to
+/// read it
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ChangeKind {
+    /// Changes what the code does
+    Behavior,
+    /// Fixes a bug
+    Fix,
+    /// Restructures code without changing what it does
+    Refactor,
+    /// Renames or moves something, nothing else
+    Rename,
+    /// Formatting, imports, generated or other changes that need no thought
+    Mechanical,
+    /// Tests only
+    Test,
+}
+
+impl ChangeKind {
+    pub const ALL: [Self; 6] = [
+        Self::Behavior,
+        Self::Fix,
+        Self::Refactor,
+        Self::Rename,
+        Self::Mechanical,
+        Self::Test,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Behavior => "behavior",
+            Self::Fix => "fix",
+            Self::Refactor => "refactor",
+            Self::Rename => "rename",
+            Self::Mechanical => "mechanical",
+            Self::Test => "test",
+        }
+    }
+
+    /// The kind named `name`, ignoring case
+    pub fn parse(name: &str) -> Option<Self> {
+        let name = name.trim();
+        Self::ALL
+            .into_iter()
+            .find(|kind| kind.as_str().eq_ignore_ascii_case(name))
+    }
+
+    /// Changes a reader can skip over: what they do is clear from their kind
+    pub fn skimmable(self) -> bool {
+        matches!(self, Self::Rename | Self::Mechanical | Self::Test)
+    }
+}
+
+impl std::fmt::Display for ChangeKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// What helps a reader through one change fast: its kind, where to read it
+/// in the commit, what the code did before and does now, and what to check.
+/// All empty in notes written before they were asked for.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ChangeGuide {
+    pub kind: Option<ChangeKind>,
+    /// Where to read the change among the commit's changes to understand
+    /// the commit fastest; 1 first
+    pub order: Option<u32>,
+    /// What the code did before the change
+    pub was: Option<String>,
+    /// What it does after
+    pub now: Option<String>,
+    /// What a reviewer should verify about the change
+    pub check: Option<String>,
+}
+
+impl ChangeGuide {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

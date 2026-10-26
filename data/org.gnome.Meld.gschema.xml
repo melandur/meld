@@ -318,7 +318,7 @@
       <description>If true, Git Compare offers Explain with Claude for changes that have no recorded reason.</description>
     </key>
     <key name="ailens-infer-model" type="s">
-      <default>"claude-sonnet-5-5"</default>
+      <default>"claude-opus-5-5"</default>
       <summary>Model that explains commits</summary>
       <description>The model passed to claude -p when inferring why a commit or change was made.</description>
     </key>

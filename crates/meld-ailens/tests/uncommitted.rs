@@ -67,6 +67,7 @@ fn explained() -> HunkExplanation {
         why: "Louder.".into(),
         justification: None,
         model: "claude-sonnet-5-5".into(),
+        guide: Default::default(),
     }
 }
 
@@ -145,6 +146,7 @@ fn place_puts_explanations_where_the_hunks_are_now() {
             why: "Louder.".into(),
             justification: None,
             model: "claude-sonnet-5-5".into(),
+            guide: Default::default(),
         }]
     );
     // Ready for find_change_explanations, like a commit's changes
@@ -199,6 +201,7 @@ fn remember_keeps_a_models_answers_by_hunk_position() {
             what: "Shouts nine.".into(),
             why: "Louder.".into(),
             justification: None,
+            guide: Default::default(),
         },
         // Matches no hunk of the diff
         ChangeExplanation {
@@ -206,6 +209,7 @@ fn remember_keeps_a_models_answers_by_hunk_position() {
             what: "Gone".into(),
             why: "Stale.".into(),
             justification: None,
+            guide: Default::default(),
         },
     ];
     assert_eq!(cache.remember(Staged, &diff(), &changes, "claude-x"), 1);
@@ -216,6 +220,7 @@ fn remember_keeps_a_models_answers_by_hunk_position() {
             why: "Louder.".into(),
             justification: None,
             model: "claude-x".into(),
+            guide: Default::default(),
         })
     );
     assert!(!cache.is_explained(Staged, &diff()));
@@ -228,6 +233,7 @@ fn remember_keeps_a_models_answers_by_hunk_position() {
             what: "w".into(),
             why: "y".into(),
             justification: None,
+            guide: Default::default(),
         }],
         "claude-x",
     );
@@ -243,6 +249,7 @@ fn setting_again_replaces_and_refreshes() {
         why: "1".into(),
         justification: None,
         model: "m".into(),
+        guide: Default::default(),
     };
     cache.set(Staged, &diff(), &top(), first.clone());
     cache.set(Staged, &diff(), &bottom(), first.clone());
@@ -339,6 +346,7 @@ fn justifications_are_kept_and_placed() {
         what: "Shouts nine.".into(),
         why: "Louder.".into(),
         justification: Some("Nothing else is loud enough.".into()),
+        guide: Default::default(),
     }];
     assert_eq!(cache.remember(Staged, &diff(), &changes, "claude-x"), 1);
     assert_eq!(
@@ -374,6 +382,7 @@ fn changes_git_joined_into_one_hunk_are_explained_apart() {
         what: what.into(),
         why: format!("Why {what}"),
         justification: None,
+        guide: Default::default(),
     };
 
     let cache = UncommittedExplanations::default();

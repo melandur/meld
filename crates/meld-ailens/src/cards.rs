@@ -5,7 +5,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::models::{ExplanationSource, LineRange, Side};
+use crate::models::{ChangeKind, ExplanationSource, LineRange, Side};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum CardKind {
@@ -62,6 +62,15 @@ pub struct Card {
     pub change_why: String,
     /// Why this change is the right one; empty when not given
     pub change_justification: String,
+    /// The change's kind, reading order, before and after, and what to
+    /// check; empty in notes written before they were asked for
+    pub change_kind: Option<ChangeKind>,
+    /// Where to read the change among its commit's (or layer's) changes;
+    /// 1 first
+    pub change_order: Option<u32>,
+    pub change_was: String,
+    pub change_now: String,
+    pub change_check: String,
     pub change_model: String,
     /// The explain button, if any
     pub explain: Option<ExplainAction>,

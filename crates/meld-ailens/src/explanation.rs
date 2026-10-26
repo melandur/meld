@@ -11,8 +11,8 @@ use std::sync::LazyLock;
 use regex::Regex;
 
 use crate::models::{
-    ChangeExplanation, CommitExplanation, CommitHunk, ExplanationSource, GitCommit, LineOrigin,
-    Side,
+    ChangeExplanation, ChangeGuide, ChangeKind, CommitExplanation, CommitHunk, ExplanationSource,
+    GitCommit, LineOrigin, Side,
 };
 use crate::uncommitted::HunkChange;
 
@@ -33,7 +33,7 @@ const CHANGE_UNIT_BLOCK: &str = "block";
 static CHANGE_LINE: LazyLock<Regex> =
     LazyLock::new(|| regex(r"\AChange: -([0-9]+)(?:,([0-9]+))? \+([0-9]+)(?:,([0-9]+))? (.+)\z"));
 static CHANGE_FIELD: LazyLock<Regex> =
-    LazyLock::new(|| regex(r"\A(Change-From|What|Why):[ \t]*(.*)\z"));
+    LazyLock::new(|| regex(r"\A(Change-From|Kind|Order|What|Was|Now|Check|Why):[ \t]*(.*)\z"));
 static JUSTIFICATION_LINE: LazyLock<Regex> =
     LazyLock::new(|| regex(r"(?i)\AJustification:[ \t]*(.*)\z"));
 static TRAILER_LINE: LazyLock<Regex> = LazyLock::new(|| regex(r"\A[A-Za-z0-9][A-Za-z0-9_-]*:\s"));
@@ -269,6 +269,10 @@ impl ParsedNote {
 /// `Why:`, and optionally `Justification:`, up to the next `Change:`. Notes
 /// written before justifications were asked for have none: they read as
 /// before, with every justification None.
+///
+/// Before `Why:` a change may also have the one-line fields of its
+/// [`ChangeGuide`]: `Kind:`, `Order:`, `Was:`, `Now:` and `Check:`. Readers
+/// that don't know them skip them, as they skip any line before `Why:`.
 pub fn parse_note(text: &str) -> ParsedNote {
     let normalized = normalize(text);
     let all_lines: Vec<&str> = normalized.trim().split('\n').collect();
@@ -282,6 +286,7 @@ pub fn parse_note(text: &str) -> ParsedNote {
     // The change being read: its header fields, What, and Why lines so far
     let mut hunk: Option<CommitHunk> = None;
     let mut what = String::new();
+    let mut guide = ChangeGuide::default();
     let mut why: Option<Vec<&str>> = None;
     let mut justification: Option<Vec<&str>> = None;
 
@@ -289,6 +294,7 @@ pub fn parse_note(text: &str) -> ParsedNote {
         note: &mut ParsedNote,
         hunk: &Option<CommitHunk>,
         what: &str,
+        guide: &ChangeGuide,
         why: &Option<Vec<&str>>,
         justification: &Option<Vec<&str>>,
     ) {
@@ -306,6 +312,7 @@ pub fn parse_note(text: &str) -> ParsedNote {
                     what: what.to_string(),
                     why: text,
                     justification: some_if_nonempty(joined(justification)),
+                    guide: guide.clone(),
                 });
             }
         }
@@ -326,7 +333,7 @@ pub fn parse_note(text: &str) -> ParsedNote {
         }
 
         if let Some(captures) = CHANGE_LINE.captures(line) {
-            finish(&mut note, &hunk, &what, &why, &justification);
+            finish(&mut note, &hunk, &what, &guide, &why, &justification);
             let number = |index: usize| -> Option<usize> {
                 captures.get(index).map(|m| m.as_str().parse().unwrap_or(0))
             };
@@ -339,6 +346,7 @@ pub fn parse_note(text: &str) -> ParsedNote {
                 original_path: None,
             });
             what.clear();
+            guide = ChangeGuide::default();
             why = None;
             justification = None;
             continue;
@@ -363,13 +371,19 @@ pub fn parse_note(text: &str) -> ParsedNote {
             continue;
         };
         let value = captures.get(2).map_or("", |m| m.as_str());
+        let text = || some_if_nonempty(value.trim().to_string());
         match &captures[1] {
             "Change-From" => current.original_path = Some(value.to_string()),
+            "Kind" => guide.kind = ChangeKind::parse(value),
+            "Order" => guide.order = value.trim().parse().ok().filter(|&order| order > 0),
             "What" => what = value.trim().to_string(),
+            "Was" => guide.was = text(),
+            "Now" => guide.now = text(),
+            "Check" => guide.check = text(),
             _ => why = Some(vec![value]),
         }
     }
-    finish(&mut note, &hunk, &what, &why, &justification);
+    finish(&mut note, &hunk, &what, &guide, &why, &justification);
     note
 }
 
@@ -493,7 +507,23 @@ pub fn compose_note(head: &str, model: &str, changes: &[ChangeExplanation]) -> S
         if let Some(original) = hunk.original_path.as_ref().filter(|o| **o != hunk.path) {
             lines.push(format!("Change-From: {original}"));
         }
+        let guide = &change.guide;
+        if let Some(kind) = guide.kind {
+            lines.push(format!("Kind: {kind}"));
+        }
+        if let Some(order) = guide.order {
+            lines.push(format!("Order: {order}"));
+        }
         lines.push(format!("What: {}", change.what.replace('\n', " ")));
+        for (label, value) in [
+            ("Was", &guide.was),
+            ("Now", &guide.now),
+            ("Check", &guide.check),
+        ] {
+            if let Some(value) = value.as_deref().map(str::trim).filter(|v| !v.is_empty()) {
+                lines.push(format!("{label}: {}", value.replace('\n', " ")));
+            }
+        }
         lines.push(format!(
             "Why: {}",
             escape_lines(change.why.trim(), true, true)

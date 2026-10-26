@@ -16,15 +16,42 @@ use crate::error::{ClaudeErrorReason, Error, Result};
 use crate::explanation::{MessageFormat, compose_note, explain_commit, format_note, parse_note};
 use crate::ignore::{create_ignore_rules, is_ignored};
 use crate::models::{
-    ChangeExplanation, CommitExplanation, CommitHunk, ExplanationSource, GitCommit, GitDiffHunk,
-    GitFileChange, GitFileDiff, GitFileStatus, UncommittedLayer,
+    ChangeExplanation, ChangeGuide, ChangeKind, CommitExplanation, CommitHunk, ExplanationSource,
+    GitCommit, GitDiffHunk, GitFileChange, GitFileDiff, GitFileStatus, UncommittedLayer,
 };
 use crate::process::CancelToken;
 
 pub const MAX_PATCH_CHARS_PER_FILE: usize = 12_000;
 pub const MAX_PATCH_CHARS: usize = 60_000;
 
-pub const SYSTEM_PROMPT: &str = r#"You explain git commits to engineers reviewing why code changed.
+/// What the prompts ask of every explained change, in the commit and the
+/// uncommitted prompts alike
+macro_rules! change_fields_prompt {
+    () => {
+        r#"  - "kind": what kind of change it is, so the reader knows how closely to read it: "behavior" (changes what the
+    code does), "fix" (fixes a bug), "refactor" (same behavior, new structure), "rename" (renames or moves, nothing
+    else), "mechanical" (formatting, imports, generated or other changes that need no thought) or "test" (tests only).
+  - "order": where to read the change to understand all the changes fastest, 1 first: definitions and the core of
+    the change before their callers, mechanical changes last. Every change gets its own number.
+  - "what": a headline of at most eight words, starting with a verb, saying what the change does.
+  - "was": what the code did before the change, in a few words; empty when the change adds something new.
+  - "now": what the code does after the change, in a few words, set against "was".
+  - "why": one or two plain sentences on why that change is needed: its part in the whole, specific to it.
+    Don't repeat the overall reason.
+  - "check": one plain sentence on what a reviewer should verify about the change: an edge case, a caller, an
+    assumption it makes; empty for rename, mechanical and test changes that need no checking.
+  - "justification": one to three plain sentences on why that change is the right one: the evidence for it in the
+    diff and the code around it, and which alternatives or simpler fixes it rules out.
+A justification uses only the evidence you are given; if that evidence is thin, say so plainly instead of inventing
+support.
+Write names from the code (functions, types, variables, fields, files) in backticks, exactly as the code spells
+them. If a reason is not evident, give the most likely one and say that it is a guess. No other markdown, no
+headings, no lists."#
+    };
+}
+
+pub const SYSTEM_PROMPT: &str = concat!(
+    r#"You explain git commits to engineers who want to understand the changed code as fast as possible.
 The diff's hunks are numbered: each hunk header starts with "[change N]".
 Reply with JSON matching the schema:
 - "what": one plain sentence saying what the commit changed.
@@ -32,27 +59,20 @@ Reply with JSON matching the schema:
 - "justification": one to three plain sentences on why this is the right change: the evidence for it in the diff,
   the commit message and the code around it, and which alternatives or simpler fixes it rules out.
 - "changes": one entry for every numbered change in the diff, with its number as "change", and
-  - "what": one short plain sentence saying what that change does.
-  - "why": one or two plain sentences on why that change is needed: its part in the commit, specific to it.
-    Don't repeat the commit's overall reason.
-  - "justification": one to three plain sentences on why that change is the right one: the evidence for it in the
-    diff and the code around it, and which alternatives or simpler fixes it rules out.
-A justification uses only the evidence you are given; if that evidence is thin, say so plainly instead of inventing
-support.
-Base the answer only on the commit message and diff you are given. If a reason is not evident, give the most
-likely one and say that it is a guess. No markdown, no headings, no lists."#;
+"#,
+    change_fields_prompt!(),
+    "\nBase the answer only on the commit message and diff you are given."
+);
 
-pub const UNCOMMITTED_SYSTEM_PROMPT: &str = r#"You explain uncommitted changes to engineers reviewing why code is changing.
+pub const UNCOMMITTED_SYSTEM_PROMPT: &str = concat!(
+    r#"You explain uncommitted changes to engineers who want to understand the changed code as fast as possible.
 The changes are not committed yet, so there is no commit message: base the answer on the diff alone.
 The diff's hunks are numbered: each hunk header starts with "[change N]".
 Reply with JSON matching the schema: "changes" has one entry for every numbered change in the diff, with its
 number as "change", and
-- "what": one short plain sentence saying what that change does.
-- "why": one or two plain sentences on why that change is likely needed, specific to it.
-- "justification": one to three plain sentences on why that change is the right one: the evidence for it in the diff
-  and the code around it, and which alternatives or simpler fixes it rules out. Use only the evidence you are given;
-  if that evidence is thin, say so plainly instead of inventing support.
-If a reason is not evident, give the most likely one and say that it is a guess. No markdown, no headings, no lists."#;
+"#,
+    change_fields_prompt!()
+);
 
 fn changes_schema() -> Value {
     json!({
@@ -61,11 +81,18 @@ fn changes_schema() -> Value {
             "type": "object",
             "properties": {
                 "change": {"type": "integer"},
+                "kind": {"type": "string", "enum": ChangeKind::ALL.map(ChangeKind::as_str)},
+                "order": {"type": "integer"},
                 "what": {"type": "string"},
+                "was": {"type": "string"},
+                "now": {"type": "string"},
                 "why": {"type": "string"},
+                "check": {"type": "string"},
                 "justification": {"type": "string"},
             },
-            "required": ["change", "what", "why", "justification"],
+            "required": [
+                "change", "kind", "order", "what", "was", "now", "why", "check", "justification"
+            ],
             "additionalProperties": false,
         },
     })
@@ -327,12 +354,13 @@ pub fn infer_uncommitted_explanation(
 /// The answer's explanations of numbered hunks, in diff order
 ///
 /// Unknown numbers, repeated numbers and empty explanations are dropped. A
-/// missing or empty justification is None; the change is still kept.
+/// missing or empty justification or guide field is None; the change is
+/// still kept.
 pub fn parse_changes(answer: Option<&Value>, hunks: &[CommitHunk]) -> Vec<ChangeExplanation> {
     let Some(Value::Array(items)) = answer else {
         return Vec::new();
     };
-    let mut by_hunk: HashMap<i64, (String, String, Option<String>)> = HashMap::new();
+    let mut by_hunk: HashMap<i64, (String, String, Option<String>, ChangeGuide)> = HashMap::new();
     for item in items {
         let Some(item) = item.as_object() else {
             continue;
@@ -342,29 +370,41 @@ pub fn parse_changes(answer: Option<&Value>, hunks: &[CommitHunk]) -> Vec<Change
         else {
             continue;
         };
-        let number = match number.as_i64() {
-            Some(number) => number,
-            None => match number.as_f64() {
-                // JSON has no integers of its own; 2.0 is change 2
-                Some(value) if value.fract() == 0.0 && value.is_finite() => value as i64,
-                _ => continue,
-            },
+        let Some(number) = integer(number) else {
+            continue;
         };
         if why.trim().is_empty() || by_hunk.contains_key(&number) {
             continue;
         }
-        let justification = item
-            .get("justification")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|j| !j.is_empty())
-            .map(str::to_string);
+        let text = |key: &str| {
+            item.get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .map(str::to_string)
+        };
+        let guide = ChangeGuide {
+            kind: item
+                .get("kind")
+                .and_then(Value::as_str)
+                .and_then(ChangeKind::parse),
+            order: match item.get("order") {
+                Some(Value::Number(order)) => integer(order)
+                    .and_then(|order| u32::try_from(order).ok())
+                    .filter(|&order| order > 0),
+                _ => None,
+            },
+            was: text("was"),
+            now: text("now"),
+            check: text("check"),
+        };
         by_hunk.insert(
             number,
             (
                 what.trim().to_string(),
                 why.trim().to_string(),
-                justification,
+                text("justification"),
+                guide,
             ),
         );
     }
@@ -373,15 +413,27 @@ pub fn parse_changes(answer: Option<&Value>, hunks: &[CommitHunk]) -> Vec<Change
         .iter()
         .enumerate()
         .filter_map(|(index, hunk)| {
-            let (what, why, justification) = by_hunk.remove(&(index as i64 + 1))?;
+            let (what, why, justification, guide) = by_hunk.remove(&(index as i64 + 1))?;
             Some(ChangeExplanation {
                 hunk: hunk.clone(),
                 what,
                 why,
                 justification,
+                guide,
             })
         })
         .collect()
+}
+
+/// A JSON number as an integer; JSON has no integers of its own, so 2.0 is 2
+fn integer(number: &serde_json::Number) -> Option<i64> {
+    match number.as_i64() {
+        Some(number) => Some(number),
+        None => match number.as_f64() {
+            Some(value) if value.fract() == 0.0 && value.is_finite() => Some(value as i64),
+            _ => None,
+        },
+    }
 }
 
 /// The prompt for [`infer_explanation`], and the hunks it numbers

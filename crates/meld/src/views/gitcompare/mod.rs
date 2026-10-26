@@ -274,6 +274,8 @@ pub enum Message {
     OpenBuild(String),
     HoverCard(Option<String>),
     ExpandCard(String),
+    /// A name from the code in a card was clicked: show where it is.
+    JumpToName(String),
     StartDrag(DragTarget, f32),
     DragMove(f32),
     DragEnd,
@@ -2017,6 +2019,10 @@ impl GitCompare {
                 }
                 Task::none()
             }
+            Message::JumpToName(name) => match self.diff.find_name(&name) {
+                Some((pane, line)) => self.diff.scroll_to_line(pane, line).map(Message::Diff),
+                None => Task::none(),
+            },
             Message::StartDrag(target, origin_x) => {
                 let start_width = match target {
                     DragTarget::FileList => shared.settings.ailens_file_list_width as f32,
@@ -2577,6 +2583,7 @@ impl GitCompare {
             build: Message::OpenBuild,
             hover: Message::HoverCard,
             expand: Message::ExpandCard,
+            jump: Message::JumpToName,
         };
         let cards: &[Card] = match (&self.view, self.diff.is_loading()) {
             (Some(view), false) => &view.cards,
@@ -2585,10 +2592,15 @@ impl GitCompare {
         let now = meld_ailens::time::now_timestamp();
         let (font, size) = self.diff.text_font();
         let font = whycolumn::CardFont { font, size };
+        let reading = whycolumn::reading_order(cards);
         let mut elements: Vec<Element<'_, Message>> = cards
             .iter()
-            .map(|card| whycolumn::card_view(card, &self.cards, callbacks, now, font))
+            .zip(reading)
+            .map(|(card, reading)| {
+                whycolumn::card_view(card, &self.cards, callbacks, now, font, reading)
+            })
             .collect();
+        let summary = whycolumn::commit_summary(cards, &self.cards, callbacks, now, font);
         let panes = [self.diff.pane_geometry(0), self.diff.pane_geometry(1)];
         let mut wanted = whycolumn::wanted_tops(cards, panes);
         // The pull request's comments on this file, beside their lines
@@ -2621,7 +2633,7 @@ impl GitCompare {
             });
         container(column![
             title,
-            whycolumn::card_column(elements, wanted, placeholder)
+            whycolumn::card_column(elements, wanted, placeholder, summary)
         ])
         .width(self.why_width)
         .height(Length::Fill)

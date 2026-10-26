@@ -5,8 +5,8 @@ use meld_ailens::explanation::{
     parse_note,
 };
 use meld_ailens::{
-    ChangeExplanation, CommitExplanation, CommitHunk, ExplanationSource, GitCommit, GitIdentity,
-    GitTrailer, LineOrigin, Side,
+    ChangeExplanation, ChangeGuide, ChangeKind, CommitExplanation, CommitHunk, ExplanationSource,
+    GitCommit, GitIdentity, GitTrailer, LineOrigin, Side,
 };
 
 use ExplanationSource::{Commit, Inferred, Note};
@@ -117,6 +117,7 @@ fn change(c: Ch<'_>) -> ChangeExplanation {
         what: c.what.into(),
         why: c.why.into(),
         justification: None,
+        guide: Default::default(),
     }
 }
 
@@ -525,6 +526,7 @@ fn keeps_the_explanations_of_single_changes_after_the_commits_own() {
                     justification: None,
                     why: "The cache reads from disk.\n\n Change: -1,1 +1,1 x looks like a header."
                         .into(),
+                    guide: Default::default(),
                 },
                 changes[1].clone(),
             ],
@@ -779,6 +781,34 @@ fn a_head_line_shaped_like_a_change_starts_the_tail() {
     let parsed = parse_note("Why: hand note\nChange: -1 +1 a.py\nWhy: Y");
     assert_eq!(parsed.why.as_deref(), Some("hand note"));
     assert_eq!(parsed.changes.len(), 1);
+}
+
+#[test]
+fn a_change_guide_round_trips_before_its_why() {
+    let mut guided = top();
+    guided.why = "Needed.\nKind: not a field in the Why".into();
+    guided.guide = ChangeGuide {
+        kind: Some(ChangeKind::Behavior),
+        order: Some(3),
+        was: Some("one card per hunk".into()),
+        now: Some("one card\nper block".into()),
+        check: Some("Old notes still match.".into()),
+    };
+    let text = compose_note("", "m", &[guided.clone(), bottom()]);
+    assert!(text.contains(
+        "Kind: behavior\nOrder: 3\nWhat: top\nWas: one card per hunk\nNow: one card per block\nCheck: Old notes still match.\nWhy: Needed."
+    ));
+    let parsed = parse_note(&text);
+    guided.guide.now = Some("one card per block".into());
+    assert_eq!(parsed.changes[0], guided);
+    assert!(parsed.changes[1].guide.is_empty());
+}
+
+#[test]
+fn notes_without_a_guide_read_as_before() {
+    let parsed = parse_note("Change-Model: m\nChange: -1 +1 a.py\nWhat: W\nWhy: Y\nKind: fix");
+    assert_eq!(parsed.changes[0].why, "Y\nKind: fix");
+    assert!(parsed.changes[0].guide.is_empty());
 }
 
 // -- find_change_explanations --
