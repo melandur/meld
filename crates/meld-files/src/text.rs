@@ -109,23 +109,6 @@ impl Newlines {
             .copied()
             .unwrap_or_else(NewlineType::native)
     }
-
-    /// Whether more than one style is used
-    pub fn is_mixed(&self) -> bool {
-        self.types.len() > 1
-    }
-
-    /// A description like "UNIX (LF), DOS/Windows (CR-LF)"
-    pub fn label(&self) -> String {
-        if self.types.is_empty() {
-            return self.primary().label().to_string();
-        }
-        self.types
-            .iter()
-            .map(|t| t.label())
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
 }
 
 /// A character encoding plus whether the file has a byte order mark
@@ -217,19 +200,6 @@ pub struct LoadedText {
     pub guessed: bool,
 }
 
-impl LoadedText {
-    /// Whether the text ends with a line terminator
-    pub fn has_trailing_newline(&self) -> bool {
-        self.text.ends_with(['\n', '\r'])
-    }
-
-    /// The text as lines without terminators, as a text buffer with an
-    /// implicit trailing newline sees it (`"a\nb\n"` is `["a", "b"]`)
-    pub fn lines(&self) -> Vec<String> {
-        split_lines(strip_trailing_newline(&self.text))
-    }
-}
-
 /// Remove one trailing line terminator, if any
 pub fn strip_trailing_newline(text: &str) -> &str {
     text.strip_suffix("\r\n")
@@ -263,23 +233,6 @@ pub fn split_lines(text: &str) -> Vec<String> {
     }
     lines.push(text[start..].to_string());
     lines
-}
-
-/// Join lines with a terminator, optionally adding a final one
-pub fn join_lines<S: AsRef<str>>(
-    lines: &[S],
-    newline: NewlineType,
-    trailing_newline: bool,
-) -> String {
-    let mut out = lines
-        .iter()
-        .map(AsRef::as_ref)
-        .collect::<Vec<_>>()
-        .join(newline.as_str());
-    if trailing_newline {
-        out.push_str(newline.as_str());
-    }
-    out
 }
 
 /// Convert every line ending in `text` to `newline`
@@ -579,15 +532,6 @@ pub fn file_mtime(path: &Path) -> Option<SystemTime> {
     fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
-/// Whether a file was modified on disk after `seen`, as
-/// `MeldBufferData.current_on_disk()` checks
-pub fn modified_since(path: &Path, seen: Option<SystemTime>) -> bool {
-    match (seen, file_mtime(path)) {
-        (Some(seen), Some(now)) => now > seen,
-        _ => false,
-    }
-}
-
 /// Replace a file's contents atomically
 ///
 /// Symlinks are followed so that the link survives. The data is written
@@ -675,9 +619,7 @@ mod tests {
             mixed.types,
             vec![NewlineType::CrLf, NewlineType::Lf, NewlineType::Cr]
         );
-        assert!(mixed.is_mixed());
         assert_eq!(mixed.primary(), NewlineType::CrLf);
-        assert_eq!(mixed.label(), "DOS/Windows (CR-LF), UNIX (LF), Mac OS (CR)");
         assert!(Newlines::detect("abc").types.is_empty());
     }
 
@@ -686,10 +628,6 @@ mod tests {
         assert_eq!(split_lines("a\r\nb\rc\nd"), vec!["a", "b", "c", "d"]);
         assert_eq!(split_lines(""), vec![""]);
         assert_eq!(split_lines("a\n"), vec!["a", ""]);
-        assert_eq!(
-            join_lines(&["a", "b"], NewlineType::CrLf, true),
-            "a\r\nb\r\n"
-        );
         assert_eq!(convert_newlines("a\r\nb\nc", NewlineType::Lf), "a\nb\nc");
     }
 
@@ -700,7 +638,6 @@ mod tests {
         assert_eq!(plain.text, "héllo\n");
         assert_eq!(plain.encoding, TextEncoding::UTF8);
         assert!(!plain.binary && !plain.lossy && !plain.guessed);
-        assert_eq!(plain.lines(), vec!["héllo"]);
 
         let bom = decode_text(b"\xEF\xBB\xBFabc", &options);
         assert_eq!(bom.text, "abc");

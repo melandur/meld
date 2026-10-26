@@ -76,7 +76,7 @@ fn plan_only_changed_files_and_write_them() {
     std::fs::write(repo.join("CLAUDE.md"), "# Project\n").unwrap();
 
     let first = plan(repo);
-    let summary: Vec<(String, bool, bool)> = first
+    let summary: Vec<(String, bool)> = first
         .iter()
         .map(|f| {
             let relative = f
@@ -85,14 +85,14 @@ fn plan_only_changed_files_and_write_them() {
                 .unwrap()
                 .to_string_lossy()
                 .into_owned();
-            (relative, f.existed, f.changed)
+            (relative, f.changed)
         })
         .collect();
     assert_eq!(
         summary,
         [
-            ("CLAUDE.md".to_string(), true, true),
-            (".claude/skills/why/SKILL.md".to_string(), false, true),
+            ("CLAUDE.md".to_string(), true),
+            (".claude/skills/why/SKILL.md".to_string(), true),
         ]
     );
 
@@ -223,8 +223,8 @@ fn merge_keeps_crlf_and_unicode_elsewhere() {
 fn plan_in_empty_repo() {
     let tmp = tempfile::tempdir().unwrap();
     let files = plan(tmp.path());
-    let flags: Vec<(bool, bool)> = files.iter().map(|f| (f.existed, f.changed)).collect();
-    assert_eq!(flags, [(false, true), (false, true)]);
+    let flags: Vec<bool> = files.iter().map(|f| f.changed).collect();
+    assert_eq!(flags, [true, true]);
     assert_eq!(files[0].content, format!("{}\n", section()));
 }
 
@@ -249,8 +249,8 @@ fn rewrites_an_edited_skill() {
     let skill = skill_path(tmp.path());
     std::fs::write(&skill, "edited").unwrap();
     let files = plan(tmp.path());
-    let flags: Vec<(bool, bool)> = files.iter().map(|f| (f.existed, f.changed)).collect();
-    assert_eq!(flags, [(true, false), (true, true)]);
+    let flags: Vec<bool> = files.iter().map(|f| f.changed).collect();
+    assert_eq!(flags, [false, true]);
     write_agent_setup(&files).unwrap();
     assert_eq!(
         std::fs::read_to_string(&skill).unwrap(),

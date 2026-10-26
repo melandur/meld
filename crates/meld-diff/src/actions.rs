@@ -57,6 +57,7 @@ pub fn replace_chunk_with(
 
 /// Copy `chunk`'s `a` lines from `src` into `dst`, before (`copy_up`) or
 /// after the chunk's `b` lines.
+#[cfg(test)]
 pub fn copy_chunk(
     src: &TextBuffer,
     dst: &mut TextBuffer,
@@ -66,7 +67,9 @@ pub fn copy_chunk(
     collect(|sink| copy_chunk_with(src, dst, chunk, copy_up, sink))
 }
 
-/// [`copy_chunk`], reporting each edit to `sink` as it is applied.
+/// Copy `chunk`'s `a` lines from `src` into `dst`, before (`copy_up`) or
+/// after the chunk's `b` lines, reporting each edit to `sink` as it is
+/// applied.
 pub fn copy_chunk_with(
     src: &TextBuffer,
     dst: &mut TextBuffer,

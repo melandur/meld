@@ -4,9 +4,8 @@
 use std::collections::BTreeSet;
 
 use meld_config::{
-    ChunkColors, ChunkTag, ColorModel, DiffColorMode, DiffColors, DiffSide, FontSpec, FontZoom,
-    PaletteTag, Rgba, SchemeManager, StyleAttr, StyleScheme, Theme, Underline, Variant,
-    get_diff_palette,
+    ChunkColors, ChunkTag, ColorModel, DiffColorMode, DiffColors, DiffSide, PaletteTag, Rgba,
+    SchemeManager, StyleAttr, StyleScheme, Theme, Underline, Variant, get_diff_palette,
 };
 
 const BASE_XML: &str = include_str!("../../../data/styles/meld-base.style-scheme.xml.in");
@@ -127,7 +126,6 @@ fn scheme_defines_meld_styles() {
         let scheme_styles = style_names(scheme_xml(id));
         for name in &meld_styles {
             assert!(scheme_styles.contains(*name), "{id} lacks {name}");
-            assert!(scheme.defines_style(name));
         }
         assert!(scheme_styles.contains("map-overlay"));
 
@@ -275,7 +273,6 @@ fn monokai_editor_colours() {
         ("line-numbers", StyleAttr::Background, "#313335"),
         ("bracket-match", StyleAttr::Background, "#344134"),
         ("search-match", StyleAttr::Background, "#40332b"),
-        ("def:error", StyleAttr::UnderlineColor, "#ff0000"),
     ] {
         let style = scheme.style(id).unwrap();
         assert_eq!(style.color(attr).unwrap().to_hex(), colour, "{id} {attr:?}");
@@ -285,68 +282,6 @@ fn monokai_editor_colours() {
         Some(Underline::Error)
     );
     assert!(scheme.style("def:deletion").unwrap().is_strikethrough());
-}
-
-// test_style.py
-
-const BASE_FONT_SIZE: i32 = 11;
-
-fn base_font() -> FontSpec {
-    FontSpec::parse(&format!("monospace {BASE_FONT_SIZE}"))
-}
-
-#[test]
-fn default_size_is_the_configured_font_size() {
-    let zoom = FontZoom::default();
-    assert_eq!(zoom.scaled_size(base_font().size_points()), BASE_FONT_SIZE);
-}
-
-#[test]
-fn zoom_steps_by_a_point() {
-    let size = base_font().size_points();
-    let mut zoom = FontZoom::default();
-    let mut sizes = Vec::new();
-    for _ in 0..3 {
-        zoom.update(Some(1), size);
-        sizes.push(zoom.scaled_size(size));
-    }
-    assert_eq!(
-        sizes,
-        [BASE_FONT_SIZE + 1, BASE_FONT_SIZE + 2, BASE_FONT_SIZE + 3]
-    );
-    for _ in 0..3 {
-        zoom.update(Some(-1), size);
-    }
-    assert_eq!(zoom.scaled_size(size), BASE_FONT_SIZE);
-}
-
-#[test]
-fn zoom_reset() {
-    let size = base_font().size_points();
-    let mut zoom = FontZoom::default();
-    zoom.update(Some(1), size);
-    assert_eq!(zoom.scaled_size(size), BASE_FONT_SIZE + 1);
-    zoom.update(None, size);
-    assert_eq!(zoom.scaled_size(size), BASE_FONT_SIZE);
-    zoom.update(Some(2), size);
-    assert!(zoom.reset());
-    assert!(!zoom.reset());
-}
-
-#[test]
-fn zoom_reports_changes_correctly() {
-    let size = base_font().size_points();
-    let mut zoom = FontZoom::default();
-    // Zooming is a change
-    assert!(zoom.update(Some(1), size));
-    // Resetting is a change here, but resetting again is not
-    assert!(zoom.update(None, size));
-    assert!(!zoom.update(None, size));
-    // Neither is zooming out once we've hit the minimum font size
-    zoom.update(Some(-BASE_FONT_SIZE), size);
-    assert_eq!(zoom.scaled_size(size), 1);
-    assert!(!zoom.update(Some(-1), size));
-    assert_eq!(zoom.offset(), 1 - BASE_FONT_SIZE);
 }
 
 // test_diffpalette.py: meld.style integration
@@ -385,7 +320,6 @@ fn old_common_theme(theme: &Theme) -> DiffColors {
         current_line_highlight: c("meld:current-line-highlight", StyleAttr::Background),
         syncpoint_outline: c("meld:syncpoint-outline", StyleAttr::Foreground),
         dimmed: c("meld:dimmed", StyleAttr::Foreground),
-        map_overlay: c("map-overlay", StyleAttr::Background),
     }
 }
 
@@ -451,28 +385,6 @@ fn palette_setting_overrides_chunk_colours() {
     }
 }
 
-#[test]
-fn pane_diff_colors_use_default_sides() {
-    let theme = theme("meld-base");
-    let mode = DiffColorMode::RedGreen;
-    assert_eq!(
-        theme.pane_diff_colors(mode, 2, 0),
-        theme.diff_colors(mode, Some(DiffSide::Old))
-    );
-    assert_eq!(
-        theme.pane_diff_colors(mode, 2, 1),
-        theme.diff_colors(mode, Some(DiffSide::New))
-    );
-    assert_eq!(
-        theme.pane_diff_colors(mode, 3, 1),
-        theme.diff_colors(mode, None)
-    );
-    assert_eq!(
-        theme.pane_diff_colors(mode, 2, 7),
-        theme.diff_colors(mode, None)
-    );
-}
-
 /// The colours each widget of a two-way comparison draws a chunk with.
 /// Lines only in the left (old) file are a delete in the left pane, its
 /// action gutter and the link map, and an insert in the right pane;
@@ -484,8 +396,8 @@ struct ChunkViews {
 }
 
 fn chunk_views(theme: &Theme, mode: DiffColorMode) -> ChunkViews {
-    let left = theme.pane_diff_colors(mode, 2, 0);
-    let right = theme.pane_diff_colors(mode, 2, 1);
+    let left = theme.diff_colors(mode, Some(DiffSide::Old));
+    let right = theme.diff_colors(mode, Some(DiffSide::New));
     let link = theme.link_diff_colors(mode, Some(DiffSide::Old));
     ChunkViews {
         removed: [left.delete, link.delete, right.insert],
@@ -654,8 +566,12 @@ fn opacity_scales_fills_more_than_outlines() {
         }
         // Both panes still match after scaling
         let mode = DiffColorMode::BlueOrange;
-        let left = theme.pane_diff_colors(mode, 2, 0).with_opacity(30);
-        let right = theme.pane_diff_colors(mode, 2, 1).with_opacity(30);
+        let left = theme
+            .diff_colors(mode, Some(DiffSide::Old))
+            .with_opacity(30);
+        let right = theme
+            .diff_colors(mode, Some(DiffSide::New))
+            .with_opacity(30);
         assert_eq!(left.replace, right.replace);
         assert_eq!(left.delete, right.insert);
     }
@@ -668,27 +584,22 @@ fn base_scheme_follows_darkness() {
     let manager = manager();
     let light = Theme::new(&manager, "meld-lens-light", false);
     assert_eq!(light.scheme().id(), "meld-lens-light");
-    assert_eq!(light.base_scheme().id(), "meld-base");
     assert!(!light.is_dark());
 
     // Dark UI switches to the dark variant, with the dark base
     let dark = Theme::new(&manager, "meld-lens-light", true);
     assert_eq!(dark.scheme().id(), "meld-lens-dark");
-    assert_eq!(dark.base_scheme().id(), "meld-dark");
     assert!(dark.is_dark());
 
     // The base schemes stand in for each other by darkness
     let base = Theme::new(&manager, "meld-dark", false);
     assert_eq!(base.scheme().id(), "meld-dark");
-    assert_eq!(base.base_scheme().id(), "meld-dark");
 
     // The default "classic" setting resolves
     let classic = Theme::new(&manager, "classic", false);
     assert_eq!(classic.scheme().id(), "classic");
-    assert_eq!(classic.base_scheme().id(), "meld-base");
     let classic_dark = Theme::new(&manager, "classic", true);
     assert_eq!(classic_dark.scheme().id(), "classic-dark");
-    assert_eq!(classic_dark.base_scheme().id(), "meld-dark");
 
     // Unknown schemes fall back to classic
     assert_eq!(

@@ -186,11 +186,6 @@ impl Differ {
         }
     }
 
-    /// Number of sequences being compared (0 before the first comparison).
-    pub fn num_sequences(&self) -> usize {
-        self.num_sequences
-    }
-
     /// Set sync points: each point lists one line per pane (`[l0, l1]` or
     /// `[l0, l1, l2]`). They take effect on the next [`Differ::set_sequences`].
     /// Meld disables live updates ([`Differ::change_sequence`]) while sync
@@ -247,16 +242,6 @@ impl Differ {
         self.seqlength = sequences.iter().map(|s| s.as_ref().len()).collect();
         self.initialised = true;
         Ok(self.update_merge_cache(sequences))
-    }
-
-    /// Forget all chunks (`clear`).
-    pub fn clear(&mut self) -> DiffsChanged {
-        self.diffs = [Vec::new(), Vec::new()];
-        self.seqlength = vec![0; self.num_sequences];
-        self.initialised = false;
-        self.old_merge_cache.clear();
-        let empty: Vec<Vec<String>> = vec![Vec::new(); self.num_sequences];
-        self.update_merge_cache(&empty)
     }
 
     /// Update the chunks after an edit in pane `sequence`: `sizechange`
@@ -603,18 +588,6 @@ impl Differ {
             .unwrap_or_default()
     }
 
-    /// Whether `chunk` (as passed to a chunk action towards `to_pane`) is
-    /// still part of the comparison (`has_chunk`).
-    pub fn has_chunk(&self, to_pane: usize, chunk: &Chunk) -> bool {
-        let sequence = usize::from(to_pane == 2);
-        let Some(index) = self.locate_chunk(1, chunk.start_a).current else {
-            return false;
-        };
-        self.merge_cache
-            .get(index)
-            .is_some_and(|m| m[sequence].as_ref() == Some(chunk))
-    }
-
     /// The `index`-th change as seen from `from_pane` (`get_chunk`).
     ///
     /// If `to_pane` is given, only changes between `from_pane` and `to_pane`
@@ -672,11 +645,6 @@ impl Differ {
         &self.merge_cache
     }
 
-    /// The raw diffs from pane 1 to pane 0 (`0`) and to pane 2 (`1`).
-    pub fn diffs(&self, which: usize) -> &[Chunk] {
-        self.diffs.get(which).map_or(&[], |d| d.as_slice())
-    }
-
     fn range_from_lines(
         &self,
         textindex: usize,
@@ -728,11 +696,6 @@ impl Differ {
         }
     }
 
-    /// All changes between `fromindex` and `toindex` (`paired_all_single_changes`).
-    pub fn paired_all_single_changes(&self, fromindex: usize, toindex: usize) -> Vec<Chunk> {
-        Self::oriented(&self.merge_cache, fromindex, toindex)
-    }
-
     /// Changes of a single pane, oriented with `a` on that pane; no `equal`
     /// chunks (`single_changes`). For the middle pane, each entry is its
     /// change against pane 0, or against pane 2 if there is none.
@@ -769,11 +732,6 @@ impl Differ {
     /// markers left by an automatic merge.
     pub fn unresolved(&self) -> &[usize] {
         &self.unresolved
-    }
-
-    /// Number of unresolved conflict lines (`get_unresolved_count`).
-    pub fn unresolved_count(&self) -> usize {
-        self.unresolved.len()
     }
 
     /// Set the unresolved lines, e.g. from [`crate::merge::Merged::unresolved`].
@@ -1110,8 +1068,6 @@ mod tests {
         let same = [lines("ab"), lines("ab")];
         d.set_sequences(&same).unwrap();
         assert!(d.sequences_identical());
-        d.clear();
-        assert!(!d.sequences_identical());
     }
 
     #[test]

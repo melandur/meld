@@ -4,15 +4,11 @@
 //! into `refs/meld/pr/…`), [`PrReview`] holds what the forge said about
 //! it and what the user is writing:
 //!
-//! - the strip under the header: state, number, title, author, labels,
-//!   checks, and the review actions; the description and the conversation
-//!   fold out under it ([`PrReview::strip`])
-//! - line comments: existing threads and the user's pending comments as
-//!   cards in the Why column, level with their line ([`PrReview::cards`])
-//! - the composer for a line comment, a reply or the review, and the
-//!   confirmation that always comes before anything is posted
-//!   ([`PrReview::dialog`]). Nothing reaches the forge without the user
-//!   pressing Post in that confirmation.
+//! - the user's pending line comments, posted with the review
+//! - the composer for a line comment or the review, and the confirmation
+//!   that always comes before anything is posted ([`PrReview::dialog`]).
+//!   Nothing reaches the forge without the user pressing Post in that
+//!   confirmation.
 
 use iced::widget::{button, column, container, scrollable, text, text_editor};
 use iced::{Background, Border, Element, Length, Theme};
@@ -20,8 +16,8 @@ use meld_ailens::picker::EntryKind;
 use meld_ailens::{PickerEntry, Revision, Side};
 use meld_forge::fetch::pr_ref;
 use meld_forge::{
-    Discussion, DraftComment, FetchedPullRequest, Forge, ForgeKind, ForgeRemote, PullRequest,
-    PullRequestDetails, ReviewEvent, ReviewSubmission, ReviewThread,
+    DraftComment, FetchedPullRequest, Forge, ForgeKind, ForgeRemote, PullRequest,
+    PullRequestDetails, ReviewEvent, ReviewSubmission,
 };
 
 use super::whycolumn::shorten;
@@ -46,26 +42,13 @@ pub enum ComposerKind {
         line: u32,
         edit: Option<usize>,
     },
-    Reply {
-        thread: String,
-    },
     Review,
-}
-
-/// What the confirmation would post.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Post {
-    Review(ReviewSubmission),
-    Reply { thread: ReviewThread, body: String },
 }
 
 pub struct PrReview {
     pub forge: Forge,
     pub details: PullRequestDetails,
     pub fetched: FetchedPullRequest,
-    pub discussion: Discussion,
-    /// "Loading comments…", or why they couldn't be loaded.
-    pub discussion_status: Option<String>,
     /// Line comments written here, posted with the review.
     pub drafts: Vec<DraftComment>,
     /// The review's own comment, kept while the composer is closed.
@@ -73,7 +56,7 @@ pub struct PrReview {
     pub review_event: ReviewEvent,
     pub composer: Option<Composer>,
     /// The confirmation shown before posting.
-    pub confirm: Option<Post>,
+    pub confirm: Option<ReviewSubmission>,
     pub posting: bool,
     /// The composer's editor, to focus it when it opens.
     pub editor_id: iced::widget::Id,
@@ -84,24 +67,15 @@ pub enum Message {
     OpenInBrowser,
     /// Comment on the line with the cursor (the tab knows where it is).
     AddComment,
-    // Sent from the pull request's bar and comment cards, which Git
-    // Compare doesn't show; kept with the review logic they drive
-    #[allow(dead_code)]
-    EditDraft(usize),
-    #[allow(dead_code)]
-    DeleteDraft(usize),
-    #[allow(dead_code)]
-    Reply(String),
     StartReview,
     Editor(text_editor::Action),
     SetEvent(ReviewEvent),
-    /// Save the line comment, or ask to confirm the reply or review.
+    /// Save the line comment, or ask to confirm the review.
     Save,
     CancelComposer,
     /// Post what the confirmation shows.
     ConfirmPost,
     CancelConfirm,
-    RefreshComments,
     /// Clicking beside a dialog does nothing (the text stays).
     Ignore,
 }
@@ -111,8 +85,7 @@ pub enum Message {
 pub enum Action {
     None,
     /// Post this; the user confirmed it.
-    Post(Post),
-    RefreshComments,
+    Post(ReviewSubmission),
     OpenUrl(String),
 }
 
@@ -125,8 +98,6 @@ impl PrReview {
             forge,
             details,
             fetched,
-            discussion: Discussion::default(),
-            discussion_status: Some(tr!("Loading comments…").into()),
             drafts: Vec::new(),
             review_body: String::new(),
             review_event: ReviewEvent::Comment,
@@ -244,20 +215,6 @@ impl PrReview {
             Message::OpenInBrowser => return Action::OpenUrl(self.url()),
             // Handled by the tab, which knows the cursor
             Message::AddComment => {}
-            Message::EditDraft(index) => self.edit_draft(index),
-            Message::DeleteDraft(index) => {
-                if index < self.drafts.len() {
-                    self.drafts.remove(index);
-                }
-            }
-            Message::Reply(thread) => {
-                self.composer = Some(Composer {
-                    kind: ComposerKind::Reply { thread },
-                    editor: text_editor::Content::new(),
-                    event: self.review_event,
-                    problem: None,
-                });
-            }
             Message::StartReview => {
                 self.composer = Some(Composer {
                     kind: ComposerKind::Review,
@@ -294,7 +251,6 @@ impl PrReview {
                     self.confirm = None;
                 }
             }
-            Message::RefreshComments => return Action::RefreshComments,
             Message::Ignore => {}
         }
         Action::None
@@ -331,24 +287,6 @@ impl PrReview {
                 }
                 self.composer = None;
             }
-            ComposerKind::Reply { thread } => {
-                if body.trim().is_empty() {
-                    composer.problem = Some(tr!("Write the reply first.").into());
-                    return Action::None;
-                }
-                let Some(thread) = self
-                    .discussion
-                    .threads
-                    .iter()
-                    .find(|t| t.id == thread)
-                    .cloned()
-                else {
-                    composer.problem =
-                        Some(tr!("That thread is gone; reload the comments.").into());
-                    return Action::None;
-                };
-                self.confirm = Some(Post::Reply { thread, body });
-            }
             ComposerKind::Review => {
                 let event = composer.event;
                 let submission = ReviewSubmission {
@@ -360,25 +298,22 @@ impl PrReview {
                     composer.problem = Some(problem);
                     return Action::None;
                 }
-                self.confirm = Some(Post::Review(submission));
+                self.confirm = Some(submission);
             }
         }
         Action::None
     }
 
-    /// The forge answered a post: on success the composer and (for a
-    /// review) the pending comments are done; on failure they stay, with
-    /// the error.
-    pub fn posted(&mut self, post: &Post, result: Result<(), String>) {
+    /// The forge answered the review: on success the composer and the
+    /// pending comments are done; on failure they stay, with the error.
+    pub fn posted(&mut self, result: Result<(), String>) {
         self.posting = false;
         self.confirm = None;
         match result {
             Ok(()) => {
-                if let Post::Review(_) = post {
-                    self.drafts.clear();
-                    self.review_body.clear();
-                    self.review_event = ReviewEvent::Comment;
-                }
+                self.drafts.clear();
+                self.review_body.clear();
+                self.review_event = ReviewEvent::Comment;
                 self.composer = None;
             }
             Err(err) => {
@@ -387,29 +322,6 @@ impl PrReview {
                 }
             }
         }
-    }
-
-    pub fn set_discussion(&mut self, result: Result<Discussion, String>) {
-        match result {
-            Ok(discussion) => {
-                self.discussion = discussion;
-                self.discussion_status = None;
-            }
-            Err(err) => {
-                self.discussion_status = Some(tr!("Couldn’t load the comments: {err}", err = err))
-            }
-        }
-    }
-
-    /// Number of threads on `path`.
-    #[cfg(test)]
-    pub fn thread_count(&self, path: &str) -> usize {
-        self.discussion
-            .threads
-            .iter()
-            .filter(|t| t.is_on(path))
-            .count()
-            + self.drafts.iter().filter(|d| d.path == path).count()
     }
 
     // -- views --
@@ -463,27 +375,6 @@ impl PrReview {
                     },
                 )
             }
-            ComposerKind::Reply { thread } => {
-                if let Some(thread) = self.discussion.threads.iter().find(|t| t.id == *thread) {
-                    if let Some(last) = thread.comments.last() {
-                        body = body.push(quote(format!(
-                            "{}: {}",
-                            last.author,
-                            shorten(last.body.trim(), 400)
-                        )));
-                    }
-                    (
-                        tr!(
-                            "Reply on {path} line {line}",
-                            path = thread.path,
-                            line = thread.anchor_line().unwrap_or(0)
-                        ),
-                        tr!("Post Reply…"),
-                    )
-                } else {
-                    (tr!("Reply").to_string(), tr!("Post Reply…"))
-                }
-            }
             ComposerKind::Review => {
                 let options = ReviewEvent::ALL
                     .iter()
@@ -503,7 +394,7 @@ impl PrReview {
                         **e != ReviewEvent::RequestChanges || self.kind().can_request_changes()
                     })
                     .position(|e| *e == composer.event);
-                body = body.push(crate::forge::chips(options, selected));
+                body = body.push(crate::forge::chips(options, selected, 12.0));
                 if self.drafts.is_empty() {
                     body = body.push(
                         text(tr!(
@@ -556,7 +447,7 @@ impl PrReview {
         )
     }
 
-    fn confirm_dialog<'a>(&'a self, post: &'a Post) -> Element<'a, Message> {
+    fn confirm_dialog<'a>(&'a self, review: &'a ReviewSubmission) -> Element<'a, Message> {
         let kind = self.kind();
         let mut body = column![
             text(tr!(
@@ -570,47 +461,18 @@ impl PrReview {
         .spacing(10)
         .width(600);
         let mut items = column![].spacing(8);
-        match post {
-            Post::Review(review) => {
-                items = items.push(text(review.summary()).size(14).font(ui::bold()));
-                if !review.body.trim().is_empty() {
-                    items = items.push(quote(review.body.trim().to_string()));
-                }
-                for comment in &review.comments {
-                    items = items.push(
-                        column![
-                            text(comment.location()).size(12).font(ui::bold()),
-                            quote(comment.body.trim().to_string()),
-                        ]
-                        .spacing(2),
-                    );
-                }
-            }
-            Post::Reply {
-                thread,
-                body: reply,
-            } => {
-                let path = thread.path.as_str();
-                let line = thread.anchor_line().unwrap_or(0);
-                items = items.push(
-                    text(match thread.comments.first() {
-                        Some(first) => tr!(
-                            "A reply to {author}’s thread on {path} line {line}",
-                            author = first.author,
-                            path = path,
-                            line = line
-                        ),
-                        None => tr!(
-                            "A reply to the thread on {path} line {line}",
-                            path = path,
-                            line = line
-                        ),
-                    })
-                    .size(14)
-                    .font(ui::bold()),
-                );
-                items = items.push(quote(reply.trim().to_string()));
-            }
+        items = items.push(text(review.summary()).size(14).font(ui::bold()));
+        if !review.body.trim().is_empty() {
+            items = items.push(quote(review.body.trim().to_string()));
+        }
+        for comment in &review.comments {
+            items = items.push(
+                column![
+                    text(comment.location()).size(12).font(ui::bold()),
+                    quote(comment.body.trim().to_string()),
+                ]
+                .spacing(2),
+            );
         }
         body = body.push(container(scrollable(items)).max_height(360));
         if self.posting {
@@ -620,13 +482,10 @@ impl PrReview {
                     .style(ui::dim_text),
             );
         }
-        let post_label = match post {
-            Post::Review(review) => match review.event {
-                ReviewEvent::Comment => tr!("Post Comment"),
-                ReviewEvent::Approve => tr!("Post Approval"),
-                ReviewEvent::RequestChanges => tr!("Post Request for Changes"),
-            },
-            Post::Reply { .. } => tr!("Post Reply"),
+        let post_label = match review.event {
+            ReviewEvent::Comment => tr!("Post Comment"),
+            ReviewEvent::Approve => tr!("Post Approval"),
+            ReviewEvent::RequestChanges => tr!("Post Request for Changes"),
         };
         ui::modal::dialog(
             tr!("Post to {forge}?", forge = kind.name()),
@@ -718,7 +577,7 @@ fn error_text<'a, M: 'a>(message: String) -> Element<'a, M> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use meld_forge::{Comment, PrState, ScriptedRunner};
+    use meld_forge::{PrState, ScriptedRunner};
     use std::sync::Arc;
 
     fn review() -> PrReview {
@@ -767,9 +626,6 @@ mod tests {
         // The same line edits the draft
         r.comment_on("a.rs".into(), None, Side::New, 4);
         assert_eq!(editor_text(&r.composer.as_ref().unwrap().editor), "Why?");
-        r.update(Message::CancelComposer);
-        r.update(Message::DeleteDraft(0));
-        assert!(r.drafts.is_empty());
     }
 
     #[test]
@@ -783,7 +639,7 @@ mod tests {
         type_text(&mut r, "LGTM");
         // Saving the review asks for confirmation; nothing is posted yet
         assert_eq!(r.update(Message::Save), Action::None);
-        let Some(Post::Review(submission)) = r.confirm.clone() else {
+        let Some(submission) = r.confirm.clone() else {
             panic!("no confirmation");
         };
         assert_eq!(submission.event, ReviewEvent::Approve);
@@ -794,10 +650,10 @@ mod tests {
         assert!(r.confirm.is_none() && r.composer.is_some());
         r.update(Message::Save);
         let action = r.update(Message::ConfirmPost);
-        assert_eq!(action, Action::Post(Post::Review(submission.clone())));
+        assert_eq!(action, Action::Post(submission));
         // Pressing Post twice posts once
         assert_eq!(r.update(Message::ConfirmPost), Action::None);
-        r.posted(&Post::Review(submission), Ok(()));
+        r.posted(Ok(()));
         assert!(r.drafts.is_empty() && r.composer.is_none() && r.confirm.is_none());
     }
 
@@ -807,45 +663,16 @@ mod tests {
         r.update(Message::StartReview);
         type_text(&mut r, "Hmm");
         r.update(Message::Save);
-        let Action::Post(post) = r.update(Message::ConfirmPost) else {
+        let Action::Post(_) = r.update(Message::ConfirmPost) else {
             panic!("not posted");
         };
-        r.posted(&post, Err("HTTP 422".into()));
+        r.posted(Err("HTTP 422".into()));
         let composer = r.composer.as_ref().unwrap();
         assert_eq!(composer.problem.as_deref(), Some("HTTP 422"));
         assert_eq!(editor_text(&composer.editor), "Hmm");
         // Closing the composer keeps the review's comment for later
         r.update(Message::CancelComposer);
         assert_eq!(r.review_body, "Hmm");
-    }
-
-    #[test]
-    fn replies_need_text_and_a_thread() {
-        let mut r = review();
-        r.discussion.threads.push(ReviewThread {
-            id: "100".into(),
-            path: "a.rs".into(),
-            original_path: None,
-            side: Side::New,
-            line: Some(3),
-            original_line: Some(3),
-            outdated: false,
-            resolved: false,
-            comments: vec![Comment {
-                author: "dave".into(),
-                body: "Why?".into(),
-                ..Default::default()
-            }],
-        });
-        r.update(Message::Reply("100".into()));
-        r.update(Message::Save);
-        assert!(r.confirm.is_none());
-        type_text(&mut r, "Because");
-        r.update(Message::Save);
-        assert!(
-            matches!(&r.confirm, Some(Post::Reply { thread, body }) if thread.id == "100" && body == "Because")
-        );
-        assert_eq!(r.thread_count("a.rs"), 1);
     }
 
     #[test]

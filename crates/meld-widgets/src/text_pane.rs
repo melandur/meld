@@ -78,12 +78,6 @@ impl Metrics {
             line_height: (text_size * 1.35).round().max(1.0),
         }
     }
-
-    /// Overrides the line height.
-    pub fn with_line_height(mut self, line_height: f32) -> Self {
-        self.line_height = line_height.max(1.0);
-        self
-    }
 }
 
 impl Default for Metrics {
@@ -158,8 +152,6 @@ pub struct TextPane<'a, Message> {
     dimmed: &'a [InlineHighlight],
     matches: &'a [InlineHighlight],
     flashes: &'a [LineFlash],
-    width: Length,
-    height: Length,
 }
 
 impl<'a, Message> TextPane<'a, Message> {
@@ -185,8 +177,6 @@ impl<'a, Message> TextPane<'a, Message> {
             dimmed: &[],
             matches: &[],
             flashes: &[],
-            width: Length::Fill,
-            height: Length::Fill,
         }
     }
 
@@ -218,18 +208,6 @@ impl<'a, Message> TextPane<'a, Message> {
     /// Sets both scroll offsets in pixels.
     pub fn scroll(mut self, scroll: Vector) -> Self {
         self.scroll = scroll;
-        self
-    }
-
-    /// Sets the vertical scroll offset in pixels.
-    pub fn scroll_y(mut self, y: f32) -> Self {
-        self.scroll.y = y;
-        self
-    }
-
-    /// Sets the horizontal scroll offset in pixels.
-    pub fn scroll_x(mut self, x: f32) -> Self {
-        self.scroll.x = x;
         self
     }
 
@@ -304,18 +282,6 @@ impl<'a, Message> TextPane<'a, Message> {
     /// Fading highlights drawn over the chunks.
     pub fn flashes(mut self, flashes: &'a [LineFlash]) -> Self {
         self.flashes = flashes;
-        self
-    }
-
-    /// Sets the width.
-    pub fn width(mut self, width: impl Into<Length>) -> Self {
-        self.width = width.into();
-        self
-    }
-
-    /// Sets the height.
-    pub fn height(mut self, height: impl Into<Length>) -> Self {
-        self.height = height.into();
         self
     }
 }
@@ -441,13 +407,6 @@ pub struct State<P> {
     preedit: Option<input_method::Preedit>,
     modifiers: keyboard::Modifiers,
     cache: RefCell<LineCache<P>>,
-}
-
-impl<P> State<P> {
-    /// Whether the pane has keyboard focus.
-    pub fn is_focused(&self) -> bool {
-        self.focus.is_some()
-    }
 }
 
 impl<P> operation::Focusable for State<P> {
@@ -1262,7 +1221,7 @@ where
     }
 
     fn size(&self) -> Size<Length> {
-        Size::new(self.width, self.height)
+        Size::new(Length::Fill, Length::Fill)
     }
 
     fn layout(
@@ -1273,7 +1232,7 @@ where
     ) -> layout::Node {
         let state = tree.state.downcast_mut::<State<Renderer::Paragraph>>();
         self.measure(state.cache.get_mut());
-        layout::Node::new(limits.resolve(self.width, self.height, Size::ZERO))
+        layout::Node::new(limits.resolve(Length::Fill, Length::Fill, Size::ZERO))
     }
 
     fn operate(

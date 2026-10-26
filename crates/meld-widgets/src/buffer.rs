@@ -149,16 +149,6 @@ impl Edit {
         self.start_line..self.start_line + self.removed_lines.len()
     }
 
-    /// The line range of the new lines in the new text.
-    pub fn inserted_range(&self) -> Range<usize> {
-        self.start_line..self.start_line + self.inserted_lines.len()
-    }
-
-    /// Change in line count.
-    pub fn line_delta(&self) -> isize {
-        self.inserted_lines.len() as isize - self.removed_lines.len() as isize
-    }
-
     /// The edit that undoes this one.
     pub fn inverse(&self) -> Edit {
         Edit {
@@ -260,16 +250,6 @@ impl Buffer {
         self.lines.get(i).map_or("", String::as_str)
     }
 
-    /// The text joined with `\n`.
-    pub fn text(&self) -> String {
-        self.lines.join("\n")
-    }
-
-    /// Takes the lines out of the buffer.
-    pub fn into_lines(self) -> Vec<String> {
-        self.lines
-    }
-
     /// Replaces all content without producing an [`Edit`]; resets the
     /// cursor and selection.
     pub fn set_lines(&mut self, lines: Vec<String>) {
@@ -295,11 +275,6 @@ impl Buffer {
     /// Tab width in columns.
     pub fn tab_width(&self) -> usize {
         self.tab_width
-    }
-
-    /// Whether Tab inserts spaces.
-    pub fn insert_spaces(&self) -> bool {
-        self.insert_spaces
     }
 
     /// Sets the indentation settings (`tab-width`,
@@ -1076,7 +1051,6 @@ mod tests {
         assert_eq!(e.cursor_before, p(0, 5));
         assert_eq!(e.cursor_after, p(0, 6));
         assert_eq!(b.cursor(), p(0, 6));
-        assert_eq!(e.line_delta(), 0);
     }
 
     #[test]
@@ -1088,7 +1062,6 @@ mod tests {
         assert_eq!(e.inserted_lines, vec!["ab", "cd"]);
         assert_eq!(b.lines(), &["ab", "cd"]);
         assert_eq!(b.cursor(), p(1, 0));
-        assert_eq!(e.line_delta(), 1);
     }
 
     #[test]

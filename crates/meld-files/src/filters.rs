@@ -109,11 +109,6 @@ impl TextRegex {
     pub fn as_str(&self) -> &str {
         self.regex.as_str()
     }
-
-    /// Whether the regex matches anywhere in `text`
-    pub fn is_match(&self, text: &str) -> bool {
-        self.regex.is_match(text).unwrap_or(false)
-    }
 }
 
 impl fmt::Debug for TextRegex {
@@ -210,7 +205,7 @@ impl ByteRegex {
 #[derive(Clone, Debug)]
 enum Compiled {
     Name(regex::Regex),
-    Text(TextRegex),
+    Text,
 }
 
 /// A named, toggleable filename or text filter
@@ -222,8 +217,6 @@ pub struct FilterEntry {
     pub active: bool,
     /// The pattern as entered by the user
     pub filter_string: String,
-    /// The pattern syntax
-    pub kind: FilterKind,
     filter: Option<Compiled>,
     byte_filter: Option<ByteRegex>,
 }
@@ -235,7 +228,7 @@ impl FilterEntry {
     pub fn new(label: &str, active: bool, filter_string: &str, kind: FilterKind) -> FilterEntry {
         let (filter, byte_filter) = match kind {
             FilterKind::Regex => (
-                TextRegex::new(filter_string).map(Compiled::Text),
+                TextRegex::new(filter_string).map(|_| Compiled::Text),
                 ByteRegex::new(filter_string),
             ),
             FilterKind::Shell => (
@@ -247,13 +240,13 @@ impl FilterEntry {
             label: label.to_string(),
             active: active && filter.is_some(),
             filter_string: filter_string.to_string(),
-            kind,
             filter,
             byte_filter,
         }
     }
 
     /// Whether `filter_string` is a valid pattern of the given kind
+    #[cfg(test)]
     pub fn check_filter(filter_string: &str, kind: FilterKind) -> bool {
         match kind {
             FilterKind::Regex => TextRegex::new(filter_string).is_some(),
@@ -278,14 +271,6 @@ impl FilterEntry {
         match &self.filter {
             Some(Compiled::Name(regex)) => regex.is_match(name),
             _ => false,
-        }
-    }
-
-    /// The compiled regex of a text filter, for `str` text
-    pub fn text_regex(&self) -> Option<&TextRegex> {
-        match &self.filter {
-            Some(Compiled::Text(regex)) => Some(regex),
-            _ => None,
         }
     }
 
@@ -439,7 +424,7 @@ mod tests {
     fn bad_regex_compilation() {
         for pattern in [r"*.foo*", r"\xfoo"] {
             let f = FilterEntry::new("name", true, pattern, FilterKind::Regex);
-            assert!(f.text_regex().is_none(), "{pattern}");
+            assert!(!f.is_valid(), "{pattern}");
             assert!(!f.active);
             assert!(!FilterEntry::check_filter(pattern, FilterKind::Regex));
         }

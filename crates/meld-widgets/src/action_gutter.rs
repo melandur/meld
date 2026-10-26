@@ -16,9 +16,8 @@
 //!
 //! The action follows Meld's modifier convention: plain click replaces
 //! (push the chunk to the target), Shift deletes the chunk from the source,
-//! Ctrl inserts (copy). The gutter tracks modifier keys itself unless the
-//! application fixes the mode with [`ActionGutter::action_mode`]. Meld pops
-//! up a menu for Ctrl+click; here the button is split instead: the upper
+//! Ctrl inserts (copy). The gutter tracks the modifier keys itself. Meld
+//! pops up a menu for Ctrl+click; here the button is split instead: the upper
 //! half copies above the target chunk, the lower half below.
 
 use std::marker::PhantomData;
@@ -93,13 +92,11 @@ pub struct ActionGutter<'a, Message> {
     chunks: &'a [DiffChunk],
     style: &'a PaneStyle,
     scroll_y: f32,
-    offset: f32,
     pane_height: f32,
     wrap: Option<&'a WrapLayout>,
     line_height: f32,
     source_editable: bool,
     target_editable: bool,
-    mode: Option<ActionMode>,
     direction: Direction,
     current: Option<usize>,
     on_action: Option<Box<dyn Fn(usize, ChunkAction) -> Message + 'a>>,
@@ -114,13 +111,11 @@ impl<'a, Message> ActionGutter<'a, Message> {
             chunks,
             style,
             scroll_y: 0.0,
-            offset: 0.0,
             pane_height: 0.0,
             wrap: None,
             line_height: 18.0,
             source_editable: true,
             target_editable: true,
-            mode: None,
             direction: Direction::Right,
             current: None,
             on_action: None,
@@ -132,12 +127,6 @@ impl<'a, Message> ActionGutter<'a, Message> {
     /// Vertical scroll offset of the source pane.
     pub fn scroll(mut self, scroll_y: f32) -> Self {
         self.scroll_y = scroll_y;
-        self
-    }
-
-    /// Offset of the source pane's first line relative to the gutter top.
-    pub fn pane_offset(mut self, offset: f32) -> Self {
-        self.offset = offset;
         self
     }
 
@@ -164,12 +153,6 @@ impl<'a, Message> ActionGutter<'a, Message> {
     pub fn editable(mut self, source: bool, target: bool) -> Self {
         self.source_editable = source;
         self.target_editable = target;
-        self
-    }
-
-    /// Fixes the action mode instead of following the modifier keys.
-    pub fn action_mode(mut self, mode: ActionMode) -> Self {
-        self.mode = Some(mode);
         self
     }
 
@@ -200,12 +183,11 @@ impl<'a, Message> ActionGutter<'a, Message> {
     /// Offset of the source pane's first line in a gutter `height` tall.
     fn offset(&self, height: f32) -> f32 {
         let h = self.pane_height;
-        self.offset
-            + if h > 0.0 && h < height {
-                height - h
-            } else {
-                0.0
-            }
+        if h > 0.0 && h < height {
+            height - h
+        } else {
+            0.0
+        }
     }
 
     fn y_for_line(&self, line: usize, height: f32) -> f32 {
@@ -254,8 +236,7 @@ impl<'a, Message> ActionGutter<'a, Message> {
     }
 
     fn mode(&self, state: &GutterState) -> ActionMode {
-        self.mode
-            .unwrap_or_else(|| ActionMode::from_modifiers(state.modifiers))
+        ActionMode::from_modifiers(state.modifiers)
     }
 }
 

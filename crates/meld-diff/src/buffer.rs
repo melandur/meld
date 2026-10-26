@@ -1,5 +1,5 @@
-//! A plain text buffer with GtkTextBuffer line semantics, primitive edits,
-//! and the filtered-line cache of `meld/meldbuffer.py:BufferLines`.
+//! A plain text buffer with GtkTextBuffer line semantics and primitive
+//! edits.
 //!
 //! Like a GtkTextBuffer, a [`TextBuffer`] always has at least one line, and
 //! the last line never has a terminator: `"a\nb\n"` is the three lines
@@ -10,7 +10,6 @@
 use std::ops::Range;
 
 use crate::chunk::py_slice;
-use crate::differ::add_signed;
 
 /// A position in a buffer: line, and byte offset within the line's text
 /// (excluding its terminator).
@@ -137,10 +136,6 @@ impl Default for TextBuffer {
 }
 
 impl TextBuffer {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     pub fn from_text(text: &str) -> Self {
         let (lines, endings) = split_terminated(text)
             .into_iter()
@@ -172,11 +167,6 @@ impl TextBuffer {
     /// Line `i` without its terminator.
     pub fn line(&self, i: usize) -> Option<&str> {
         self.lines.get(i).map(String::as_str)
-    }
-
-    /// The terminator of line `i` (`""` for the last line).
-    pub fn line_ending(&self, i: usize) -> Option<&'static str> {
-        self.endings.get(i).copied()
     }
 
     /// Lines `lo..hi`, clipped to the buffer like a Python slice.
@@ -384,93 +374,6 @@ impl TextBuffer {
         let at = self.iter_at_line_or_eof(line);
         self.insert(at, &text)
     }
-
-    /// Replace the whole text as GtkTextBuffer.set_text does: a deletion of
-    /// everything followed by an insertion.
-    pub fn set_text(&mut self, text: &str) -> Vec<AppliedEdit> {
-        let delete = self.delete(Position::new(0, 0), self.end());
-        let insert = self.insert(Position::new(0, 0), text);
-        vec![delete, insert]
-    }
-}
-
-/// Lazily filtered copy of a buffer's lines (`BufferLines`).
-///
-/// Entries are `None` until requested; edits invalidate exactly the cache
-/// entries GtkTextBuffer signals would. The raw lines and the filter are
-/// passed in on access.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct FilteredLines {
-    cache: Vec<Option<String>>,
-}
-
-impl FilteredLines {
-    /// An empty cache for a buffer with `line_count` lines.
-    pub fn new(line_count: usize) -> Self {
-        FilteredLines {
-            cache: vec![None; line_count],
-        }
-    }
-
-    /// The cached entries (`BufferLines.lines`).
-    pub fn cache(&self) -> &[Option<String>] {
-        &self.cache
-    }
-
-    /// Drop all cached entries (`clear_cache`).
-    pub fn clear(&mut self, line_count: usize) {
-        self.cache = vec![None; line_count];
-    }
-
-    /// Invalidate the entries touched by an edit (`after_insert_text` /
-    /// `on_delete_range`): an insertion of `n` lines at line `s` replaces
-    /// entry `s` with `n + 1` empty entries; a deletion of `n` lines from
-    /// line `s` replaces entries `s..=s + n` with one empty entry.
-    pub fn invalidate(&mut self, change: LineChange) {
-        let start = change.start_line.min(self.cache.len());
-        if change.size_change >= 0 {
-            let end = (start + 1).min(self.cache.len());
-            let n = change.size_change as usize + 1;
-            self.cache.splice(start..end, std::iter::repeat_n(None, n));
-        } else {
-            let end = add_signed(start + 1, -change.size_change).min(self.cache.len());
-            self.cache.splice(start..end, [None]);
-        }
-    }
-
-    /// Whether the cache length matches the buffer (`_check_cache_invariant`).
-    pub fn is_consistent(&self, line_count: usize) -> bool {
-        self.cache.len() == line_count
-    }
-
-    /// Filtered line `i`, or `None` past the end (Python's `IndexError`).
-    pub fn get<S: AsRef<str>>(
-        &mut self,
-        raw: &[S],
-        i: usize,
-        filter: &dyn Fn(&str) -> String,
-    ) -> Option<String> {
-        let line = raw.get(i)?;
-        if self.cache.len() < raw.len() {
-            self.cache.resize(raw.len(), None);
-        }
-        let entry = &mut self.cache[i];
-        Some(entry.get_or_insert_with(|| filter(line.as_ref())).clone())
-    }
-
-    /// Filtered lines `lo..hi`, clipped like a Python slice.
-    pub fn slice<S: AsRef<str>>(
-        &mut self,
-        raw: &[S],
-        lo: usize,
-        hi: usize,
-        filter: &dyn Fn(&str) -> String,
-    ) -> Vec<String> {
-        let hi = hi.min(raw.len());
-        (lo.min(hi)..hi)
-            .filter_map(|i| self.get(raw, i, filter))
-            .collect()
-    }
 }
 
 #[cfg(test)]
@@ -478,10 +381,6 @@ mod tests {
     use super::*;
 
     const TEXT: &str = "0\n1\n2\n3\n4\n5\n6\n7\n8\n9\n10";
-
-    fn ident(s: &str) -> String {
-        s.to_owned()
-    }
 
     // Ported from test/test_buffer_lines.py
 
@@ -504,109 +403,14 @@ mod tests {
             (11, 12, &[]),
         ];
         for &(lo, hi, expected) in cases {
-            let mut lines = FilteredLines::new(buf.line_count());
-            assert_eq!(
-                lines.slice(buf.lines(), lo, hi, &ident),
-                expected,
-                "{lo}..{hi}"
-            );
-            assert_eq!(buf.slice(lo, hi), expected);
+            assert_eq!(buf.slice(lo, hi), expected, "{lo}..{hi}");
         }
     }
 
     #[test]
     fn meld_buffer_index_out_of_range() {
         let buf = TextBuffer::from_text(TEXT);
-        let mut lines = FilteredLines::new(buf.line_count());
-        assert_eq!(lines.get(buf.lines(), 11, &ident), None);
         assert_eq!(buf.line(11), None);
-    }
-
-    #[test]
-    fn meld_buffer_cached_contents() {
-        let buf = TextBuffer::from_text(TEXT);
-        let text_lines: Vec<&str> = TEXT.lines().collect();
-        let mut lines = FilteredLines::new(buf.line_count());
-        assert_eq!(lines.cache().len(), buf.line_count());
-        assert_eq!(buf.line_count(), text_lines.len());
-        assert!(lines.cache().iter().all(Option::is_none));
-        lines.slice(buf.lines(), 0, usize::MAX, &ident);
-        let cached: Vec<&str> = lines
-            .cache()
-            .iter()
-            .map(|l| l.as_deref().unwrap())
-            .collect();
-        assert_eq!(cached, text_lines);
-    }
-
-    fn cache_window(lines: &FilteredLines, lo: usize, hi: usize) -> Vec<Option<&str>> {
-        lines.cache()[lo..hi].iter().map(|l| l.as_deref()).collect()
-    }
-
-    #[test]
-    fn meld_buffer_insert_text() {
-        let mut buf = TextBuffer::from_text(TEXT);
-        let mut lines = FilteredLines::new(buf.line_count());
-        lines.slice(buf.lines(), 0, usize::MAX, &ident);
-        assert_eq!(
-            cache_window(&lines, 4, 8),
-            [Some("4"), Some("5"), Some("6"), Some("7")]
-        );
-
-        let edit = buf.insert(Position::new(5, 0), "hey\nthings");
-        lines.invalidate(edit.change);
-        assert_eq!(
-            cache_window(&lines, 4, 8),
-            [Some("4"), None, None, Some("6")]
-        );
-
-        assert_eq!(lines.slice(buf.lines(), 5, 7, &ident), ["hey", "things5"]);
-        assert_eq!(
-            cache_window(&lines, 4, 8),
-            [Some("4"), Some("hey"), Some("things5"), Some("6")]
-        );
-        assert!(lines.is_consistent(buf.line_count()));
-    }
-
-    #[test]
-    fn meld_buffer_delete_range() {
-        let mut buf = TextBuffer::from_text(TEXT);
-        let mut lines = FilteredLines::new(buf.line_count());
-        lines.slice(buf.lines(), 0, usize::MAX, &ident);
-        assert_eq!(
-            cache_window(&lines, 4, 8),
-            [Some("4"), Some("5"), Some("6"), Some("7")]
-        );
-
-        // Delete from the start of line 5 to the start of line 7,
-        // invalidating line 7 but leaving its contents intact.
-        let edit = buf.delete(Position::new(5, 0), Position::new(7, 0));
-        lines.invalidate(edit.change);
-        assert_eq!(cache_window(&lines, 4, 7), [Some("4"), None, Some("8")]);
-
-        assert_eq!(lines.get(buf.lines(), 5, &ident).as_deref(), Some("7"));
-        assert_eq!(
-            cache_window(&lines, 4, 7),
-            [Some("4"), Some("7"), Some("8")]
-        );
-        assert!(lines.is_consistent(buf.line_count()));
-    }
-
-    #[test]
-    fn meld_buffer_cache_debug() {
-        let buf = TextBuffer::from_text(TEXT);
-        let mut lines = FilteredLines::new(buf.line_count() + 1);
-        assert!(!lines.is_consistent(buf.line_count()));
-        lines.clear(buf.line_count());
-        assert!(lines.is_consistent(buf.line_count()));
-    }
-
-    #[test]
-    fn filter_applies_once() {
-        let buf = TextBuffer::from_text("a b\nc");
-        let mut lines = FilteredLines::new(buf.line_count());
-        let strip = |s: &str| s.replace(' ', "");
-        assert_eq!(lines.slice(buf.lines(), 0, 2, &strip), ["ab", "c"]);
     }
 
     #[test]
@@ -673,11 +477,6 @@ mod tests {
                 size_change: 1
             }
         );
-
-        let edits = buf.set_text("new");
-        assert_eq!(buf.text(), "new");
-        assert_eq!(edits[0].change.size_change, -3);
-        assert_eq!(edits[1].change.size_change, 0);
     }
 
     #[test]

@@ -17,8 +17,7 @@ use crate::build_facts::{
     BuildAgent, BuildChange, BuildCommit, BuildFacts, BuildFile, BuildFileEntry, BuildRevision,
     BuildStats, merge_ranges,
 };
-use crate::build_file::BuildHeader;
-use crate::build_index::{find_builds, read_build_headers, resolve_build_folder};
+use crate::build_index::resolve_build_folder;
 use crate::build_narrative::write_narrative;
 use crate::cards::{Card, CardKind, CardStep, ExplainAction};
 use crate::claude::RunClaude;
@@ -414,8 +413,6 @@ struct SessionState {
     entries: Option<Vec<FileEntry>>,
     commits: HashMap<String, GitCommit>,
     range: Option<Vec<GitCommit>>,
-    builds: Option<Arc<Vec<BuildHeader>>>,
-    patch_ids: HashMap<String, Option<String>>,
 }
 
 /// A resolved comparison, its files, and their explanations
@@ -748,89 +745,6 @@ impl CompareSession {
         Ok(())
     }
 
-    /// The commit as `git log` shows it, with its AI Lens note
-    pub fn commit_message(&self, sha: &str, cancel: &CancelToken) -> Result<String> {
-        let commit = self.get_commit(sha, cancel)?;
-        let mut lines = vec![
-            format!("commit {}", commit.sha),
-            format!("Author: {} <{}>", commit.author.name, commit.author.email),
-            format!("Date:   {}", commit.author.date),
-            String::new(),
-            commit.subject.clone(),
-        ];
-        if !commit.body.trim().is_empty() {
-            lines.extend([String::new(), commit.body.trim_end().to_string()]);
-        }
-        if let Some(note) = &commit.note {
-            lines.extend([
-                String::new(),
-                format!("Notes ({}):", self.config.notes_ref),
-                note.trim_end().to_string(),
-            ]);
-        }
-        Ok(lines.join("\n"))
-    }
-
-    fn builds_for(
-        &self,
-        shas: &[String],
-        cancel: &CancelToken,
-    ) -> Result<HashMap<String, Vec<String>>> {
-        let cached = lock(&self.state).builds.clone();
-        let headers = match cached {
-            Some(headers) => headers,
-            None => {
-                let headers = match self.info.build_folder(&self.config) {
-                    Ok(folder) if folder.is_dir() => read_build_headers(&folder),
-                    Ok(_) => Ok(Vec::new()),
-                    Err(err) => Err(err),
-                };
-                let headers = Arc::new(headers.unwrap_or_else(|err| {
-                    log::info!("Can't read builds: {err}");
-                    Vec::new()
-                }));
-                lock(&self.state).builds = Some(headers.clone());
-                headers
-            }
-        };
-        if headers.is_empty() {
-            return Ok(HashMap::new());
-        }
-        let known: HashSet<&str> = headers
-            .iter()
-            .flat_map(|header| &header.commits)
-            .map(|commit| commit.sha.as_str())
-            .collect();
-        let with_patch_ids = headers
-            .iter()
-            .flat_map(|header| &header.commits)
-            .any(|commit| commit.patch_id.is_some());
-        let missing: Vec<&str> = {
-            let state = lock(&self.state);
-            shas.iter()
-                .map(String::as_str)
-                .filter(|sha| !known.contains(sha) && !state.patch_ids.contains_key(*sha))
-                .collect()
-        };
-        if with_patch_ids && !missing.is_empty() {
-            let ids = self.repo.patch_ids(&missing, cancel)?;
-            let mut state = lock(&self.state);
-            for sha in missing {
-                state
-                    .patch_ids
-                    .insert(sha.to_string(), ids.get(sha).cloned());
-            }
-        }
-        let state = lock(&self.state);
-        Ok(shas
-            .iter()
-            .map(|sha| {
-                let patch_id = state.patch_ids.get(sha).cloned().flatten();
-                (sha.clone(), find_builds(&headers, sha, patch_id.as_deref()))
-            })
-            .collect())
-    }
-
     // -- cards --
 
     fn note(commit: &GitCommit) -> Option<ParsedNote> {
@@ -857,21 +771,8 @@ impl CompareSession {
         if attribution.diff.as_ref().is_none_or(|diff| diff.binary) {
             return Ok(Vec::new());
         }
-        let range_order: HashMap<String, i32> = self
-            .range_commits(cancel)?
-            .into_iter()
-            .enumerate()
-            .map(|(index, commit)| (commit.sha, index as i32))
-            .collect();
-        let mut shas: Vec<String> = attribution
-            .groups
-            .iter()
-            .filter_map(|group| group.sha.clone())
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect();
-        shas.sort();
-        let builds = self.builds_for(&shas, cancel)?;
+        // Loads the comparison's commits with one git call, for the cards
+        self.range_commits(cancel)?;
         let empty = LayerDiffsUsed::default();
         let layers = attribution.layers.as_ref().unwrap_or(&empty);
         let placed: HashMap<UncommittedLayer, Vec<PlacedExplanation>> = UncommittedLayer::ALL
@@ -886,8 +787,6 @@ impl CompareSession {
                 &attribution.groups,
                 index,
                 &covered,
-                &range_order,
-                &builds,
                 layers,
                 &placed,
                 cancel,
@@ -903,8 +802,6 @@ impl CompareSession {
         groups: &[ChangeGroup],
         index: usize,
         covered: &CoveredLines,
-        range_order: &HashMap<String, i32>,
-        builds: &HashMap<String, Vec<String>>,
         layers: &LayerDiffsUsed,
         placed: &HashMap<UncommittedLayer, Vec<PlacedExplanation>>,
         cancel: &CancelToken,
@@ -922,7 +819,6 @@ impl CompareSession {
             key: format!("{path}:{}:{by}:{index}", group.hunk_index),
             added: group.added.clone(),
             deleted: group.deleted.clone(),
-            color_index: -1,
             ..Default::default()
         };
 
@@ -944,7 +840,6 @@ impl CompareSession {
                 change_justification: join_texts(
                     changes.iter().filter_map(|c| c.justification.as_deref()),
                 ),
-                change_model: changes.first().map(|c| c.model.clone()).unwrap_or_default(),
                 explain: (infer && !explained).then_some(ExplainAction::Uncommitted),
                 ..common
             };
@@ -966,7 +861,6 @@ impl CompareSession {
 
         let commit = self.get_commit(sha, cancel)?;
         let explanation = explain_commit(&commit, &self.config.message_format);
-        let agent = detect_agent(&commit, self.config.author_pattern.as_deref());
         let note = Self::note(&commit);
         let changes = match &note {
             Some(note) => find_change_explanations(&group.origins, &note.changes),
@@ -989,45 +883,16 @@ impl CompareSession {
         } else {
             None
         };
-        let message = if commit.body.is_empty() {
-            commit.subject.clone()
-        } else {
-            format!("{}\n\n{}", commit.subject, commit.body)
-        };
         let mut card = Card {
             kind: CardKind::Commit,
             sha: Some(commit.sha.clone()),
-            short_sha: short_sha(&commit.sha).to_string(),
-            subject: commit.subject.clone(),
-            message,
-            author: commit.author.name.clone(),
-            date: commit.author.date.clone(),
-            committed: commit.committer.date.clone(),
-            agent_name: agent
-                .as_ref()
-                .map(|a| a.display_name.clone())
-                .unwrap_or_default(),
-            agent_model: agent
-                .as_ref()
-                .and_then(|a| a.model.clone())
-                .unwrap_or_default(),
             what: explanation.what.clone(),
-            why: explanation.why.clone().unwrap_or_default(),
-            justification: explanation.justification.clone().unwrap_or_default(),
-            source: Some(explanation.source),
-            inferred_by: explanation.model.clone().unwrap_or_default(),
             change_what: join_texts(changes.iter().map(|c| c.what.as_str())),
             change_why: join_texts(changes.iter().map(|c| c.why.as_str())),
             change_justification: join_texts(
                 changes.iter().filter_map(|c| c.justification.as_deref()),
             ),
-            change_model: match &note {
-                Some(note) if !changes.is_empty() => note.change_model.clone().unwrap_or_default(),
-                _ => String::new(),
-            },
             explain,
-            color_index: range_order.get(&commit.sha).copied().unwrap_or(-1),
-            builds: builds.get(&commit.sha).cloned().unwrap_or_default(),
             ..common
         };
         set_guide(&mut card, changes.iter().map(|c| &c.guide));
@@ -1209,10 +1074,7 @@ impl CompareSession {
                 continue;
             }
             let result = infer_uncommitted_explanation(layer, diff, &options, cancel)?;
-            kept += self
-                .info
-                .uncommitted
-                .remember(layer, diff, &result.changes, &result.model);
+            kept += self.info.uncommitted.remember(layer, diff, &result.changes);
         }
         Ok(kept)
     }
@@ -1498,7 +1360,6 @@ impl CompareSession {
             &self.config.generator,
             crate::time::now_timestamp(),
         )?;
-        lock(&self.state).builds = None;
         Ok(built.path)
     }
 }
@@ -1554,51 +1415,9 @@ fn label(
     Ok(ref_name.to_string())
 }
 
-/// A card's guide from those of the changes it shows: the kind of the
-/// first change to read closely (else of the first change), the earliest
-/// reading order, the highest risk, and the texts joined
-///
-/// Was and Now are joined in pairs, one per change that has either, so
-/// that the n-th Was goes with the n-th Now: a change with only one of them
-/// gets "—" for the other when there are several.
-fn set_guide<'a>(card: &mut Card, guides: impl Iterator<Item = &'a ChangeGuide> + Clone) {
-    card.change_kind = guides
-        .clone()
-        .filter_map(|g| g.kind)
-        .find(|kind| !kind.skimmable())
-        .or_else(|| guides.clone().find_map(|g| g.kind));
-    card.change_order = guides.clone().filter_map(|g| g.order).min();
-    card.change_risk = guides.clone().filter_map(|g| g.risk).max();
-    let text = |value: &Option<String>| {
-        value
-            .as_deref()
-            .map(str::trim)
-            .filter(|t| !t.is_empty())
-            .map(str::to_string)
-    };
-    // A change's Was and Now
-    type Pair = (Option<String>, Option<String>);
-    let pairs: Vec<Pair> = guides
-        .clone()
-        .map(|g| (text(&g.was), text(&g.now)))
-        .filter(|(was, now)| was.is_some() || now.is_some())
-        .collect();
-    let side = |pick: fn(&Pair) -> &Option<String>| {
-        if pairs.len() == 1 {
-            return pick(&pairs[0]).clone().unwrap_or_default();
-        }
-        if pairs.iter().all(|pair| pick(pair).is_none()) {
-            return String::new();
-        }
-        pairs
-            .iter()
-            .map(|pair| pick(pair).clone().unwrap_or_else(|| "—".to_string()))
-            .collect::<Vec<_>>()
-            .join("\n\n")
-    };
-    card.change_was = side(|pair| &pair.0);
-    card.change_now = side(|pair| &pair.1);
-    card.change_check = join_texts(guides.filter_map(|g| g.check.as_deref()));
+/// A card's guide from those of the changes it shows: the highest risk
+fn set_guide<'a>(card: &mut Card, guides: impl Iterator<Item = &'a ChangeGuide>) {
+    card.change_risk = guides.filter_map(|g| g.risk).max();
 }
 
 /// Lines of the commits' own diffs (and the uncommitted layers' diffs) the
@@ -1825,34 +1644,6 @@ pub fn build_file_tree(entries: &[FileEntry]) -> Vec<FileRow> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::ChangeKind;
-
-    fn guide(kind: Option<ChangeKind>, was: Option<&str>, now: Option<&str>) -> ChangeGuide {
-        ChangeGuide {
-            kind,
-            was: was.map(str::to_string),
-            now: now.map(str::to_string),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn a_card_takes_the_kind_of_its_first_change_to_read_closely() {
-        let mut card = Card::default();
-        let guides = [
-            guide(Some(ChangeKind::Test), None, None),
-            guide(Some(ChangeKind::Fix), None, None),
-        ];
-        set_guide(&mut card, guides.iter());
-        assert_eq!(card.change_kind, Some(ChangeKind::Fix));
-        let guides = [
-            guide(None, None, None),
-            guide(Some(ChangeKind::Rename), None, None),
-            guide(Some(ChangeKind::Test), None, None),
-        ];
-        set_guide(&mut card, guides.iter());
-        assert_eq!(card.change_kind, Some(ChangeKind::Rename));
-    }
 
     #[test]
     fn a_card_takes_the_highest_risk_of_its_changes() {
@@ -1868,30 +1659,5 @@ mod tests {
         assert_eq!(card.change_risk, Some(4));
         set_guide(&mut card, [risky(None)].iter());
         assert_eq!(card.change_risk, None);
-    }
-
-    #[test]
-    fn was_and_now_stay_in_pairs() {
-        let mut card = Card::default();
-        let guides = [
-            guide(None, None, Some("adds a cache")),
-            guide(None, None, None),
-            guide(None, Some("retries forever"), Some("retries 3 times")),
-        ];
-        set_guide(&mut card, guides.iter());
-        assert_eq!(card.change_was, "—\n\nretries forever");
-        assert_eq!(card.change_now, "adds a cache\n\nretries 3 times");
-        // One change: no stand-ins
-        set_guide(&mut card, guides[..1].iter());
-        assert_eq!(card.change_was, "");
-        assert_eq!(card.change_now, "adds a cache");
-        // Only Nows: no column of stand-ins either
-        let guides = [
-            guide(None, None, Some("one")),
-            guide(None, Some("  "), Some("two")),
-        ];
-        set_guide(&mut card, guides.iter());
-        assert_eq!(card.change_was, "");
-        assert_eq!(card.change_now, "one\n\ntwo");
     }
 }

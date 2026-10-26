@@ -6,7 +6,6 @@
 
 use std::fs::{self, FileTimes};
 use std::io;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
@@ -160,19 +159,6 @@ pub fn copy_entry(
         Ok(CopyOutcome::Folder)
     } else {
         Ok(CopyOutcome::Nothing)
-    }
-}
-
-/// Create a folder and any missing parents
-pub fn create_missing_dirs(path: &Path) -> io::Result<()> {
-    fs::create_dir_all(path)
-}
-
-/// Whether two paths are the same file on disk (same device and inode)
-pub fn same_file(a: &Path, b: &Path) -> bool {
-    match (fs::metadata(a), fs::metadata(b)) {
-        (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
-        _ => false,
     }
 }
 

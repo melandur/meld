@@ -22,31 +22,6 @@ pub enum ChunkKind {
     Error,
 }
 
-impl ChunkKind {
-    /// The Meld tag name of this kind (`"insert"`, `"replace"`, ...).
-    pub fn tag(self) -> &'static str {
-        match self {
-            ChunkKind::Insert => "insert",
-            ChunkKind::Delete => "delete",
-            ChunkKind::Replace => "replace",
-            ChunkKind::Conflict => "conflict",
-            ChunkKind::Error => "error",
-        }
-    }
-
-    /// Parses a Meld tag name.
-    pub fn from_tag(tag: &str) -> Option<Self> {
-        Some(match tag {
-            "insert" => ChunkKind::Insert,
-            "delete" => ChunkKind::Delete,
-            "replace" => ChunkKind::Replace,
-            "conflict" => ChunkKind::Conflict,
-            "error" => ChunkKind::Error,
-            _ => return None,
-        })
-    }
-}
-
 /// A chunk pairing lines of side `a` with lines of side `b`.
 ///
 /// For the link map, `a` is the left pane and `b` the right pane. For an
@@ -98,17 +73,6 @@ pub struct LineHighlight {
     /// Whether this is the current chunk (drawn with the
     /// `current_chunk` overlay).
     pub current: bool,
-}
-
-impl LineHighlight {
-    /// Creates a non-current highlight.
-    pub fn new(lines: Range<usize>, kind: ChunkKind) -> Self {
-        Self {
-            lines,
-            kind,
-            current: false,
-        }
-    }
 }
 
 /// An intraline (changed characters) highlight.

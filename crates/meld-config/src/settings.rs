@@ -107,36 +107,6 @@ impl MergeFileOrder {
     }
 }
 
-/// `org.gnome.meld.spacesflags`, GtkSourceView's space drawer flags.
-///
-/// No key of the current schema uses these flags (`enable-space-drawer`
-/// is a boolean), but they are part of the schema and kept for the
-/// space drawer widget.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-pub struct SpacesFlags(pub u32);
-
-impl SpacesFlags {
-    pub const SPACE: Self = Self(1);
-    pub const TAB: Self = Self(2);
-    pub const NEWLINE: Self = Self(4);
-    pub const NBSP: Self = Self(8);
-    pub const LEADING: Self = Self(16);
-    pub const TEXT: Self = Self(32);
-    pub const TRAILING: Self = Self(64);
-    pub const ALL: Self = Self(127);
-
-    pub fn contains(self, other: Self) -> bool {
-        self.0 & other.0 == other.0
-    }
-}
-
-impl std::ops::BitOr for SpacesFlags {
-    type Output = Self;
-    fn bitor(self, rhs: Self) -> Self {
-        Self(self.0 | rhs.0)
-    }
-}
-
 /// A `(name, enabled, pattern)` entry of `filename-filters` or
 /// `text-filters`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -477,23 +447,6 @@ impl Settings {
         self
     }
 
-    /// The gschema key names whose values differ between two settings,
-    /// e.g. to notify views like `MeldSettings`'s "changed" signals.
-    /// Window state keys are reported as `window-state`.
-    pub fn changed_keys(&self, other: &Settings) -> Vec<String> {
-        let a = self.to_table();
-        let b = other.to_table();
-        let mut keys: Vec<String> = a
-            .iter()
-            .filter(|(k, v)| b.get(*k) != Some(*v))
-            .map(|(k, _)| k.clone())
-            .chain(b.keys().filter(|k| !a.contains_key(*k)).cloned())
-            .collect();
-        keys.sort();
-        keys.dedup();
-        keys
-    }
-
     /// The font file comparisons use, as `MeldSettings.font` resolves it.
     ///
     /// With `use-system-font`, `system_monospace` is the desktop's
@@ -600,12 +553,6 @@ impl FontSpec {
             bold,
             italic,
         }
-    }
-
-    /// Size in whole points, like `Pango.FontDescription.get_size() //
-    /// Pango.SCALE`.
-    pub fn size_points(&self) -> i32 {
-        self.size_pt.floor() as i32
     }
 }
 
@@ -852,20 +799,6 @@ mod tests {
     }
 
     #[test]
-    fn changed_keys() {
-        let a = Settings::default();
-        let mut b = a.clone();
-        assert!(a.changed_keys(&b).is_empty());
-        b.custom_font = "Sans 9".into();
-        b.text_filters.pop();
-        b.window_state.width = 3;
-        assert_eq!(
-            a.changed_keys(&b),
-            ["custom-font", "text-filters", "window-state"]
-        );
-    }
-
-    #[test]
     fn font_resolution() {
         let mut s = Settings::default();
         assert_eq!(s.font(Some("Source Code Pro 10")).family, "Source Code Pro");
@@ -908,7 +841,6 @@ mod tests {
         );
         let f = FontSpec::parse("");
         assert_eq!((f.family.as_str(), f.size_pt), ("monospace", 11.0));
-        assert_eq!(FontSpec::parse("Mono 11.7").size_points(), 11);
     }
 
     #[test]
@@ -920,13 +852,5 @@ mod tests {
         assert!(!s.prefer_dark(true));
         s.style_variant = StyleVariant::ForceDark;
         assert!(s.prefer_dark(false));
-    }
-
-    #[test]
-    fn spaces_flags() {
-        let f = SpacesFlags::SPACE | SpacesFlags::TAB;
-        assert!(f.contains(SpacesFlags::TAB));
-        assert!(!f.contains(SpacesFlags::NBSP));
-        assert!(SpacesFlags::ALL.contains(f));
     }
 }

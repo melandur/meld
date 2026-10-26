@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use common::{CommitOptions, Content, FixtureRepo};
 use meld_ailens::comparison::{
-    changed_files, changed_files_with_stats, file_diff, file_stats, resolve_comparison,
+    changed_files, changed_files_with_stats, file_diff, resolve_comparison,
 };
 use meld_ailens::git::GitRepository;
 use meld_ailens::parsers::GitFileStats;
@@ -505,10 +505,10 @@ fn counts_lines_per_file_untracked_ones_too() {
     let repo = build_layered(&mut f);
     let comparison = resolve(&repo, commit(&f.sha("a")), working_tree());
 
-    let stats = file_stats(&repo, &comparison, &c()).unwrap();
+    let (files, stats) = changed_files_with_stats(&repo, &comparison, &c()).unwrap();
 
     assert_eq!(
-        sorted_stats(stats.clone()),
+        sorted_stats(stats),
         [
             GitFileStats::new("a.ts", Some(2), Some(1)),
             GitFileStats::new("bin.dat", None, None),
@@ -516,13 +516,10 @@ fn counts_lines_per_file_untracked_ones_too() {
             GitFileStats::new("s.ts", Some(0), Some(1)),
         ]
     );
-    assert_eq!(
-        changed_files_with_stats(&repo, &comparison, &c()).unwrap(),
-        (changes(&repo, &comparison), stats)
-    );
+    assert_eq!(files, changes(&repo, &comparison));
     let staged = resolve(&repo, commit(&f.sha("a")), index());
     assert_eq!(
-        sorted_stats(file_stats(&repo, &staged, &c()).unwrap()),
+        sorted_stats(changed_files_with_stats(&repo, &staged, &c()).unwrap().1),
         [
             GitFileStats::new("a.ts", Some(1), Some(1)),
             GitFileStats::new("s.ts", Some(0), Some(1)),
@@ -737,7 +734,7 @@ fn paths_with_spaces_quotes_unicode_and_newlines() {
         non_context(&diff_of(&repo, &on_disk, untracked).unwrap()),
         [line(DiffLineKind::Add, "u", None, Some(1))]
     );
-    let stats = file_stats(&repo, &on_disk, &c()).unwrap();
+    let (_, stats) = changed_files_with_stats(&repo, &on_disk, &c()).unwrap();
     let stat = |path: &str| stats.iter().find(|stat| stat.path == path).cloned();
     assert_eq!(
         stat("new\nline.txt"),
@@ -838,7 +835,7 @@ fn cancelled_listing() {
             .is_cancelled()
     );
     assert!(
-        file_stats(&repo, &comparison, &cancel)
+        changed_files_with_stats(&repo, &comparison, &cancel)
             .unwrap_err()
             .is_cancelled()
     );

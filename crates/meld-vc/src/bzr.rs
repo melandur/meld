@@ -513,13 +513,13 @@ P   Meld Test 2026-10-22 other
             PathBuf::from("/b/conflict2-moved.txt")
         );
         assert_eq!(
-            vc.get_path_for_conflict(Path::new("/b/c.txt"), ConflictSide::THIS)
+            vc.get_path_for_conflict(Path::new("/b/c.txt"), ConflictSide::Local)
                 .unwrap()
                 .0,
             PathBuf::from("/b/c.txt.THIS")
         );
         assert!(
-            vc.get_path_for_conflict(Path::new("/x/c.txt"), ConflictSide::OTHER)
+            vc.get_path_for_conflict(Path::new("/x/c.txt"), ConflictSide::Remote)
                 .is_err()
         );
 

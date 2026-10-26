@@ -102,16 +102,6 @@ impl Chunk {
             self.end_b + ob,
         )
     }
-
-    /// The `a` side as a range.
-    pub fn range_a(&self) -> std::ops::Range<usize> {
-        self.start_a..self.end_a
-    }
-
-    /// The `b` side as a range.
-    pub fn range_b(&self) -> std::ops::Range<usize> {
-        self.start_b..self.end_b
-    }
 }
 
 /// A matching block: `a[a..a + size] == b[b..b + size]` (difflib's `Match`).

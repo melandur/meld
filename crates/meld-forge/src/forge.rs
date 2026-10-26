@@ -61,20 +61,6 @@ impl Forge {
         }
     }
 
-    /// The conversation and the line comments
-    pub fn discussion(
-        &self,
-        details: &PullRequestDetails,
-        cancel: &CancelToken,
-    ) -> Result<Discussion> {
-        match self.kind() {
-            ForgeKind::GitHub => {
-                github::discussion(&*self.runner, &self.remote, details.pr.number, cancel)
-            }
-            ForgeKind::GitLab => gitlab::discussion(&*self.runner, &self.remote, details, cancel),
-        }
-    }
-
     /// Posts a review. Only call this after the user confirmed exactly
     /// this review.
     pub fn submit_review(
@@ -89,25 +75,6 @@ impl Forge {
             }
             ForgeKind::GitLab => {
                 gitlab::submit_review(&*self.runner, &self.remote, details, review, cancel)
-            }
-        }
-    }
-
-    /// Posts a reply to a thread. Only call this after the user confirmed
-    /// exactly this reply.
-    pub fn reply(
-        &self,
-        details: &PullRequestDetails,
-        thread: &ReviewThread,
-        body: &str,
-        cancel: &CancelToken,
-    ) -> Result<()> {
-        match self.kind() {
-            ForgeKind::GitHub => {
-                github::reply(&*self.runner, &self.remote, details, thread, body, cancel)
-            }
-            ForgeKind::GitLab => {
-                gitlab::reply(&*self.runner, &self.remote, details, thread, body, cancel)
             }
         }
     }

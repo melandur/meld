@@ -409,6 +409,7 @@ impl Picker {
                     })
                     .collect(),
                 StateFilter::ALL.iter().position(|f| *f == prs.filter),
+                12.0,
             );
             let mut line = row![
                 text(tr!("Pull requests")).size(12).style(ui::dim_text),
@@ -423,7 +424,7 @@ impl Picker {
                     .enumerate()
                     .map(|(i, label)| (label.clone(), map(Message::PrRemote(i))))
                     .collect();
-                line = line.push(crate::forge::chips(remotes, prs.selected_remote));
+                line = line.push(crate::forge::chips(remotes, prs.selected_remote, 12.0));
             }
             header = header.push(line);
             if !prs.status.is_empty() {

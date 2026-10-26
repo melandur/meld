@@ -2,17 +2,13 @@
 //!
 //! The GUI-free logic of `meld/dirdiff.py`: comparing files
 //! ([`files_same`]), listing folders in parallel with case-insensitive
-//! and Unicode-normalised matching ([`FolderComparison::scan_dir`]),
-//! computing row states ([`FolderComparison::row_status`]) and status
-//! filtering. Scans are synchronous; run them on a background task.
+//! and Unicode-normalised matching
+//! ([`FolderComparison::scan_dir_cancellable`]), computing row states
+//! ([`FolderComparison::row_status`]) and status filtering. Scans are
+//! synchronous; run them on a background task.
 //!
-//! There are three ways to scan:
-//!  * [`FolderComparison::scan_dir`] lists one folder level, for
-//!    expanding rows on demand;
-//!  * [`FolderComparison::walk`] is a depth-first iterator over every
-//!    folder level, matching the order of Meld's incremental scan;
-//!  * [`FolderComparison::scan_tree`] builds the whole tree, with empty
-//!    folders pruned according to the status filters.
+//! [`FolderComparison::walk`] is a depth-first iterator over every
+//! folder level, matching the order of Meld's incremental scan.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
@@ -584,13 +580,6 @@ pub struct DirScan {
     pub differences: bool,
 }
 
-impl DirScan {
-    /// The child folder rows, which can be scanned in turn
-    pub fn dirs(&self) -> impl Iterator<Item = &Row> {
-        self.children.iter().filter(|r| r.is_dir)
-    }
-}
-
 /// Symlinks already followed during a scan, so that each is followed
 /// only once (which also stops symlink loops)
 #[derive(Clone, Debug, Default)]
@@ -900,19 +889,21 @@ impl FolderComparison {
         states.iter().any(|s| filters.shows(*s)) || all_folders
     }
 
-    /// List one folder level in every pane
-    ///
-    /// `roots` are the folder's paths in each pane (some may not exist).
-    /// `symlinks` tracks followed symlinks across a scan; pass a fresh
-    /// tracker when expanding a single row.
+    /// [`scan_dir_cancellable`](Self::scan_dir_cancellable) without a
+    /// cancel flag
+    #[cfg(test)]
     pub fn scan_dir(&self, roots: &[PathBuf], symlinks: &mut SymlinkTracker) -> DirScan {
         self.scan_dir_cancellable(roots, symlinks, None)
             .unwrap_or_else(|| unreachable!("scans without a cancel flag finish"))
     }
 
-    /// [`scan_dir`](Self::scan_dir) that gives up, returning `None`, as
-    /// soon as `cancel` is set; it is checked between folder entries and
-    /// between file comparisons.
+    /// List one folder level in every pane, giving up, returning `None`,
+    /// as soon as `cancel` is set; it is checked between folder entries
+    /// and between file comparisons.
+    ///
+    /// `roots` are the folder's paths in each pane (some may not exist).
+    /// `symlinks` tracks followed symlinks across a scan; pass a fresh
+    /// tracker when expanding a single row.
     pub fn scan_dir_cancellable(
         &self,
         roots: &[PathBuf],
@@ -1097,94 +1088,6 @@ impl FolderComparison {
             ..self.walk(roots)
         }
     }
-
-    /// Scan the whole tree, pruning folders as Meld does
-    pub fn scan_tree(&self, roots: &[PathBuf]) -> FolderTree {
-        let mut symlinks = SymlinkTracker::default();
-        let mut issues = ScanIssues::default();
-        let root_row = self.root_row(roots);
-        let root = match self.build_node(root_row.clone(), &mut symlinks, &mut issues) {
-            Some(node) => node,
-            None => FolderNode {
-                row: root_row,
-                children: Vec::new(),
-                errors: Vec::new(),
-                empty: true,
-                differences: false,
-            },
-        };
-
-        let mut seen = HashSet::new();
-        let duplicate_dir = roots
-            .iter()
-            .map(|r| crate::iohelpers::canonicalize_lexically(r))
-            .find(|r| !seen.insert(r.clone()));
-        let identical = !root.any_differences();
-        FolderTree {
-            root,
-            issues,
-            duplicate_dir,
-            identical,
-        }
-    }
-
-    fn build_node(
-        &self,
-        row: Row,
-        symlinks: &mut SymlinkTracker,
-        issues: &mut ScanIssues,
-    ) -> Option<FolderNode> {
-        if !row.paths.iter().any(|p| p.is_dir()) {
-            return Some(FolderNode {
-                row,
-                children: Vec::new(),
-                errors: Vec::new(),
-                empty: false,
-                differences: false,
-            });
-        }
-        let scan = self.scan_dir(&row.paths, symlinks);
-        issues.invalid_filenames.extend(scan.invalid_filenames);
-        issues.shadowed.extend(scan.shadowed);
-        issues.whitespace.extend(scan.whitespace);
-        match scan.outcome {
-            ScanOutcome::Prune => None,
-            ScanOutcome::Empty => Some(FolderNode {
-                row,
-                children: Vec::new(),
-                errors: scan.errors,
-                empty: true,
-                differences: scan.differences,
-            }),
-            ScanOutcome::Entries => {
-                let mut children = Vec::new();
-                for child in scan.children {
-                    if child.is_dir {
-                        children.extend(self.build_node(child, symlinks, issues));
-                    } else {
-                        children.push(FolderNode {
-                            row: child,
-                            children: Vec::new(),
-                            errors: Vec::new(),
-                            empty: false,
-                            differences: false,
-                        });
-                    }
-                }
-                // Folders whose children were all pruned are pruned too
-                if children.is_empty() && scan.errors.is_empty() {
-                    return None;
-                }
-                Some(FolderNode {
-                    row,
-                    children,
-                    errors: scan.errors,
-                    empty: false,
-                    differences: scan.differences,
-                })
-            }
-        }
-    }
 }
 
 /// One scanned folder from [`Walk`]
@@ -1265,50 +1168,6 @@ impl ScanIssues {
     pub fn is_empty(&self) -> bool {
         self.invalid_filenames.is_empty() && self.shadowed.is_empty() && self.whitespace.is_empty()
     }
-}
-
-/// A node of a fully scanned folder tree
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FolderNode {
-    /// This row
-    pub row: Row,
-    /// Child rows (folders first, then files)
-    pub children: Vec<FolderNode>,
-    /// Errors listing this folder, shown as error rows
-    pub errors: Vec<ScanError>,
-    /// Whether to show an "empty folder" placeholder child
-    pub empty: bool,
-    /// Whether the folder's contents differ (Meld expands such rows)
-    pub differences: bool,
-}
-
-impl FolderNode {
-    fn any_differences(&self) -> bool {
-        self.differences || self.children.iter().any(FolderNode::any_differences)
-    }
-
-    /// Iterate over this node and its descendants, depth-first
-    pub fn iter(&self) -> impl Iterator<Item = &FolderNode> {
-        let mut stack = vec![self];
-        std::iter::from_fn(move || {
-            let node = stack.pop()?;
-            stack.extend(node.children.iter().rev());
-            Some(node)
-        })
-    }
-}
-
-/// A fully scanned folder comparison
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FolderTree {
-    /// The root row
-    pub root: FolderNode,
-    /// Name problems found during the scan
-    pub issues: ScanIssues,
-    /// A folder being compared to itself, if any
-    pub duplicate_dir: Option<PathBuf>,
-    /// Whether no differences were found ("Folders have no differences")
-    pub identical: bool,
 }
 
 #[cfg(test)]
@@ -1617,65 +1476,15 @@ mod tests {
     }
 
     #[test]
-    fn status_filters_and_pruning() {
-        let dir = create_sample_dir();
-        let roots = vec![dir.path().join("a"), dir.path().join("b")];
-        let cmp = comparison(StatusFilters {
-            normal: false,
-            new: false,
-            modified: true,
-        });
-        let tree = cmp.scan_tree(&roots);
-        let rows: Vec<String> = tree
-            .root
-            .iter()
-            .skip(1)
-            .map(|n| {
-                n.row.paths[0]
-                    .strip_prefix(dir.path())
-                    .unwrap()
-                    .display()
-                    .to_string()
-            })
-            .collect();
-        // Only e/g/g.txt is modified; everything else is pruned
-        assert_eq!(rows, vec!["a/e", "a/e/g", "a/e/g/g.txt"]);
-        assert!(!tree.identical);
-
-        // With normal shown, the identical folder c is kept
-        let tree = comparison(StatusFilters::default()).scan_tree(&roots);
-        let c = &tree.root.children[0];
-        assert_eq!(c.row.names[0], "c");
-        assert_eq!(c.children.len(), 1);
-        // a/e/f is empty on one side; it gets a placeholder... no: it
-        // has a new file from b
-        let e = &tree.root.children[2];
-        assert_eq!(e.children[0].row.names[0], "f");
-        assert_eq!(e.children[0].children[0].row.names[0], "f.txt");
-    }
-
-    #[test]
     fn empty_folders() {
         let dir = tempfile::tempdir().unwrap();
         for p in ["a/x", "b/x"] {
             fs::create_dir_all(dir.path().join(p)).unwrap();
         }
         let roots = vec![dir.path().join("a"), dir.path().join("b")];
-        let tree = comparison(StatusFilters::default()).scan_tree(&roots);
-        assert_eq!(tree.root.children.len(), 1);
-        assert!(tree.root.children[0].empty);
-        assert!(tree.identical);
 
-        // Hiding identical rows prunes x, leaving the root empty
-        let tree = comparison(StatusFilters {
-            normal: false,
-            ..Default::default()
-        })
-        .scan_tree(&roots);
-        assert!(tree.root.children.is_empty());
-        assert!(tree.root.empty);
-
-        // The walk reports the prune for the consumer to apply
+        // Hiding identical rows prunes x; the walk reports the prune for
+        // the consumer to apply
         let walk: Vec<WalkItem> = comparison(StatusFilters {
             normal: false,
             ..Default::default()
@@ -1872,14 +1681,6 @@ mod tests {
         let g = &all.children[1];
         assert_eq!(g.status.state, State::New);
         assert_eq!(g.status.panes[2].state, State::NonExist);
-    }
-
-    #[test]
-    fn duplicate_roots() {
-        let dir = tempfile::tempdir().unwrap();
-        let roots = vec![dir.path().to_path_buf(), dir.path().join(".")];
-        let tree = comparison(StatusFilters::default()).scan_tree(&roots);
-        assert_eq!(tree.duplicate_dir, Some(dir.path().to_path_buf()));
     }
 
     #[test]

@@ -47,7 +47,6 @@ pub struct LinkMap<'a, Message> {
     chunks: &'a [DiffChunk],
     style: &'a PaneStyle,
     scroll: [f32; 2],
-    offset: [f32; 2],
     heights: [f32; 2],
     wrap: [Option<&'a WrapLayout>; 2],
     line_height: f32,
@@ -65,7 +64,6 @@ impl<'a, Message> LinkMap<'a, Message> {
             chunks,
             style,
             scroll: [0.0; 2],
-            offset: [0.0; 2],
             heights: [0.0; 2],
             wrap: [None; 2],
             line_height: 18.0,
@@ -80,13 +78,6 @@ impl<'a, Message> LinkMap<'a, Message> {
     /// Vertical scroll offsets of the left and right panes, in pixels.
     pub fn scroll(mut self, left: f32, right: f32) -> Self {
         self.scroll = [left, right];
-        self
-    }
-
-    /// Vertical offset of each pane's first line relative to the top of
-    /// the link map (e.g. when a pane has an info bar above it).
-    pub fn pane_offsets(mut self, left: f32, right: f32) -> Self {
-        self.offset = [left, right];
         self
     }
 
@@ -138,12 +129,11 @@ impl<'a, Message> LinkMap<'a, Message> {
     /// Offset of a pane's first line below the top of a map `height` tall.
     fn offset(&self, side: usize, height: f32) -> f32 {
         let h = self.heights[side];
-        let below = if h > 0.0 && h < height {
+        if h > 0.0 && h < height {
             height - h
         } else {
             0.0
-        };
-        self.offset[side] + below
+        }
     }
 
     fn visible(&self, side: usize, height: f32) -> Range<usize> {

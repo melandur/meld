@@ -46,8 +46,6 @@ pub enum Error {
         command: Vec<String>,
         returncode: Option<i32>,
         stderr: String,
-        /// The git executable doesn't exist or can't be run
-        not_found: bool,
     },
     /// git printed something the parser doesn't understand
     #[error("{0}")]
@@ -109,16 +107,6 @@ impl Error {
             Self::Claude { reason, .. } => Some(*reason),
             _ => None,
         }
-    }
-
-    pub fn is_git_not_found(&self) -> bool {
-        matches!(
-            self,
-            Self::Git {
-                not_found: true,
-                ..
-            }
-        )
     }
 
     /// git's stderr, for a git error

@@ -168,9 +168,11 @@ impl FakeClaude {
         Arc::new(move |request, cancel| {
             fake.requests.lock().unwrap().push(request.clone());
             fake.cancels.lock().unwrap().push(cancel.clone());
-            let mut response = ClaudeResponse::new(fake.output.clone(), "", fake.model.clone());
-            response.cost_usd = Some(0.0);
-            Ok(response)
+            Ok(ClaudeResponse::new(
+                fake.output.clone(),
+                "",
+                fake.model.clone(),
+            ))
         })
     }
 

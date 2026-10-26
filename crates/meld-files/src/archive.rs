@@ -3,43 +3,11 @@
 //! Port of `meld/archivehelpers.py`. Meld mounts archives with GVfs'
 //! `archive://` backend and compares the mounted folders. Without GIO,
 //! this module detects archives, builds the `archive://` URIs and the
-//! `gio mount` command lines to mount and unmount them, locates the
-//! GVfs FUSE folder of a mount, and keeps a registry of mounts made by
-//! the app ([`ArchiveMounts`]) so that paths inside them can be shown
-//! as the original archive.
+//! `gio mount` command lines to mount and unmount them, and locates the
+//! GVfs FUSE folder of a mount.
 
-use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-
-/// Content types that the GVfs `archive://` backend should handle
-pub const ARCHIVE_CONTENT_TYPES: &[&str] = &[
-    "application/java-archive",
-    "application/vnd.android.package-archive",
-    "application/vnd.ms-cab-compressed",
-    "application/x-7z-compressed",
-    "application/x-archive",
-    "application/x-bzip-compressed-tar",
-    "application/x-cd-image",
-    "application/x-compressed-tar",
-    "application/x-cpio",
-    "application/x-deb",
-    "application/x-iso9660-image",
-    "application/x-lha",
-    "application/x-lzh-compressed",
-    "application/x-lzma-compressed-tar",
-    "application/x-rar",
-    "application/x-rar-compressed",
-    "application/x-rpm",
-    "application/x-stuffit",
-    "application/x-tar",
-    "application/x-tarz",
-    "application/x-xar",
-    "application/x-xz-compressed-tar",
-    "application/x-zip",
-    "application/x-zip-compressed",
-    "application/zip",
-];
 
 /// Guess an archive content type from a file's name and magic bytes
 ///
@@ -446,60 +414,6 @@ pub fn extract_archive(archive: &Path) -> Result<ArchiveFolder, String> {
     ))
 }
 
-/// Archives mounted by the app, keyed by mount root
-#[derive(Clone, Debug, Default)]
-pub struct ArchiveMounts {
-    mounts: HashMap<PathBuf, PathBuf>,
-}
-
-impl ArchiveMounts {
-    /// An empty registry
-    pub fn new() -> ArchiveMounts {
-        ArchiveMounts::default()
-    }
-
-    /// Record that `archive` was mounted at `root`
-    pub fn insert(&mut self, root: PathBuf, archive: PathBuf) {
-        self.mounts.insert(root, archive);
-    }
-
-    /// Forget a mount, returning its archive
-    pub fn remove(&mut self, root: &Path) -> Option<PathBuf> {
-        self.mounts.remove(root)
-    }
-
-    /// Whether any mounts are registered
-    pub fn have_active_mounts(&self) -> bool {
-        !self.mounts.is_empty()
-    }
-
-    /// The registered mount roots
-    pub fn roots(&self) -> impl Iterator<Item = &Path> {
-        self.mounts.keys().map(PathBuf::as_path)
-    }
-
-    /// The mount root containing `path`, if any
-    pub fn mount_for_path(&self, path: &Path) -> Option<&Path> {
-        self.mounts
-            .keys()
-            .find(|root| path.starts_with(root))
-            .map(PathBuf::as_path)
-    }
-
-    /// The original archive for a path inside a mounted archive;
-    /// `format_archive_path()`
-    pub fn format_archive_path(&self, path: &Path) -> Option<&Path> {
-        self.mount_for_path(path)
-            .and_then(|root| self.mounts.get(root))
-            .map(PathBuf::as_path)
-    }
-
-    /// Whether `path` is the root of a mounted archive
-    pub fn is_mounted_archive_root(&self, path: &Path) -> bool {
-        self.mounts.contains_key(path)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -530,9 +444,6 @@ mod tests {
         assert!(is_archive(&zip));
         assert!(!is_archive(&text));
         assert!(!is_archive(dir.path()));
-        for t in [&zip, &jar, &tar_path, &tgz].map(|p| archive_content_type(p).unwrap()) {
-            assert!(ARCHIVE_CONTENT_TYPES.contains(&t));
-        }
     }
 
     #[test]
@@ -631,22 +542,5 @@ mod tests {
             );
         }
         assert!(start.elapsed() < std::time::Duration::from_secs(4));
-    }
-
-    #[test]
-    fn mount_registry() {
-        let mut mounts = ArchiveMounts::new();
-        assert!(!mounts.have_active_mounts());
-        mounts.insert(PathBuf::from("/run/gvfs/x"), PathBuf::from("/home/a.zip"));
-        assert!(mounts.is_mounted_archive_root(Path::new("/run/gvfs/x")));
-        assert_eq!(
-            mounts.format_archive_path(Path::new("/run/gvfs/x/inner/f")),
-            Some(Path::new("/home/a.zip"))
-        );
-        assert_eq!(mounts.format_archive_path(Path::new("/run/gvfs/y")), None);
-        assert_eq!(
-            mounts.remove(Path::new("/run/gvfs/x")),
-            Some(PathBuf::from("/home/a.zip"))
-        );
     }
 }

@@ -1102,7 +1102,6 @@ mod tests {
         Some(PaneGeometry {
             scroll_y,
             line_height: 20.0,
-            viewport_height: 400.0,
             line_count: 100,
             top: 0.0,
             wrap: None,

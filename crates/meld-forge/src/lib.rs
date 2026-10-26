@@ -15,15 +15,12 @@
 //!   named `gitlab…`, in configuration order); [`remote::parse_remote`].
 //! - [`Forge`]: `Forge::new(ForgeRemote, Arc<dyn Runner>)`, then
 //!   - `list(StateFilter, search, limit, cancel) -> Vec<PullRequest>`
-//!   - `details(number, cancel) -> PullRequestDetails` (description, state,
-//!     labels, checks summary, base and merge commits)
-//!   - `discussion(&details, cancel) -> Discussion` (conversation comments
-//!     and line-comment [`ReviewThread`]s with their side and line)
+//!   - `details(number, cancel) -> PullRequestDetails` (state, labels, base
+//!     and merge commits)
 //!   - `submit_review(&details, &ReviewSubmission, cancel)` (Comment,
 //!     Approve or Request changes, with [`DraftComment`]s on lines)
-//!   - `reply(&details, &ReviewThread, body, cancel)`
 //!
-//!   Posting only happens through `submit_review` and `reply`; callers
+//!   Posting only happens through `submit_review`; callers
 //!   must have the user confirm exactly what is posted first.
 //! - [`default_remote`]: the first remote with pull requests.
 //! - Fetching: [`fetch::fetch_pull_request`]`(repo, remote, &details,

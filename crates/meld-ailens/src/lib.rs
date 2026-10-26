@@ -1,18 +1,18 @@
 //! meld-ailens: the GTK-free AI Lens core behind Meld's Git Compare tab
 //!
-//! Replaces the Python package `meld/ailens/` (every module, one Rust
-//! module each: `agent`, `agent_setup`, `attribution`, `build_facts`,
-//! `build_file`, `build_index`, `build_narrative`, `cards`, `claude`,
-//! `comparison`, `explanation`, `generate_build`, `git`, `ignore`, `infer`,
-//! `linemap`, `models`, `parsers`, `picker`, `process`, `session`,
-//! `uncommitted`, `worker`) and the GTK-free `build_file_tree` of
-//! `meld/gitcompare.py` (in [`session`]).
+//! Replaces the Python package `meld/ailens/` (every module but `worker`,
+//! whose role the app's own jobs take, one Rust module each: `agent`,
+//! `agent_setup`, `attribution`, `build_facts`, `build_file`,
+//! `build_index`, `build_narrative`, `cards`, `claude`, `comparison`,
+//! `explanation`, `generate_build`, `git`, `ignore`, `infer`, `linemap`,
+//! `models`, `parsers`, `picker`, `process`, `session`, `uncommitted`) and
+//! the GTK-free `build_file_tree` of `meld/gitcompare.py` (in [`session`]).
 //!
 //! Git Compare compares two revisions of a git repository (branches, tags,
 //! commits, the staged or unstaged changes, or another worktree's files).
-//! Each change gets a card in a Why column saying which commit made it and
-//! why: from labeled commit messages, git notes in `refs/notes/ai-lens`, or
-//! the plain message. Explain asks Claude Code (`claude -p`) for missing
+//! Each change gets a card in a Why column saying what it does and how
+//! much it needs checking, line by line: from labeled commit messages, git
+//! notes in `refs/notes/ai-lens`, or the plain message. Explain asks Claude Code (`claude -p`) for missing
 //! reasons, with a justification of each (why it is the right change: its
 //! evidence and the alternatives it rules out), and saves them as notes
 //! (`Justification:` after each `Why:`); Explain & Build writes
@@ -56,13 +56,9 @@
 //!     `cards(&FileView, cancel)` for the refreshed cards;
 //!     `explain_all(cancel, Some(&progress), commits_only) -> usize`.
 //!   - Explain & Build: `generate_build(cancel, Some(&progress)) -> PathBuf`.
-//!   - `commit_message(sha, cancel)` for a card's full commit.
 //! - [`SessionConfig`]: the settings (Claude path, infer on/off, infer and
 //!   build models, build folder, notes ref, author pattern), filled by the
 //!   app from its preferences; `run_claude` swaps the Claude Code client.
-//! - [`worker::Worker`]: an optional thread pool that runs jobs with their
-//!   own tokens, keeps only the newest result of an exclusive job, and hands
-//!   results to a dispatch function (e.g. [`worker::channel_dispatch`]).
 //!
 //! Line numbers in the models are 1-based and ranges inclusive, as git, the
 //! notes and the build files have them.
@@ -91,7 +87,6 @@ pub mod process;
 pub mod session;
 pub mod time;
 pub mod uncommitted;
-pub mod worker;
 
 pub use cards::{Card, CardKind, CardStep, ExplainAction};
 pub use claude::{ClaudeRequest, ClaudeResponse, RunClaude};

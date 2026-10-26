@@ -112,16 +112,9 @@ impl InlineCache {
         self.cache.retain(|_, (_, t)| *t >= cutoff);
     }
 
-    pub fn len(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
         self.cache.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.cache.is_empty()
-    }
-
-    pub fn clear(&mut self) {
-        self.cache.clear();
     }
 }
 

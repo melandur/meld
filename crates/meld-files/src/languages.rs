@@ -16,8 +16,6 @@ pub struct LanguageSpec {
     pub id: &'static str,
     /// Display name, e.g. `"Python 3"`
     pub name: &'static str,
-    /// Section in GtkSourceView's language menu
-    pub section: &'static str,
     /// File name globs, matched case-sensitively against base names
     pub globs: &'static [&'static str],
     /// MIME types handled by the language
@@ -25,8 +23,8 @@ pub struct LanguageSpec {
 }
 
 macro_rules! lang {
-    ($id:literal, $name:literal, $section:literal, [$($glob:literal),* $(,)?], [$($mime:literal),* $(,)?]) => {
-        LanguageSpec { id: $id, name: $name, section: $section, globs: &[$($glob),*], mime_types: &[$($mime),*] }
+    ($id:literal, $name:literal, [$($glob:literal),* $(,)?], [$($mime:literal),* $(,)?]) => {
+        LanguageSpec { id: $id, name: $name, globs: &[$($glob),*], mime_types: &[$($mime),*] }
     };
 }
 
@@ -35,52 +33,45 @@ pub static LANGUAGES: &[LanguageSpec] = &[
     lang!(
         "ada",
         "Ada",
-        "Source",
         ["*.adb", "*.ads"],
         ["text/x-ada", "text/x-adasrc"]
     ),
     lang!(
         "asciidoc",
         "AsciiDoc",
-        "Markup",
         ["*.asciidoc", "*.adoc"],
         ["text/asciidoc"]
     ),
     lang!(
         "automake",
         "Automake",
-        "Other",
         ["Makefile.am", "GNUmakefile.am"],
         []
     ),
-    lang!("awk", "awk", "Scripts", ["*.awk"], ["application/x-awk"]),
-    lang!("bibtex", "BibTeX", "Markup", ["*.bib"], ["text/x-bibtex"]),
+    lang!("awk", "awk", ["*.awk"], ["application/x-awk"]),
+    lang!("bibtex", "BibTeX", ["*.bib"], ["text/x-bibtex"]),
     lang!(
         "c",
         "C",
-        "Source",
         ["*.c"],
         ["text/x-c", "text/x-csrc", "image/x-xpixmap"]
     ),
     lang!(
         "c-sharp",
         "C#",
-        "Source",
         ["*.cs"],
         ["text/x-csharp", "text/x-csharpsrc"]
     ),
     lang!(
         "changelog",
         "ChangeLog",
-        "Other",
         ["ChangeLog*"],
         ["text/x-changelog"]
     ),
-    lang!("chdr", "C/ObjC Header", "Source", ["*.h"], ["text/x-chdr"]),
+    lang!("chdr", "C/ObjC Header", ["*.h"], ["text/x-chdr"]),
     lang!(
         "cmake",
         "CMake",
-        "Source",
         [
             "CMakeLists.txt",
             "*.cmake",
@@ -93,32 +84,28 @@ pub static LANGUAGES: &[LanguageSpec] = &[
     lang!(
         "commonlisp",
         "Common Lisp",
-        "Source",
         ["*.cl", "*.lisp", "*.el", "*.asd"],
         ["text/x-common-lisp", "text/x-emacs-lisp"]
     ),
     lang!(
         "cpp",
         "C++",
-        "Source",
         ["*.cpp", "*.cxx", "*.cc", "*.C", "*.c++", "*.tpp"],
         ["text/x-c++", "text/x-cpp", "text/x-c++src"]
     ),
     lang!(
         "cpphdr",
         "C++ Header",
-        "Source",
         ["*.hh", "*.hp", "*.hpp", "*.h++", "*.hxx"],
         ["text/x-c++hdr"]
     ),
-    lang!("css", "CSS", "Other", ["*.css", "*.CSSL"], ["text/css"]),
-    lang!("csv", "CSV", "Other", ["*.csv"], ["text/csv"]),
-    lang!("cuda", "CUDA", "Source", ["*.cu", "*.cuh"], ["text/x-cuda"]),
-    lang!("d", "D", "Source", ["*.d"], ["text/x-dsrc"]),
+    lang!("css", "CSS", ["*.css", "*.CSSL"], ["text/css"]),
+    lang!("csv", "CSV", ["*.csv"], ["text/csv"]),
+    lang!("cuda", "CUDA", ["*.cu", "*.cuh"], ["text/x-cuda"]),
+    lang!("d", "D", ["*.d"], ["text/x-dsrc"]),
     lang!(
         "dart",
         "Dart",
-        "Source",
         ["*.dart"],
         [
             "application/dart",
@@ -130,71 +117,46 @@ pub static LANGUAGES: &[LanguageSpec] = &[
     lang!(
         "desktop",
         ".desktop",
-        "Other",
         ["*.desktop", "*.kdelnk"],
         ["application/x-desktop"]
     ),
     lang!(
         "diff",
         "Diff",
-        "Other",
         ["*.diff", "*.patch", "*.rej"],
         ["text/x-diff", "text/x-patch", "text/x-reject"]
     ),
     lang!(
         "docbook",
         "DocBook",
-        "Markup",
         ["*.docbook"],
         ["application/docbook+xml"]
     ),
     lang!(
         "docker",
         "Dockerfile",
-        "Other",
         ["Dockerfile", "Containerfile", "*.dockerfile"],
         ["text/x-dockerfile"]
     ),
     lang!(
         "dosbatch",
         "DOS Batch",
-        "Scripts",
         ["*.bat", "*.cmd", "*.sys"],
         ["text/x-dosbatch"]
     ),
     lang!(
         "dot",
         "Graphviz Dot",
-        "Other",
         ["*.dot", "*.gv"],
         ["text/vnd.graphviz"]
     ),
-    lang!("dtd", "DTD", "Markup", ["*.dtd"], ["text/x-dtd"]),
-    lang!(
-        "eiffel",
-        "Eiffel",
-        "Source",
-        ["*.e", "*.eif"],
-        ["text/x-eiffel"]
-    ),
-    lang!(
-        "elixir",
-        "Elixir",
-        "Source",
-        ["*.ex", "*.exs"],
-        ["text/x-elixir"]
-    ),
-    lang!(
-        "erlang",
-        "Erlang",
-        "Source",
-        ["*.erl", "*.hrl"],
-        ["text/x-erlang"]
-    ),
+    lang!("dtd", "DTD", ["*.dtd"], ["text/x-dtd"]),
+    lang!("eiffel", "Eiffel", ["*.e", "*.eif"], ["text/x-eiffel"]),
+    lang!("elixir", "Elixir", ["*.ex", "*.exs"], ["text/x-elixir"]),
+    lang!("erlang", "Erlang", ["*.erl", "*.hrl"], ["text/x-erlang"]),
     lang!(
         "fortran",
         "Fortran 95",
-        "Source",
         [
             "*.f", "*.f90", "*.f95", "*.for", "*.F", "*.F90", "*.f03", "*.f08"
         ],
@@ -203,14 +165,12 @@ pub static LANGUAGES: &[LanguageSpec] = &[
     lang!(
         "fsharp",
         "F#",
-        "Source",
         ["*.fs", "*.fsx", "*.fsi"],
         ["text/x-fsharp"]
     ),
     lang!(
         "gettext-translation",
         "gettext translation",
-        "Other",
         ["*.po", "*.pot"],
         [
             "text/x-po",
@@ -222,34 +182,30 @@ pub static LANGUAGES: &[LanguageSpec] = &[
     lang!(
         "glsl",
         "OpenGL Shading Language",
-        "Source",
         [
             "*.glsl", "*.glslv", "*.glslf", "*.vert", "*.frag", "*.geom", "*.comp"
         ],
         ["text/x-glsl"]
     ),
-    lang!("go", "Go", "Source", ["*.go"], ["text/x-go"]),
+    lang!("go", "Go", ["*.go"], ["text/x-go"]),
     lang!(
         "groovy",
         "Groovy",
-        "Source",
         ["*.groovy", "*.gradle"],
         ["text/x-groovy"]
     ),
-    lang!("haskell", "Haskell", "Source", ["*.hs"], ["text/x-haskell"]),
+    lang!("haskell", "Haskell", ["*.hs"], ["text/x-haskell"]),
     lang!(
         "haskell-literate",
         "Literate Haskell",
-        "Source",
         ["*.lhs"],
         ["text/x-literate-haskell"]
     ),
-    lang!("html", "HTML", "Markup", ["*.html", "*.htm"], ["text/html"]),
-    lang!("idl", "IDL", "Source", ["*.idl"], ["text/x-idl"]),
+    lang!("html", "HTML", ["*.html", "*.htm"], ["text/html"]),
+    lang!("idl", "IDL", ["*.idl"], ["text/x-idl"]),
     lang!(
         "ini",
         ".ini",
-        "Other",
         [
             "*.ini",
             "*.cfg",
@@ -262,11 +218,10 @@ pub static LANGUAGES: &[LanguageSpec] = &[
         ],
         ["text/x-dosini", "text/x-ini"]
     ),
-    lang!("java", "Java", "Source", ["*.java"], ["text/x-java"]),
+    lang!("java", "Java", ["*.java"], ["text/x-java"]),
     lang!(
         "js",
         "JavaScript",
-        "Script",
         ["*.js", "*.mjs", "*.cjs", "*.node"],
         [
             "application/javascript",
@@ -279,7 +234,6 @@ pub static LANGUAGES: &[LanguageSpec] = &[
     lang!(
         "json",
         "JSON",
-        "Other",
         [
             "*.json",
             "*.geojson",
@@ -299,100 +253,77 @@ pub static LANGUAGES: &[LanguageSpec] = &[
     lang!(
         "jsx",
         "JavaScript (React)",
-        "Script",
         ["*.jsx"],
         ["text/jsx", "text/x-jsx"]
     ),
     lang!(
         "julia",
         "Julia",
-        "Source",
         ["*.jl"],
         ["text/x-julia", "application/x-julia"]
     ),
-    lang!(
-        "kotlin",
-        "Kotlin",
-        "Source",
-        ["*.kt", "*.kts"],
-        ["text/x-kotlin"]
-    ),
+    lang!("kotlin", "Kotlin", ["*.kt", "*.kts"], ["text/x-kotlin"]),
     lang!(
         "latex",
         "LaTeX",
-        "Markup",
         [
             "*.tex", "*.ltx", "*.sty", "*.cls", "*.dtx", "*.ins", "*.bbl"
         ],
         ["text/x-tex"]
     ),
-    lang!("less", "Less", "Other", ["*.less"], ["text/x-less"]),
+    lang!("less", "Less", ["*.less"], ["text/x-less"]),
     lang!(
         "libtool",
         "libtool",
-        "Other",
         ["*.la", "*.lai", "*.lo"],
         ["text/x-libtool"]
     ),
-    lang!("llvm", "LLVM IR", "Source", ["*.ll"], ["text/x-llvm"]),
-    lang!("lua", "Lua", "Scripts", ["*.lua"], ["text/x-lua"]),
+    lang!("llvm", "LLVM IR", ["*.ll"], ["text/x-llvm"]),
+    lang!("lua", "Lua", ["*.lua"], ["text/x-lua"]),
     lang!(
         "m4",
         "m4",
-        "Scripts",
         ["*.m4", "configure.ac", "configure.in"],
         ["application/x-m4"]
     ),
     lang!(
         "makefile",
         "Makefile",
-        "Other",
         ["[Mm]akefile", "GNUmakefile", "*.make", "*.mak", "*.mk"],
         ["text/x-makefile"]
     ),
     lang!(
         "markdown",
         "Markdown",
-        "Markup",
         ["*.markdown", "*.md", "*.mkd"],
         ["text/x-markdown", "text/markdown"]
     ),
-    lang!("matlab", "Matlab", "Scientific", [], ["text/x-matlab"]),
+    lang!("matlab", "Matlab", [], ["text/x-matlab"]),
     lang!(
         "meson",
         "Meson",
-        "Other",
         ["meson.build", "meson_options.txt", "meson.options"],
         ["text/x-meson"]
     ),
-    lang!("nsis", "NSIS", "Scripts", ["*.nsi", "*.nsh"], []),
-    lang!("objc", "Objective-C", "Source", ["*.m"], ["text/x-objcsrc"]),
+    lang!("nsis", "NSIS", ["*.nsi", "*.nsh"], []),
+    lang!("objc", "Objective-C", ["*.m"], ["text/x-objcsrc"]),
     lang!(
         "ocaml",
         "OCaml",
-        "Source",
         ["*.ml", "*.mli", "*.mll", "*.mly"],
         ["text/x-ocaml"]
     ),
-    lang!("octave", "Octave", "Scientific", [], ["text/x-octave"]),
-    lang!(
-        "pascal",
-        "Pascal",
-        "Source",
-        ["*.p", "*.pas"],
-        ["text/x-pascal"]
-    ),
+    lang!("octave", "Octave", [], ["text/x-octave"]),
+    lang!("pascal", "Pascal", ["*.p", "*.pas"], ["text/x-pascal"]),
     lang!(
         "perl",
         "Perl",
-        "Scripts",
         ["*.pl", "*.pm", "*.al", "*.perl", "*.t"],
         ["text/x-perl", "application/x-perl"]
     ),
     lang!(
         "php",
         "PHP",
-        "Scripts",
         ["*.php", "*.php3", "*.php4", "*.phtml"],
         [
             "text/x-php",
@@ -401,45 +332,24 @@ pub static LANGUAGES: &[LanguageSpec] = &[
             "application/x-php-source"
         ]
     ),
-    lang!(
-        "pkgconfig",
-        "pkg-config",
-        "Other",
-        ["*.pc"],
-        ["text/x-pkg-config"]
-    ),
+    lang!("pkgconfig", "pkg-config", ["*.pc"], ["text/x-pkg-config"]),
     lang!(
         "powershell",
         "PowerShell",
-        "Scripts",
         ["*.ps1", "*.psm1", "*.psd1"],
         ["text/x-powershell"]
     ),
-    lang!(
-        "prolog",
-        "Prolog",
-        "Source",
-        ["*.prolog"],
-        ["text/x-prolog"]
-    ),
-    lang!(
-        "proto",
-        "Protobuf",
-        "Source",
-        ["*.proto"],
-        ["text/x-protobuf"]
-    ),
+    lang!("prolog", "Prolog", ["*.prolog"], ["text/x-prolog"]),
+    lang!("proto", "Protobuf", ["*.proto"], ["text/x-protobuf"]),
     lang!(
         "python",
         "Python 2",
-        "Scripts",
         ["*.py2"],
         ["text/x-python2", "application/x-python2"]
     ),
     lang!(
         "python3",
         "Python 3",
-        "Scripts",
         [
             "*.py",
             "*.py3",
@@ -459,7 +369,6 @@ pub static LANGUAGES: &[LanguageSpec] = &[
     lang!(
         "r",
         "R",
-        "Scientific",
         [
             "*.R",
             "*.Rout",
@@ -471,24 +380,11 @@ pub static LANGUAGES: &[LanguageSpec] = &[
         ],
         ["text/x-R"]
     ),
-    lang!(
-        "rpmspec",
-        "RPM spec",
-        "Other",
-        ["*.spec"],
-        ["text/x-rpm-spec"]
-    ),
-    lang!(
-        "rst",
-        "reStructuredText",
-        "Markup",
-        ["*.rst"],
-        ["text/x-rst"]
-    ),
+    lang!("rpmspec", "RPM spec", ["*.spec"], ["text/x-rpm-spec"]),
+    lang!("rst", "reStructuredText", ["*.rst"], ["text/x-rst"]),
     lang!(
         "ruby",
         "Ruby",
-        "Scripts",
         [
             "*.rb",
             "*.rake",
@@ -501,32 +397,13 @@ pub static LANGUAGES: &[LanguageSpec] = &[
         ],
         ["application/x-ruby", "text/x-ruby"]
     ),
-    lang!(
-        "rust",
-        "Rust",
-        "Source",
-        ["*.rs"],
-        ["text/rust", "text/x-rust"]
-    ),
-    lang!(
-        "scala",
-        "Scala",
-        "Source",
-        ["*.scala", "*.sc"],
-        ["text/x-scala"]
-    ),
-    lang!(
-        "scheme",
-        "Scheme",
-        "Source",
-        ["*.scm", "*.ss"],
-        ["text/x-scheme"]
-    ),
-    lang!("scss", "SCSS", "Other", ["*.scss"], ["text/x-scss"]),
+    lang!("rust", "Rust", ["*.rs"], ["text/rust", "text/x-rust"]),
+    lang!("scala", "Scala", ["*.scala", "*.sc"], ["text/x-scala"]),
+    lang!("scheme", "Scheme", ["*.scm", "*.ss"], ["text/x-scheme"]),
+    lang!("scss", "SCSS", ["*.scss"], ["text/x-scss"]),
     lang!(
         "sh",
         "sh",
-        "Scripts",
         [
             "*.sh",
             "*.bash",
@@ -554,40 +431,30 @@ pub static LANGUAGES: &[LanguageSpec] = &[
             "application/x-sh"
         ]
     ),
-    lang!(
-        "sml",
-        "Standard ML",
-        "Source",
-        ["*.sml", "*.sig"],
-        ["text/x-sml"]
-    ),
-    lang!("sql", "SQL", "Source", ["*.sql"], ["text/x-sql"]),
-    lang!("swift", "Swift", "Source", ["*.swift"], ["text/x-swift"]),
+    lang!("sml", "Standard ML", ["*.sml", "*.sig"], ["text/x-sml"]),
+    lang!("sql", "SQL", ["*.sql"], ["text/x-sql"]),
+    lang!("swift", "Swift", ["*.swift"], ["text/x-swift"]),
     lang!(
         "systemverilog",
         "SystemVerilog",
-        "Source",
         ["*.sv", "*.svh"],
         ["text/x-systemverilog"]
     ),
     lang!(
         "tcl",
         "Tcl",
-        "Scripts",
         ["*.tcl", "*.tk"],
         ["text/x-tcl", "application/x-tcl"]
     ),
     lang!(
         "texinfo",
         "Texinfo",
-        "Markup",
         ["*.texi", "*.texinfo"],
         ["text/x-texinfo"]
     ),
     lang!(
         "toml",
         "TOML",
-        "Other",
         [
             "*.toml",
             "*.tml",
@@ -601,7 +468,6 @@ pub static LANGUAGES: &[LanguageSpec] = &[
     lang!(
         "typescript",
         "TypeScript",
-        "Script",
         ["*.ts", "*.mts", "*.cts"],
         [
             "application/typescript",
@@ -613,42 +479,16 @@ pub static LANGUAGES: &[LanguageSpec] = &[
     lang!(
         "typescript-jsx",
         "TypeScript JSX",
-        "Script",
         ["*.tsx"],
         ["text/x-tsx"]
     ),
-    lang!(
-        "vala",
-        "Vala",
-        "Source",
-        ["*.vala", "*.vapi"],
-        ["text/x-vala"]
-    ),
-    lang!(
-        "vbnet",
-        "VB.NET",
-        "Source",
-        ["*.vb"],
-        ["text/x-vb", "text/x-vbnet"]
-    ),
-    lang!(
-        "verilog",
-        "Verilog",
-        "Source",
-        ["*.v"],
-        ["text/x-verilog-src"]
-    ),
-    lang!(
-        "vhdl",
-        "VHDL",
-        "Source",
-        ["*.vhd", "*.vhdl"],
-        ["text/x-vhdl"]
-    ),
+    lang!("vala", "Vala", ["*.vala", "*.vapi"], ["text/x-vala"]),
+    lang!("vbnet", "VB.NET", ["*.vb"], ["text/x-vb", "text/x-vbnet"]),
+    lang!("verilog", "Verilog", ["*.v"], ["text/x-verilog-src"]),
+    lang!("vhdl", "VHDL", ["*.vhd", "*.vhdl"], ["text/x-vhdl"]),
     lang!(
         "xml",
         "XML",
-        "Markup",
         [
             "*.xml",
             "*.xspf",
@@ -698,21 +538,18 @@ pub static LANGUAGES: &[LanguageSpec] = &[
     lang!(
         "yacc",
         "Yacc",
-        "Source",
         ["*.y", "*.yacc"],
         ["text/x-yacc", "text/x-bison"]
     ),
     lang!(
         "lex",
         "Lex",
-        "Source",
         ["*.l", "*.lex", "*.flex"],
         ["text/x-lex", "text/x-flex"]
     ),
     lang!(
         "yaml",
         "YAML",
-        "Markup",
         ["*.yaml", "*.yml", ".clang-format", ".clang-tidy"],
         [
             "application/x-yaml",
@@ -729,6 +566,7 @@ pub fn language(id: &str) -> Option<&'static LanguageSpec> {
 }
 
 /// All language IDs
+#[cfg(test)]
 pub fn language_ids() -> impl Iterator<Item = &'static str> {
     LANGUAGES.iter().map(|l| l.id)
 }

@@ -562,10 +562,8 @@ fn decode(path: &Path) -> Result<Decoded, String> {
 
 /// Which pixels differ between two same-sized RGBA buffers.
 fn difference_mask(a: &[u8], b: &[u8]) -> Vec<bool> {
-    a.chunks_exact(4)
-        .zip(b.chunks_exact(4))
-        .map(|(p, q)| p != q)
-        .collect()
+    let (a, b) = (a.as_chunks::<4>().0, b.as_chunks::<4>().0);
+    a.iter().zip(b).map(|(p, q)| p != q).collect()
 }
 
 /// Compares neighbouring images (left–middle, middle–right).
@@ -637,7 +635,7 @@ fn compare(images: &[Arc<Decoded>]) -> Comparison {
         .map(|(mask, image)| {
             let mask = mask?;
             let mut pixels = vec![0u8; mask.len() * 4];
-            for (pixel, differs) in pixels.chunks_exact_mut(4).zip(&mask) {
+            for (pixel, differs) in pixels.as_chunks_mut::<4>().0.iter_mut().zip(&mask) {
                 if *differs {
                     pixel.copy_from_slice(&HIGHLIGHT);
                 }

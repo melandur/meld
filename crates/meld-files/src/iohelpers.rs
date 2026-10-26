@@ -177,62 +177,6 @@ pub fn format_parent_relative_path_with(
     Ok(label)
 }
 
-/// Check whether a path is on a tmpfs file system
-///
-/// This reads `/proc/self/mounts`, so it is Linux-specific; on any
-/// error it returns false.
-pub fn is_file_on_tmpfs(path: &Path) -> bool {
-    let Ok(mounts) = std::fs::read_to_string("/proc/self/mounts") else {
-        return false;
-    };
-    let path = std::fs::canonicalize(path)
-        .or_else(|_| std::path::absolute(path))
-        .unwrap_or_else(|_| path.to_path_buf());
-    mount_fs_type(&mounts, &path).is_some_and(|fs| fs == "tmpfs")
-}
-
-/// Find the file system type of the longest mount point containing
-/// `path` in `/proc/mounts`-formatted text
-fn mount_fs_type(mounts: &str, path: &Path) -> Option<String> {
-    let mut best: Option<(usize, String)> = None;
-    for line in mounts.lines() {
-        let mut fields = line.split_whitespace();
-        let (Some(_device), Some(mount_point), Some(fs_type)) =
-            (fields.next(), fields.next(), fields.next())
-        else {
-            continue;
-        };
-        let mount_point = unescape_mount_field(mount_point);
-        let depth = Path::new(&mount_point).components().count();
-        if path.starts_with(&mount_point) && best.as_ref().is_none_or(|(d, _)| depth >= *d) {
-            best = Some((depth, fs_type.to_string()));
-        }
-    }
-    best.map(|(_, fs)| fs)
-}
-
-/// Decode the octal escapes (`\040` for space) used in `/proc/mounts`
-fn unescape_mount_field(field: &str) -> String {
-    let bytes = field.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'\\' && i + 4 <= bytes.len() {
-            let value = std::str::from_utf8(&bytes[i + 1..i + 4])
-                .ok()
-                .and_then(|oct| u8::from_str_radix(oct, 8).ok());
-            if let Some(v) = value {
-                out.push(v);
-                i += 4;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -312,27 +256,6 @@ mod tests {
     fn parent_relative_path_no_parent() {
         let err = format_parent_relative_path(Path::new("/"), Path::new("/")).unwrap_err();
         assert!(err.to_string().contains("has no parent"));
-    }
-
-    #[test]
-    fn mount_lookup() {
-        let mounts = "/dev/sda1 / ext4 rw 0 0\ntmpfs /tmp tmpfs rw 0 0\ntmpfs /mnt/with\\040space tmpfs rw 0 0\n";
-        assert_eq!(
-            mount_fs_type(mounts, Path::new("/tmp/x")).as_deref(),
-            Some("tmpfs")
-        );
-        assert_eq!(
-            mount_fs_type(mounts, Path::new("/home/x")).as_deref(),
-            Some("ext4")
-        );
-        assert_eq!(
-            mount_fs_type(mounts, Path::new("/tmpx")).as_deref(),
-            Some("ext4")
-        );
-        assert_eq!(
-            mount_fs_type(mounts, Path::new("/mnt/with space/a")).as_deref(),
-            Some("tmpfs")
-        );
     }
 
     #[test]

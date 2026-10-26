@@ -211,7 +211,7 @@ pub fn state_color(pr: &PullRequest) -> Color {
     }
 }
 
-/// A small rounded badge with the state's color.
+/// A rounded badge with the state's color.
 pub fn state_badge<'a, M: 'a>(pr: &PullRequest) -> iced::Element<'a, M> {
     use iced::widget::{container, text};
     let color = state_color(pr);
@@ -220,7 +220,7 @@ pub fn state_badge<'a, M: 'a>(pr: &PullRequest) -> iced::Element<'a, M> {
             "pull request state",
             pr.state_label(),
         ))
-        .size(11)
+        .size(13)
         .color(Color::WHITE)
         .wrapping(text::Wrapping::None),
     )
@@ -237,13 +237,14 @@ pub fn state_badge<'a, M: 'a>(pr: &PullRequest) -> iced::Element<'a, M> {
 pub fn chips<'a, M: Clone + 'a>(
     options: Vec<(String, M)>,
     selected: Option<usize>,
+    size: f32,
 ) -> iced::Element<'a, M> {
     use iced::widget::{button, row, text};
     let mut chips = row![].spacing(4).align_y(iced::Center);
     for (index, (label, message)) in options.into_iter().enumerate() {
         let on = selected == Some(index);
         chips = chips.push(
-            button(text(label).size(12).wrapping(text::Wrapping::None))
+            button(text(label).size(size).wrapping(text::Wrapping::None))
                 .padding([3, 10])
                 .style(move |theme: &iced::Theme, status| {
                     let palette = theme.extended_palette();

@@ -168,11 +168,6 @@ pub fn normalize(path: &Path) -> PathBuf {
     parts.iter().collect()
 }
 
-/// git's path order: by bytes, not by locale
-pub fn path_sort_key(path: &str) -> &[u8] {
-    path.as_bytes()
-}
-
 /// Options of [`GitRepository::run`]
 #[derive(Debug, Clone, Copy)]
 pub struct RunOptions<'a> {
@@ -232,11 +227,6 @@ impl GitRepository {
             git_path: options.git_path.clone(),
             env,
         }
-    }
-
-    /// Set (or override) a variable of the environment git runs with
-    pub fn set_env(&mut self, key: impl Into<OsString>, value: impl Into<OsString>) {
-        self.env.insert(key.into(), value.into());
     }
 
     /// The options this repository was opened with, e.g. to open another
@@ -299,7 +289,6 @@ impl GitRepository {
                 command: vec!["rev-parse".into()],
                 returncode: Some(128),
                 stderr,
-                not_found: false,
             });
         }
         let out = text(&result.stdout);
@@ -378,7 +367,6 @@ impl GitRepository {
                         command,
                         returncode: None,
                         stderr: String::new(),
-                        not_found: false,
                     });
                 }
                 return Err(Error::Git {
@@ -389,7 +377,6 @@ impl GitRepository {
                     command,
                     returncode: None,
                     stderr: String::new(),
-                    not_found: true,
                 });
             }
             Err(Error::Process { message, .. }) => {
@@ -398,7 +385,6 @@ impl GitRepository {
                     command,
                     returncode: None,
                     stderr: String::new(),
-                    not_found: false,
                 });
             }
             Err(err) => return Err(err),
@@ -417,7 +403,6 @@ impl GitRepository {
                 command,
                 returncode: Some(result.returncode),
                 stderr,
-                not_found: false,
             });
         }
         Ok(result)
@@ -518,12 +503,6 @@ impl GitRepository {
             cancel,
         )?;
         Ok(text(&result.stdout).trim().to_string())
-    }
-
-    /// A shallow clone lacks older history, so blame stops at its edge
-    pub fn is_shallow(&self, cancel: &CancelToken) -> Result<bool> {
-        let result = self.run(&["rev-parse", "--is-shallow-repository"], cancel)?;
-        Ok(text(&result.stdout).trim() == "true")
     }
 
     /// None when the commits have no common ancestor
@@ -902,29 +881,6 @@ impl GitRepository {
     }
 
     // -- notes --
-
-    /// The note on `sha` in `notes_ref`, trimmed; None if there is none
-    pub fn read_note(
-        &self,
-        sha: &str,
-        notes_ref: &str,
-        cancel: &CancelToken,
-    ) -> Result<Option<String>> {
-        let ref_arg = format!("--ref={}", notes_ref_name(notes_ref));
-        let result = self.run_with(
-            &["notes", &ref_arg, "show", sha],
-            RunOptions {
-                ok: &[0, 1],
-                ..Default::default()
-            },
-            cancel,
-        )?;
-        if result.returncode != 0 {
-            return Ok(None);
-        }
-        let note = text(&result.stdout).trim().to_string();
-        Ok((!note.is_empty()).then_some(note))
-    }
 
     /// Add or replace the note on `sha` in `notes_ref`
     pub fn write_note(

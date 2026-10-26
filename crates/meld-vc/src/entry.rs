@@ -43,34 +43,6 @@ pub enum State {
 }
 
 impl State {
-    /// All states in discriminant order.
-    pub const ALL: [State; 14] = [
-        State::Ignored,
-        State::Unversioned,
-        State::Normal,
-        State::NoChange,
-        State::Error,
-        State::Empty,
-        State::New,
-        State::Modified,
-        State::Renamed,
-        State::Conflict,
-        State::Removed,
-        State::Missing,
-        State::NonExist,
-        State::Spinner,
-    ];
-
-    /// The Python integer value of this state.
-    pub fn index(self) -> u8 {
-        self as u8
-    }
-
-    /// The state for a Python integer value.
-    pub fn from_index(index: u8) -> Option<State> {
-        State::ALL.get(usize::from(index)).copied()
-    }
-
     /// The status column label (`Entry.state_names`). Several states have
     /// no label to avoid visual clutter. Python renders `Conflict` in bold
     /// markup; see [`State::is_emphasized`].
@@ -112,11 +84,6 @@ pub enum ConflictSide {
 }
 
 impl ConflictSide {
-    /// Bazaar's name for [`ConflictSide::Local`].
-    pub const THIS: ConflictSide = ConflictSide::Local;
-    /// Bazaar's name for [`ConflictSide::Remote`].
-    pub const OTHER: ConflictSide = ConflictSide::Remote;
-
     /// Display label (`_vc.conflicts`), also used in temp file names.
     pub fn label(self) -> &'static str {
         match self {
@@ -162,22 +129,6 @@ impl Action {
             Action::Resolve => "resolve",
             Action::Unstage => "unstage",
         }
-    }
-
-    /// Parse a Python action name.
-    pub fn from_name(name: &str) -> Option<Action> {
-        Some(match name {
-            "compare" => Action::Compare,
-            "update" => Action::Update,
-            "push" => Action::Push,
-            "commit" => Action::Commit,
-            "add" => Action::Add,
-            "remove" => Action::Remove,
-            "revert" => Action::Revert,
-            "resolve" => Action::Resolve,
-            "unstage" => Action::Unstage,
-            _ => return None,
-        })
     }
 }
 
@@ -283,10 +234,6 @@ mod tests {
 
     #[test]
     fn state_order_matches_python() {
-        for (i, s) in State::ALL.iter().enumerate() {
-            assert_eq!(usize::from(s.index()), i);
-            assert_eq!(State::from_index(i as u8), Some(*s));
-        }
         assert!(State::Conflict > State::Renamed);
     }
 

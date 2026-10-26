@@ -91,13 +91,10 @@ pub struct Style {
     pub foreground: Option<Rgba>,
     pub background: Option<Rgba>,
     pub line_background: Option<Rgba>,
-    pub underline_color: Option<Rgba>,
     pub bold: Option<bool>,
     pub italic: Option<bool>,
     pub underline: Option<Underline>,
     pub strikethrough: Option<bool>,
-    /// Font scale factor, from a number or a Pango scale name.
-    pub scale: Option<f32>,
 }
 
 impl Style {
@@ -118,7 +115,6 @@ impl Style {
             StyleAttr::Foreground => self.foreground,
             StyleAttr::Background => self.background,
             StyleAttr::LineBackground => self.line_background,
-            StyleAttr::UnderlineColor => self.underline_color,
         }
     }
 }
@@ -129,7 +125,6 @@ pub enum StyleAttr {
     Foreground,
     Background,
     LineBackground,
-    UnderlineColor,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -137,26 +132,11 @@ struct RawStyle {
     foreground: Option<String>,
     background: Option<String>,
     line_background: Option<String>,
-    underline_color: Option<String>,
     bold: Option<String>,
     italic: Option<String>,
     underline: Option<String>,
     strikethrough: Option<String>,
-    scale: Option<String>,
     use_style: Option<String>,
-}
-
-/// Where a scheme was loaded from.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SchemeSource {
-    /// One of Meld's bundled schemes, embedded in the binary.
-    Bundled,
-    /// A stand-in for a GtkSourceView built-in scheme.
-    Fallback,
-    /// A scheme file.
-    File(PathBuf),
-    /// Added with [`SchemeManager::add_scheme_xml`].
-    Memory,
 }
 
 #[derive(Debug)]
@@ -164,12 +144,10 @@ struct RawScheme {
     id: String,
     name: String,
     description: String,
-    authors: Vec<String>,
     parent_id: Option<String>,
     metadata: BTreeMap<String, String>,
     colors: HashMap<String, String>,
     styles: HashMap<String, RawStyle>,
-    source: SchemeSource,
 }
 
 /// Light or dark, from a scheme's `variant` metadata.
@@ -185,9 +163,6 @@ pub struct SchemeInfo {
     pub id: String,
     pub name: String,
     pub description: String,
-    /// Whether the scheme is dark, see [`StyleScheme::is_dark`].
-    pub is_dark: bool,
-    pub source: SchemeSource,
 }
 
 /// A style scheme with its parent chain resolved.
@@ -200,34 +175,23 @@ pub struct StyleScheme {
 const MAX_DEPTH: usize = 32;
 
 impl StyleScheme {
-    /// Parse a standalone scheme (without parent resolution).
-    pub fn from_xml(xml: &str) -> Result<StyleScheme, ConfigError> {
-        Ok(StyleScheme {
-            raw: Arc::new(parse_scheme(xml, SchemeSource::Memory)?),
-            parent: None,
-        })
-    }
-
     pub fn id(&self) -> &str {
         &self.raw.id
     }
     pub fn name(&self) -> &str {
         &self.raw.name
     }
+    #[cfg(test)]
     pub fn description(&self) -> &str {
         &self.raw.description
     }
-    pub fn authors(&self) -> &[String] {
-        &self.raw.authors
-    }
-    pub fn source(&self) -> &SchemeSource {
-        &self.raw.source
-    }
     /// The `parent-scheme` id, whether or not it was found.
+    #[cfg(test)]
     pub fn parent_id(&self) -> Option<&str> {
         self.raw.parent_id.as_deref()
     }
     /// The resolved parent scheme, if it was found.
+    #[cfg(test)]
     pub fn parent(&self) -> Option<&StyleScheme> {
         self.parent.as_deref()
     }
@@ -263,11 +227,6 @@ impl StyleScheme {
         names
     }
 
-    /// Whether this scheme itself (not a parent) defines a style.
-    pub fn defines_style(&self, name: &str) -> bool {
-        self.raw.styles.contains_key(name)
-    }
-
     /// Look up a style, falling back on parent schemes.
     pub fn style(&self, name: &str) -> Option<Style> {
         self.style_depth(name, 0)
@@ -295,12 +254,10 @@ impl StyleScheme {
             foreground: color(&raw.foreground),
             background: color(&raw.background),
             line_background: color(&raw.line_background),
-            underline_color: color(&raw.underline_color),
             bold: raw.bold.as_deref().and_then(parse_bool),
             italic: raw.italic.as_deref().and_then(parse_bool),
             underline: raw.underline.as_deref().and_then(Underline::parse),
             strikethrough: raw.strikethrough.as_deref().and_then(parse_bool),
-            scale: raw.scale.as_deref().and_then(parse_scale),
         }
     }
 
@@ -362,8 +319,6 @@ impl StyleScheme {
             id: self.raw.id.clone(),
             name: self.raw.name.clone(),
             description: self.raw.description.clone(),
-            is_dark: self.is_dark(),
-            source: self.raw.source.clone(),
         }
     }
 }
@@ -385,20 +340,6 @@ fn parse_bool(value: &str) -> Option<bool> {
         "false" | "0" | "no" => Some(false),
         _ => None,
     }
-}
-
-fn parse_scale(value: &str) -> Option<f32> {
-    let named = match value.trim().to_ascii_lowercase().as_str() {
-        "xx-small" => 0.578_703_7,
-        "x-small" => 0.694_444_4,
-        "small" => 0.833_333_3,
-        "medium" => 1.0,
-        "large" => 1.2,
-        "x-large" => 1.44,
-        "xx-large" => 1.728,
-        other => return other.parse().ok(),
-    };
-    Some(named)
 }
 
 fn attr_value(e: &BytesStart, name: &[u8]) -> Result<Option<String>, ConfigError> {
@@ -425,12 +366,11 @@ fn attr_or_translatable(e: &BytesStart, name: &str) -> Result<Option<String>, Co
 #[derive(PartialEq)]
 enum TextTarget {
     None,
-    Author,
     Description,
     Property(String),
 }
 
-fn parse_scheme(xml: &str, source: SchemeSource) -> Result<RawScheme, ConfigError> {
+fn parse_scheme(xml: &str) -> Result<RawScheme, ConfigError> {
     let mut reader = Reader::from_str(xml);
     let mut scheme: Option<RawScheme> = None;
     let mut target = TextTarget::None;
@@ -451,12 +391,10 @@ fn parse_scheme(xml: &str, source: SchemeSource) -> Result<RawScheme, ConfigErro
                             id,
                             name,
                             description: String::new(),
-                            authors: Vec::new(),
                             parent_id: attr_value(e, b"parent-scheme")?,
                             metadata: BTreeMap::new(),
                             colors: HashMap::new(),
                             styles: HashMap::new(),
-                            source: source.clone(),
                         });
                     }
                     _ if scheme.is_none() => {
@@ -464,7 +402,6 @@ fn parse_scheme(xml: &str, source: SchemeSource) -> Result<RawScheme, ConfigErro
                             "root element is not <style-scheme>".into(),
                         ));
                     }
-                    b"author" if !is_empty => target = TextTarget::Author,
                     b"description" | b"_description" if !is_empty => {
                         target = TextTarget::Description
                     }
@@ -489,12 +426,10 @@ fn parse_scheme(xml: &str, source: SchemeSource) -> Result<RawScheme, ConfigErro
                             foreground: attr_value(e, b"foreground")?,
                             background: attr_value(e, b"background")?,
                             line_background: attr_value(e, b"line-background")?,
-                            underline_color: attr_value(e, b"underline-color")?,
                             bold: attr_value(e, b"bold")?,
                             italic: attr_value(e, b"italic")?,
                             underline: attr_value(e, b"underline")?,
                             strikethrough: attr_value(e, b"strikethrough")?,
-                            scale: attr_value(e, b"scale")?,
                             use_style: attr_value(e, b"use-style")?,
                         };
                         if let Some(s) = scheme.as_mut() {
@@ -537,7 +472,6 @@ fn parse_scheme(xml: &str, source: SchemeSource) -> Result<RawScheme, ConfigErro
                 if let Some(s) = scheme.as_mut() {
                     let value = text.trim().to_string();
                     match std::mem::replace(&mut target, TextTarget::None) {
-                        TextTarget::Author => s.authors.push(value),
                         TextTarget::Description => s.description = value,
                         TextTarget::Property(name) => {
                             s.metadata.insert(name, value);
@@ -586,16 +520,16 @@ impl SchemeManager {
             dirs.iter().partition(|d| Some(*d) == meld_user.as_ref());
 
         for dir in meld_dirs {
-            manager.load_dir(dir, false);
+            manager.load_dir(dir);
         }
         for (id, xml) in BUNDLED {
-            manager.insert_xml(xml, SchemeSource::Bundled, false, id);
+            manager.insert_xml(xml, id);
         }
         for dir in other_dirs {
-            manager.load_dir(dir, false);
+            manager.load_dir(dir);
         }
         for (id, xml) in FALLBACK {
-            manager.insert_xml(xml, SchemeSource::Fallback, false, id);
+            manager.insert_xml(xml, id);
         }
         manager
     }
@@ -627,29 +561,18 @@ impl SchemeManager {
         dirs
     }
 
-    fn insert_xml(
-        &mut self,
-        xml: &str,
-        source: SchemeSource,
-        replace: bool,
-        what: &str,
-    ) -> Option<String> {
-        match parse_scheme(xml, source) {
+    fn insert_xml(&mut self, xml: &str, what: &str) {
+        match parse_scheme(xml) {
             Ok(raw) => {
-                let id = raw.id.clone();
-                if replace || !self.schemes.contains_key(&id) {
-                    self.schemes.insert(id.clone(), Arc::new(raw));
+                if !self.schemes.contains_key(&raw.id) {
+                    self.schemes.insert(raw.id.clone(), Arc::new(raw));
                 }
-                Some(id)
             }
-            Err(e) => {
-                log::warn!("Could not load style scheme {what}: {e}");
-                None
-            }
+            Err(e) => log::warn!("Could not load style scheme {what}: {e}"),
         }
     }
 
-    fn load_dir(&mut self, dir: &Path, replace: bool) {
+    fn load_dir(&mut self, dir: &Path) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
@@ -661,29 +584,17 @@ impl SchemeManager {
         paths.sort();
         for path in paths {
             match std::fs::read_to_string(&path) {
-                Ok(xml) => {
-                    self.insert_xml(
-                        &xml,
-                        SchemeSource::File(path.clone()),
-                        replace,
-                        &path.display().to_string(),
-                    );
-                }
+                Ok(xml) => self.insert_xml(&xml, &path.display().to_string()),
                 Err(e) => log::warn!("Could not read style scheme {}: {e}", path.display()),
             }
         }
     }
 
-    /// Load every scheme in a directory, replacing schemes with the same
-    /// ids (like `prepend_search_path`).
-    pub fn add_dir(&mut self, dir: impl AsRef<Path>) {
-        self.load_dir(dir.as_ref(), true);
-    }
-
     /// Add a scheme from XML text, replacing any scheme with its id.
     /// Returns the scheme's id.
+    #[cfg(test)]
     pub fn add_scheme_xml(&mut self, xml: &str) -> Result<String, ConfigError> {
-        let raw = parse_scheme(xml, SchemeSource::Memory)?;
+        let raw = parse_scheme(xml)?;
         let id = raw.id.clone();
         self.schemes.insert(id.clone(), Arc::new(raw));
         Ok(id)
@@ -807,7 +718,6 @@ mod tests {
 
         let child = manager.get("child").unwrap();
         assert_eq!(child.name(), "Child");
-        assert_eq!(child.authors(), ["A", "B"]);
         assert_eq!(child.parent().unwrap().name(), "Parent & co");
         assert_eq!(child.parent().unwrap().description(), "The parent");
         assert_eq!(child.variant(), Some(Variant::Light));
@@ -818,10 +728,7 @@ mod tests {
         assert!(kw.is_bold());
         assert_eq!(kw.italic, None);
         assert_eq!(kw.underline, Some(Underline::Error));
-        // Palette names resolve through parents
-        assert_eq!(kw.underline_color.unwrap().to_hex(), "#0000ff");
         assert_eq!(kw.strikethrough, Some(false));
-        assert_eq!(kw.scale, Some(1.2));
 
         let s = child.style("def:string").unwrap();
         assert_eq!(s.foreground.unwrap().to_rgba8(), [1, 2, 3, 128]);
@@ -865,10 +772,10 @@ mod tests {
 
     #[test]
     fn invalid_xml() {
-        assert!(StyleScheme::from_xml("<not-a-scheme/>").is_err());
-        assert!(StyleScheme::from_xml("<style-scheme name='x'/>").is_err());
-        assert!(StyleScheme::from_xml("<style-scheme id='x'><style").is_err());
-        assert!(StyleScheme::from_xml("").is_err());
+        assert!(parse_scheme("<not-a-scheme/>").is_err());
+        assert!(parse_scheme("<style-scheme name='x'/>").is_err());
+        assert!(parse_scheme("<style-scheme id='x'><style").is_err());
+        assert!(parse_scheme("").is_err());
     }
 
     #[test]
@@ -897,20 +804,11 @@ mod tests {
         let manager = SchemeManager::with_search_path(&[dir.path().to_path_buf()]);
         let mine = manager.get("mine").unwrap();
         assert!(mine.is_dark());
-        assert_eq!(
-            mine.source(),
-            &SchemeSource::File(dir.path().join("mine.xml"))
-        );
         assert_eq!(manager.get("meld-base").unwrap().name(), "Classic (Meld)");
         assert_eq!(manager.get("classic").unwrap().name(), "Installed Classic");
 
         let info = manager.list().into_iter().find(|i| i.id == "mine").unwrap();
         assert_eq!(info.name, "Mine");
-        assert!(info.is_dark);
-
-        let mut manager = SchemeManager::builtin();
-        manager.add_dir(dir.path());
-        assert_eq!(manager.get("meld-base").unwrap().name(), "Impostor");
     }
 
     #[test]
@@ -938,8 +836,6 @@ mod tests {
         assert!(dark.is_dark());
         let list = manager.list();
         assert_eq!(list.len(), ids.len());
-        assert!(list.iter().any(|i| i.id == "classic-dark" && i.is_dark));
-        assert!(list.iter().any(|i| i.id == "classic" && !i.is_dark));
     }
 
     #[test]

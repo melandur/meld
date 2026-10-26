@@ -233,7 +233,7 @@ impl PrList {
         let forge = self.remotes.as_ref().and_then(|r| r.current());
         let kind = forge.map(|f| f.kind());
         let mut title = row![
-            text(forge::nouns_heading(kind)).size(14).font(ui::bold()),
+            text(forge::nouns_heading(kind)).size(16).font(ui::bold()),
             space::horizontal()
         ]
         .spacing(8)
@@ -245,9 +245,9 @@ impl PrList {
                 .enumerate()
                 .map(|(i, f)| (f.remote.label(), Message::Remote(i)))
                 .collect();
-            title = title.push(forge::chips(options, remotes.selected));
+            title = title.push(forge::chips(options, remotes.selected, 13.0));
         } else if let Some(forge) = forge {
-            title = title.push(text(forge.remote.label()).size(12).style(ui::dim_text));
+            title = title.push(text(forge.remote.label()).size(13).style(ui::dim_text));
         }
 
         let filters = forge::chips(
@@ -261,6 +261,7 @@ impl PrList {
                 })
                 .collect(),
             StateFilter::ALL.iter().position(|f| *f == self.filter),
+            13.0,
         );
         let search = text_input(tr!("Search title, author, label or #number"), &self.search)
             .on_input(Message::Search)
@@ -279,20 +280,20 @@ impl PrList {
             Status::Idle if self.prs.is_empty() => {
                 footer = footer.push(
                     text(forge::no_prs(kind, self.filter))
-                        .size(12)
+                        .size(13)
                         .style(ui::dim_text),
                 );
             }
             Status::Idle => {}
             Status::Loading(what) => {
-                footer = footer.push(text(format!("⏳ {what}")).size(12).style(ui::dim_text))
+                footer = footer.push(text(format!("⏳ {what}")).size(13).style(ui::dim_text))
             }
             Status::Error(err) => {
                 let (first, _) = crate::views::gitcompare::condense(err);
                 footer = footer
                     .push(
                         text(first)
-                            .size(12)
+                            .size(13)
                             .style(|theme: &Theme| text::Style {
                                 color: Some(theme.extended_palette().danger.base.color),
                             })
@@ -337,10 +338,10 @@ fn pr_row<'a>(
         .reference(pr.number);
     let line = row![
         text(reference)
-            .size(13)
+            .size(16)
             .style(ui::dim_text)
             .wrapping(text::Wrapping::None),
-        crate::views::gitcompare::ellipsized_label(&pr.title, 13.0, true),
+        crate::views::gitcompare::ellipsized_label(&pr.title, 16.0, true),
         forge::state_badge(pr),
     ]
     .spacing(8)
@@ -349,7 +350,7 @@ fn pr_row<'a>(
     button(
         column![
             line,
-            crate::views::gitcompare::ellipsized_label(description, 11.0, false),
+            crate::views::gitcompare::ellipsized_label(description, 13.0, false),
         ]
         .spacing(2),
     )

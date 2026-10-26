@@ -12,7 +12,7 @@
 //! - GtkSourceView's `StyleSchemeManager`/`StyleScheme` → [`scheme`]:
 //!   [`SchemeManager`], [`StyleScheme`], [`Style`].
 //! - `meld/style.py` → [`style`]: [`Theme`], [`DiffColors`],
-//!   [`StatusColors`], [`FontZoom`].
+//!   [`StatusColors`].
 //! - `meld/diffpalette.py` → [`palette`]: [`DiffColorMode`],
 //!   [`DiffSide`], [`get_diff_palette`], [`diff_sides`].
 //!
@@ -24,29 +24,27 @@
 //!   default), `Settings::try_load_from(path) -> Result<Settings>`,
 //!   `Settings::save(&self) -> Result<()>`, `Settings::save_to(&self, path)`
 //!   (atomic), `Settings::from_toml_str`, `Settings::to_toml_string`,
-//!   `Settings::changed_keys(&self, &Settings) -> Vec<String>`,
 //!   `Settings::font(&self, system_monospace: Option<&str>) -> FontSpec`,
 //!   `Settings::prefer_dark(&self, system_prefers_dark) -> bool`,
 //!   [`settings_path`].
 //! - Enum-typed keys: [`StyleVariant`], [`WrapMode`], [`OverviewMapStyle`],
 //!   [`MergeFileOrder`], [`DiffColorMode`]; list keys: [`FilterSetting`],
-//!   [`FolderColumn`]; [`WindowState`]; the unused [`SpacesFlags`];
-//!   Preferences choices [`TIMESTAMP_RESOLUTIONS`] and `label()`s.
+//!   [`FolderColumn`]; [`WindowState`]; Preferences choices [`TIMESTAMP_RESOLUTIONS`] and `label()`s.
 //! - `FontSpec::parse(&str) -> FontSpec { family, size_pt, bold, italic }`
 //!   for Pango font strings.
 //!
 //! Recent comparisons:
 //! - `RecentComparisons::load()`, `load_from(path)`, `save()`, `save_to(path)`,
 //!   `add(kind, &[PathBuf], &[String]) -> bool`, `entries() ->
-//!   &[RecentComparison]`, `remove`, `clear`, `prune_missing() -> usize`.
+//!   &[RecentComparison]`, `prune_missing() -> usize`.
 //! - [`RecentComparison`] `{ kind: ComparisonType, paths, flags, timestamp }`
-//!   with `display_name()` and `description()`.
-//! - [`read_meldcmp`], [`parse_meldcmp`], [`write_meldcmp`], [`recent_path`].
+//!   with `display_name()`.
+//! - [`read_meldcmp`], [`parse_meldcmp`], [`recent_path`].
 //!
 //! Style schemes:
 //! - `SchemeManager::new()` (bundled + installed + user schemes),
 //!   `SchemeManager::builtin()`, `with_search_path(&[PathBuf])`,
-//!   `add_dir`, `add_scheme_xml`, `ids()`, `list() -> Vec<SchemeInfo>`,
+//!   `ids()`, `list() -> Vec<SchemeInfo>`,
 //!   `get(id) -> Option<StyleScheme>`, `adapt(scheme, want_dark)`.
 //! - `StyleScheme::style(name) -> Option<Style>` (with parent and
 //!   `use-style` resolution), `metadata`, `variant`, `is_dark`,
@@ -57,8 +55,7 @@
 //!   `Theme::from_settings`, `Theme::diff_colors(DiffColorMode,
 //!   Option<DiffSide>) -> DiffColors`, `Theme::link_diff_colors(mode,
 //!   left_side)`, `DiffColors::with_opacity(percent)`,
-//!   `style::diff_color_alphas(percent)`, `Theme::pane_diff_colors(mode,
-//!   num_panes, pane)`, `Theme::status_colors()`, `Theme::color(name,
+//!   `style::diff_color_alphas(percent)`, `Theme::status_colors()`, `Theme::color(name,
 //!   StyleAttr) -> Rgba`.
 //! - `diff_sides(num_panes, Option<&[DiffSide]>) -> [Option<DiffSide>; 3]`,
 //!   `get_diff_palette(mode, dark, side) -> Option<DiffPalette>`,
@@ -81,13 +78,11 @@ pub use palette::{
 };
 pub use recent::{
     ComparisonType, MAX_RECENT, RecentComparison, RecentComparisons, parse_meldcmp, read_meldcmp,
-    recent_path, write_meldcmp,
+    recent_path,
 };
-pub use scheme::{
-    SchemeInfo, SchemeManager, SchemeSource, Style, StyleAttr, StyleScheme, Underline, Variant,
-};
+pub use scheme::{SchemeInfo, SchemeManager, Style, StyleAttr, StyleScheme, Underline, Variant};
 pub use settings::{
-    FilterSetting, FolderColumn, FontSpec, MergeFileOrder, OverviewMapStyle, Settings, SpacesFlags,
+    FilterSetting, FolderColumn, FontSpec, MergeFileOrder, OverviewMapStyle, Settings,
     StyleVariant, TIMESTAMP_RESOLUTIONS, WindowState, WrapMode, settings_path,
 };
-pub use style::{ChunkColors, ChunkTag, DiffColors, FontZoom, StatusColors, Theme};
+pub use style::{ChunkColors, ChunkTag, DiffColors, StatusColors, Theme};

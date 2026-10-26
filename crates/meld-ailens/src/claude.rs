@@ -57,7 +57,6 @@ pub struct ClaudeResponse {
     pub text: String,
     /// The model that actually answered, as Claude Code reports it
     pub model: String,
-    pub cost_usd: Option<f64>,
 }
 
 impl ClaudeResponse {
@@ -66,7 +65,6 @@ impl ClaudeResponse {
             output,
             text: text.into(),
             model: model.into(),
-            cost_usd: None,
         }
     }
 }
@@ -297,10 +295,6 @@ pub fn parse_response(
         Some(Value::Object(usage)) => usage.keys().collect(),
         _ => Vec::new(),
     };
-    let cost = parsed.get("total_cost_usd").and_then(|cost| match cost {
-        Value::Number(number) => number.as_f64(),
-        _ => None,
-    });
     Ok(ClaudeResponse {
         output,
         text,
@@ -310,6 +304,5 @@ pub fn parse_response(
         } else {
             requested_model.to_string()
         },
-        cost_usd: cost,
     })
 }

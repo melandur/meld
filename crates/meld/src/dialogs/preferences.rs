@@ -2631,6 +2631,16 @@ fn is_identifier(name: &str) -> bool {
         && chars.all(|c| c == '_' || c.is_alphanumeric())
 }
 
+/// Expands a leading `~` to the home folder.
+fn expand_home(path: &str) -> String {
+    match (path.strip_prefix('~'), std::env::var("HOME")) {
+        (Some(rest), Ok(home)) if rest.is_empty() || rest.starts_with('/') => {
+            format!("{home}{rest}")
+        }
+        _ => path.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2985,15 +2995,5 @@ mod tests {
         ] {
             assert_eq!(check_regex(re), Err(message.to_string()), "{re}");
         }
-    }
-}
-
-/// Expands a leading `~` to the home folder.
-fn expand_home(path: &str) -> String {
-    match (path.strip_prefix('~'), std::env::var("HOME")) {
-        (Some(rest), Ok(home)) if rest.is_empty() || rest.starts_with('/') => {
-            format!("{home}{rest}")
-        }
-        _ => path.to_string(),
     }
 }

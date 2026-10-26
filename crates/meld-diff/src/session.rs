@@ -55,6 +55,7 @@ pub struct FileComparison {
 
 impl FileComparison {
     /// Compare `buffers` (1 to 3 panes), filtering lines with `filters`.
+    #[cfg(test)]
     pub fn new(
         buffers: Vec<TextBuffer>,
         filters: Vec<Regex>,
@@ -63,7 +64,8 @@ impl FileComparison {
         Self::new_cancellable(buffers, filters, ignore_blanks, &|| false)
     }
 
-    /// [`FileComparison::new`] with a cancellation callback.
+    /// Compare `buffers` (1 to 3 panes), filtering lines with `filters`,
+    /// polling `cancel` during the diff.
     pub fn new_cancellable(
         buffers: Vec<TextBuffer>,
         filters: Vec<Regex>,
@@ -121,21 +123,12 @@ impl FileComparison {
             .collect();
     }
 
-    pub fn num_panes(&self) -> usize {
-        self.buffers.len()
-    }
-
     pub fn buffers(&self) -> &[TextBuffer] {
         &self.buffers
     }
 
     pub fn buffer(&self, pane: usize) -> Option<&TextBuffer> {
         self.buffers.get(pane)
-    }
-
-    /// The filtered lines the differ compares for `pane`.
-    pub fn filtered_lines(&self, pane: usize) -> &[String] {
-        self.filtered.get(pane).map_or(&[], |f| f.as_slice())
     }
 
     pub fn differ(&self) -> &Differ {
@@ -146,22 +139,7 @@ impl FileComparison {
         &mut self.differ
     }
 
-    pub fn filters(&self) -> &[Regex] {
-        &self.filters
-    }
-
-    /// Whether edits update the comparison incrementally. Like Meld, live
-    /// updating is disabled while sync points are set; call
-    /// [`FileComparison::rediff`] to refresh.
-    pub fn live_updates(&self) -> bool {
-        self.differ.syncpoints().is_empty()
-    }
-
     /// Re-run the whole comparison (Meld's refresh).
-    pub fn rediff(&mut self) -> Result<DiffsChanged, DiffError> {
-        self.rediff_cancellable(&|| false)
-    }
-
     pub fn rediff_cancellable(
         &mut self,
         cancel: &dyn Fn() -> bool,
@@ -169,25 +147,6 @@ impl FileComparison {
         self.refilter();
         self.differ
             .set_sequences_cancellable(&self.filtered, cancel)
-    }
-
-    /// Change the text filters and re-run the comparison.
-    pub fn set_filters(&mut self, filters: Vec<Regex>) -> Result<DiffsChanged, DiffError> {
-        self.filters = filters;
-        self.rediff()
-    }
-
-    /// Change `ignore-blank-lines` and re-run the comparison.
-    pub fn set_ignore_blanks(&mut self, ignore_blanks: bool) -> Result<DiffsChanged, DiffError> {
-        self.differ.ignore_blanks = ignore_blanks;
-        self.rediff()
-    }
-
-    /// Set sync points (see [`crate::Syncpoints::valid_points`]) and re-run
-    /// the comparison.
-    pub fn set_syncpoints(&mut self, points: Vec<Vec<usize>>) -> Result<DiffsChanged, DiffError> {
-        self.differ.set_syncpoints(points);
-        self.rediff()
     }
 
     /// Apply a user edit to `pane` and update the comparison.
@@ -354,19 +313,6 @@ impl FileComparison {
         self.set_text(dst, &merged.text())
     }
 
-    /// The texts compared for inline highlighting of one side of a merged
-    /// chunk (`side` 0: panes 1 and 0, `side` 1: panes 1 and 2), including
-    /// line breaks, as `(middle text, other text)`.
-    pub fn inline_texts(&self, chunk: &Chunk, side: usize) -> Option<(String, String)> {
-        let other = if side == 1 { 2 } else { 0 };
-        let middle = self.buffers.get(1)?;
-        let other = self.buffers.get(other)?;
-        Some((
-            middle.lines_text(chunk.start_a, chunk.end_a),
-            other.lines_text(chunk.start_b, chunk.end_b),
-        ))
-    }
-
     /// Inline highlights of the replace chunks in `merged` (an entry of
     /// [`Differ::all_changes`]). Above [`crate::INLINE_LIMIT`] the chunk is
     /// highlighted whole unless `force` is set.
@@ -525,7 +471,8 @@ mod tests {
         )
         .unwrap();
         assert!(cmp.differ().all_changes().is_empty());
-        cmp.set_filters(vec![]).unwrap();
+        cmp.filters = vec![];
+        cmp.rediff_cancellable(&|| false).unwrap();
         let merged = cmp.differ().all_changes()[0];
         let mut cache = InlineCache::new();
         let hl = cmp.inline_highlights(&mut cache, &merged, false);

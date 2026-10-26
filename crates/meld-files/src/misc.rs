@@ -4,7 +4,7 @@
 
 use thiserror::Error;
 
-use crate::filters::{ByteRegex, TextRegex};
+use crate::filters::ByteRegex;
 
 /// Return true if all elements are equal (true for empty input)
 pub fn all_same<T: PartialEq>(items: &[T]) -> bool {
@@ -182,12 +182,6 @@ pub fn shorten_names_with_style<S: AsRef<str>>(names: &[S], style: PathStyle) ->
         .collect()
 }
 
-/// Try to guess whether we're being X11 forwarded
-pub fn guess_if_remote_x11() -> bool {
-    let set = |var: &str| std::env::var_os(var).is_some_and(|v| !v.is_empty());
-    set("DISPLAY") && set("SSH_CONNECTION")
-}
-
 /// Merge a list of half-open intervals
 ///
 /// Returns the intervals sorted, with all overlapping (or touching)
@@ -226,37 +220,8 @@ pub struct MultilineFilterError {
     pub end: usize,
 }
 
-/// The merged byte ranges of `text` removed by the filters
-pub fn text_filter_ranges<'a>(
-    text: &str,
-    regexes: impl IntoIterator<Item = &'a TextRegex>,
-) -> Vec<(usize, usize)> {
-    let spans: Vec<(usize, usize)> = regexes.into_iter().flat_map(|r| r.spans(text)).collect();
-    merge_intervals(&spans)
-}
-
-/// Remove the text matched by the filters; `apply_text_filters()`
-///
-/// See [`TextRegex::spans`] for which parts of a match are removed.
-pub fn apply_text_filters<'a>(
-    text: &str,
-    regexes: impl IntoIterator<Item = &'a TextRegex>,
-) -> Result<String, MultilineFilterError> {
-    let ranges = text_filter_ranges(text, regexes);
-    let mut result = String::with_capacity(text.len());
-    let mut offset = 0;
-    for (start, end) in ranges {
-        if text[start..end].contains('\n') {
-            return Err(MultilineFilterError { start, end });
-        }
-        result.push_str(&text[offset..start]);
-        offset = end;
-    }
-    result.push_str(&text[offset..]);
-    Ok(result)
-}
-
-/// [`apply_text_filters`] for raw bytes
+/// Remove the bytes matched by the filters; `apply_text_filters()`
+/// for raw bytes
 pub fn apply_byte_filters<'a>(
     data: &[u8],
     regexes: impl IntoIterator<Item = &'a ByteRegex>,
@@ -437,16 +402,6 @@ mod tests {
 
     #[test]
     fn text_filters_apply() {
-        let comment = TextRegex::new("#.*").unwrap();
-        let ws = TextRegex::new(r"[ \t]+$").unwrap();
-        assert_eq!(
-            apply_text_filters("a # c  \nb  ", [&comment, &ws]).unwrap(),
-            "a \nb"
-        );
-        assert_eq!(text_filter_ranges("a # c", [&comment]), vec![(2, 5)]);
-        let all = TextRegex::new(r"\s+").unwrap();
-        assert!(apply_text_filters("a\n b", [&all]).is_err());
-
         let bytes = ByteRegex::new("#.*").unwrap();
         assert_eq!(apply_byte_filters(b"x#y\nz", [&bytes]).unwrap(), b"x\nz");
     }

@@ -26,7 +26,6 @@ pub struct AgentSetupOptions {
 pub struct AgentSetupFile {
     pub path: PathBuf,
     pub content: String,
-    pub existed: bool,
     pub changed: bool,
 }
 
@@ -145,7 +144,6 @@ pub fn plan_agent_setup(
         .into_iter()
         .map(|(path, content, existing)| AgentSetupFile {
             path,
-            existed: existing.is_some(),
             changed: existing.as_deref() != Some(content.as_str()),
             content,
         })

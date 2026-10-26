@@ -43,7 +43,7 @@
 //! `to_std_command()` and `run() -> Result<CommandOutput>`; [`run_all`].
 //!
 //! **View logic** ([`view`]): [`StatusFilters`] (`vc-status-filters`),
-//! [`scan_tree`] / [`scan_tree_with_progress`] / [`scan_tree_cancellable`] building a [`VcRow`] tree
+//! [`scan_tree`] / [`scan_tree_cancellable`] building a [`VcRow`] tree
 //! (recursive or flattened), [`choose_vcs`] (backend chooser with
 //! "(not found)" etc. labels, default selection and null fallback),
 //! [`action_sensitivity`], [`prepare_diff`] building a [`DiffRequest`]
@@ -130,7 +130,7 @@ pub use vc::{TreeCache, VC_PLUGINS, Vc, VcCandidate, VcCore, VcKind, get_vcs, op
 pub use view::{
     ActionSensitivity, DiffOptions, DiffRequest, DiffSide, MergeFileOrder, StatusFilters,
     TempFiles, VcChoice, VcChoices, VcRow, action_sensitivity, auto_compare_paths, choose_vcs,
-    prepare_diff, scan_tree, scan_tree_cancellable, scan_tree_with_progress,
+    prepare_diff, scan_tree, scan_tree_cancellable,
 };
 
 #[cfg(test)]

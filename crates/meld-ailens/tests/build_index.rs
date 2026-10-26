@@ -3,36 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use meld_ailens::build_file::{BuildHeader, HeaderCommit};
-use meld_ailens::build_index::{
-    find_builds, is_build_file_name, read_build_headers, resolve_build_folder,
-};
-
-fn header(file_name: &str, created: Option<&str>, commits: Vec<HeaderCommit>) -> BuildHeader {
-    BuildHeader {
-        created: created.map(str::to_string),
-        commits,
-        ..BuildHeader::new(file_name)
-    }
-}
-
-fn headers() -> Vec<BuildHeader> {
-    vec![
-        header(
-            "a_build.md",
-            Some("2026-01-01T00:00:00Z"),
-            vec![HeaderCommit::new("x1", Some("p1"))],
-        ),
-        header(
-            "b_build.md",
-            Some("2026-03-01T00:00:00Z"),
-            vec![
-                HeaderCommit::new("x1", Some("p1")),
-                HeaderCommit::new("x2", None),
-            ],
-        ),
-    ]
-}
+use meld_ailens::build_index::{is_build_file_name, read_build_headers, resolve_build_folder};
 
 fn resolve(root: &str, folder: &str) -> PathBuf {
     resolve_build_folder(Path::new(root), folder).unwrap()
@@ -47,24 +18,6 @@ fn refused(root: &Path, folder: &str) {
 }
 
 // -- Ported --
-
-#[test]
-fn find_builds_by_sha_newest_first() {
-    assert_eq!(
-        find_builds(&headers(), "x1", None),
-        ["b_build.md", "a_build.md"]
-    );
-    assert_eq!(find_builds(&headers(), "x2", None), ["b_build.md"]);
-}
-
-#[test]
-fn find_builds_by_patch_id_for_new_sha() {
-    assert_eq!(
-        find_builds(&headers(), "rebased", Some("p1")),
-        ["b_build.md", "a_build.md"]
-    );
-    assert!(find_builds(&headers(), "rebased", Some("other")).is_empty());
-}
 
 #[test]
 fn is_build_file_name_accepts_only_plain_names() {
@@ -84,35 +37,6 @@ fn resolve_build_folder_keeps_it_inside() {
     );
     refused(Path::new("/repo"), "../elsewhere");
     refused(Path::new("/repo"), "/tmp/agent");
-}
-
-// -- find_builds --
-
-#[test]
-fn find_builds_none_patch_id_does_not_match_missing_ones() {
-    // A header commit without a patch ID must not match a lookup without one
-    assert!(find_builds(&headers(), "nope", None).is_empty());
-}
-
-#[test]
-fn find_builds_same_date_by_name_and_undated_last() {
-    let headers = [
-        header(
-            "z_build.md",
-            Some("2026-01-01T00:00:00Z"),
-            vec![HeaderCommit::new("x", None)],
-        ),
-        header("m_build.md", None, vec![HeaderCommit::new("x", None)]),
-        header(
-            "a_build.md",
-            Some("2026-01-01T00:00:00Z"),
-            vec![HeaderCommit::new("x", None)],
-        ),
-    ];
-    assert_eq!(
-        find_builds(&headers, "x", None),
-        ["a_build.md", "z_build.md", "m_build.md"]
-    );
 }
 
 // -- is_build_file_name --

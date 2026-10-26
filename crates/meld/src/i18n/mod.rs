@@ -35,7 +35,7 @@ include!(concat!(env!("OUT_DIR"), "/catalogs.rs"));
 
 /// The language catalogs compiled into the binary, by code (`de`,
 /// `pt_BR`, `sr@latin`).
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub fn available() -> impl Iterator<Item = &'static str> {
     CATALOGS.iter().map(|(code, _)| *code)
 }
@@ -85,7 +85,7 @@ pub struct Translator {
 
 impl Translator {
     /// English only.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub fn english() -> Translator {
         Translator {
             languages: Vec::new(),
@@ -115,7 +115,7 @@ impl Translator {
 
     /// The code of the language messages are mostly shown in, `None` for
     /// English.
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub fn language(&self) -> Option<&'static str> {
         self.languages.first().map(|l| l.code)
     }
@@ -148,7 +148,7 @@ fn active() -> &'static Translator {
 }
 
 /// The language the app is shown in, `None` for English.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub fn language() -> Option<&'static str> {
     active().language()
 }

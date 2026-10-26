@@ -325,36 +325,6 @@ impl PaneStyle {
             syntax: lens_syntax(&p),
         }
     }
-
-    /// Meld's classic chunk colours (`meld-base` scheme) on the light
-    /// preset; delete uses the insert colours as in `get_common_theme()`.
-    pub fn meld_classic() -> Self {
-        let mut style = Self::light();
-        let insert = ChunkColor {
-            fill: hex(0xd0ffa3),
-            line: hex(0xa5ff4c),
-        };
-        style.chunks = ChunkColors {
-            insert,
-            delete: insert,
-            replace: ChunkColor {
-                fill: hex(0xbdddff),
-                line: hex(0x65b2ff),
-            },
-            conflict: ChunkColor {
-                fill: hex(0xffa5a3),
-                line: hex(0xff4f4c),
-            },
-            error: ChunkColor {
-                fill: hex(0xfce94f),
-                line: hex(0xfade0a),
-            },
-            current_chunk: rgba(255, 255, 255, 0.5),
-        };
-        style.inline = hex(0x8ac2ff);
-        style.current_line = rgba(255, 255, 0, 0.25);
-        style
-    }
 }
 
 impl PaneStyle {
@@ -458,17 +428,6 @@ pub fn hex(rgb: u32) -> Color {
 
 fn rgba(r: u8, g: u8, b: u8, a: f32) -> Color {
     Color::from_rgba8(r, g, b, a)
-}
-
-/// Meld's `alpha_tint`: composites `overlay` at `alpha` onto `base`.
-pub fn alpha_tint(base: Color, overlay: Color, alpha: f32) -> Color {
-    let mix = |b: f32, o: f32| b + (o - b) * alpha;
-    Color {
-        r: mix(base.r, overlay.r),
-        g: mix(base.g, overlay.g),
-        b: mix(base.b, overlay.b),
-        a: base.a,
-    }
 }
 
 #[cfg(test)]

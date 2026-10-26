@@ -35,14 +35,6 @@ impl ForgeKind {
         }
     }
 
-    /// "pull request" or "merge request"
-    pub fn noun(self) -> &'static str {
-        match self {
-            ForgeKind::GitHub => "pull request",
-            ForgeKind::GitLab => "merge request",
-        }
-    }
-
     pub fn nouns(self) -> &'static str {
         match self {
             ForgeKind::GitHub => "pull requests",
@@ -141,7 +133,6 @@ pub struct PullRequest {
     pub author: String,
     pub state: PrState,
     pub draft: bool,
-    pub created_at: String,
     pub updated_at: String,
     pub url: String,
     /// The branch with the changes
@@ -195,104 +186,12 @@ pub struct DiffRefs {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PullRequestDetails {
     pub pr: PullRequest,
-    /// The description, Markdown
-    pub body: String,
-    /// e.g. "3 passed, 1 failed" or "Pipeline: success"; None when unknown
-    pub checks: Option<String>,
-    /// e.g. "Approved", "Changes requested", "Review required"
-    pub review_decision: Option<String>,
     /// The base branch's commit the forge compares with (GitHub), or the
     /// merge base (GitLab)
     pub base_sha: Option<String>,
     /// The commit that merged it, for merged pull requests
     pub merge_commit: Option<String>,
     pub diff_refs: Option<DiffRefs>,
-    pub additions: Option<u64>,
-    pub deletions: Option<u64>,
-    pub changed_files: Option<u64>,
-}
-
-/// One comment of a conversation or a review thread
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Comment {
-    /// The forge's ID (GitHub: numeric; GitLab: the note ID)
-    pub id: String,
-    pub author: String,
-    /// Markdown
-    pub body: String,
-    pub created_at: String,
-    pub url: String,
-}
-
-/// What a submitted review said overall
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ReviewState {
-    Approved,
-    ChangesRequested,
-    Commented,
-    Dismissed,
-}
-
-impl ReviewState {
-    pub fn label(self) -> &'static str {
-        match self {
-            ReviewState::Approved => "approved",
-            ReviewState::ChangesRequested => "requested changes",
-            ReviewState::Commented => "reviewed",
-            ReviewState::Dismissed => "review dismissed",
-        }
-    }
-}
-
-/// An entry of the pull request's conversation (not on a line)
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConversationItem {
-    /// None for a plain comment; the verdict for a review's summary
-    pub review: Option<ReviewState>,
-    pub comment: Comment,
-}
-
-/// Comments on a line of a file, the first one starting the thread
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReviewThread {
-    /// What replies go to: GitHub the first comment's ID, GitLab the
-    /// discussion's ID
-    pub id: String,
-    /// The file in the pull request's head (for deletions: the deleted path)
-    pub path: String,
-    /// The file before, when it was renamed
-    pub original_path: Option<String>,
-    /// `Old`: a line of the base version; `New`: of the head version
-    pub side: Side,
-    /// The line in the current diff; None once the line changed again
-    pub line: Option<u32>,
-    /// The line in the diff the comment was made on
-    pub original_line: Option<u32>,
-    /// The comment is on a version of the file the pull request no longer has
-    pub outdated: bool,
-    pub resolved: bool,
-    pub comments: Vec<Comment>,
-}
-
-impl ReviewThread {
-    /// The line the thread is shown at
-    pub fn anchor_line(&self) -> Option<u32> {
-        self.line.or(self.original_line)
-    }
-
-    /// Whether the thread is about `path` (head or original path)
-    pub fn is_on(&self, path: &str) -> bool {
-        self.path == path || self.original_path.as_deref() == Some(path)
-    }
-}
-
-/// A pull request's comments
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Discussion {
-    /// Oldest first
-    pub conversation: Vec<ConversationItem>,
-    /// In the order the forge lists them
-    pub threads: Vec<ReviewThread>,
 }
 
 /// A line comment written in Meld, posted with the review

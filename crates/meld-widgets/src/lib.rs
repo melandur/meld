@@ -15,7 +15,7 @@
 //!   `Buffer::replace_lines(range, lines) -> Edit`,
 //!   `Buffer::replace_range(start, end, text) -> Edit`.
 //! - [`text_pane`]: [`TextPane`] widget (`text_pane(&buffer, &style)` +
-//!   builder: `on_action`, `scroll`/`scroll_y`/`scroll_x`, `metrics`,
+//!   builder: `on_action`, `scroll`, `metrics`,
 //!   `font`, `highlights`, `inline_highlights`, `sync_points`, `syntax`,
 //!   `show_line_numbers`, `show_whitespace`, `highlight_current_line`,
 //!   `overscroll_lines`, `wrap`, `dimmed`, `search_matches`, `flashes`,
@@ -32,11 +32,11 @@
 //!   [`classify`](action_gutter::classify).
 //! - [`highlight`]: incremental syntect [`Highlighter`]
 //!   (`for_language("python3")`, `for_file(name, first_line)`, `edit`,
-//!   `highlight`, `highlight_visible`, `line_spans`) producing [`StyleSpan`]s named by
+//!   `highlight_visible`, `with_line_spans`) producing [`StyleSpan`]s named by
 //!   GtkSourceView style ([`SyntaxStyle::name`], `style_fallback`).
 //! - [`style`]: [`PaneStyle`] colours (text, gutter, selection, chunks,
 //!   inline, maps) with `syntax_style(name) -> Option<TextStyle>` lookup;
-//!   presets `light()`, `dark()`, `meld_classic()`; `for_new_side()`
+//!   presets `light()`, `dark()`; `for_new_side()`
 //!   swaps insert/delete colours for the pane on the "new" side.
 //! - [`chunk`]: input types [`DiffChunk`], [`ChunkKind`], [`LineHighlight`],
 //!   [`InlineHighlight`], [`LineFlash`], [`MapChunk`], and converters
@@ -48,7 +48,7 @@
 //! offset per pane (and a `WrapLayout` when wrapping lines, updated on
 //! `Action::WrapColumns` and after edits). On `Action::Scrolled { x, y }` from pane *i* it stores
 //! the offsets, then computes the other panes' offsets with
-//! [`sync_scroll`] and passes them all back via `.scroll_y(..)`. The same
+//! [`sync_scroll`] and passes them all back via `.scroll(..)`. The same
 //! offsets and [`Metrics::line_height`] feed the link maps, action gutters
 //! and chunk maps so everything stays aligned. Every other action goes to
 //! `Buffer::perform`; a returned `Edit` is forwarded to the diff engine,

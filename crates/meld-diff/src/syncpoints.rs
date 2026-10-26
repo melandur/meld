@@ -19,19 +19,6 @@ pub enum SyncpointAction {
     Disabled,
 }
 
-impl SyncpointAction {
-    /// The GAction name used by Meld.
-    pub fn action_name(self) -> &'static str {
-        match self {
-            SyncpointAction::Move => "move-sync-point",
-            SyncpointAction::Delete => "remove-sync-point",
-            SyncpointAction::Match => "match-sync-point",
-            SyncpointAction::Add => "add-sync-point",
-            SyncpointAction::Disabled => "disabled-sync-point",
-        }
-    }
-}
-
 /// Sync point state of a pane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PaneState {

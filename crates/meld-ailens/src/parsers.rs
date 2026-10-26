@@ -639,12 +639,8 @@ pub fn parse_patch_ids(output: &str) -> Result<HashMap<String, String>> {
     Ok(ids)
 }
 
-/// Parse `git rev-list --parents` into commit SHA -> parent SHAs
-pub fn parse_rev_list_parents(output: &str) -> HashMap<String, Vec<String>> {
-    parse_rev_list_parents_ordered(output).into_iter().collect()
-}
-
-/// [`parse_rev_list_parents`] in git's order (newest first)
+/// Parse `git rev-list --parents` into commit SHA and parent SHAs, in
+/// git's order (newest first)
 pub fn parse_rev_list_parents_ordered(output: &str) -> Vec<(String, Vec<String>)> {
     output
         .split('\n')
@@ -786,8 +782,6 @@ pub fn parse_worktrees(output: &str) -> Result<Vec<GitWorktree>> {
             head,
             branch,
             bare: get("bare").is_some(),
-            detached: get("detached").is_some(),
-            locked: get("locked").is_some(),
             prunable: get("prunable").is_some(),
             main: worktrees.is_empty(),
         };

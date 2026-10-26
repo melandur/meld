@@ -335,7 +335,7 @@ impl NewTab {
                         .unwrap_or_else(|| format!("({})", tr!("None")));
                     let choose: Element<'_, Message> = button(
                         ellipsized(current, Mode::Start)
-                            .size(14)
+                            .size(16)
                             .width(Length::Fill),
                     )
                     .width(Length::Fill)
@@ -354,7 +354,7 @@ impl NewTab {
                         None => choose,
                     };
                     col = col.push(
-                        row![text(*label).size(14).width(170), choose]
+                        row![text(*label).size(16).width(170), choose]
                             .spacing(10)
                             .align_y(iced::Center),
                     );

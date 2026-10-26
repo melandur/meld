@@ -40,38 +40,7 @@ pub enum State {
     Spinner = 13,
 }
 
-/// Number of states; `STATE_MAX` in Python
-pub const STATE_MAX: usize = 14;
-
 impl State {
-    /// Every state, in discriminant order
-    pub const ALL: [State; STATE_MAX] = [
-        State::Ignored,
-        State::None,
-        State::Normal,
-        State::NoChange,
-        State::Error,
-        State::Empty,
-        State::New,
-        State::Modified,
-        State::Renamed,
-        State::Conflict,
-        State::Removed,
-        State::Missing,
-        State::NonExist,
-        State::Spinner,
-    ];
-
-    /// The Python integer value of this state
-    pub fn index(self) -> usize {
-        self as usize
-    }
-
-    /// The state for a Python integer value
-    pub fn from_index(index: usize) -> Option<State> {
-        Self::ALL.get(index).copied()
-    }
-
     /// Whether this state counts as a difference when navigating
     /// between changes (everything but normal, no-change and empty)
     pub fn is_change(self) -> bool {
@@ -108,17 +77,6 @@ impl fmt::Display for State {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn indices_match_python() {
-        for (i, state) in State::ALL.iter().enumerate() {
-            assert_eq!(state.index(), i);
-            assert_eq!(State::from_index(i), Some(*state));
-        }
-        assert_eq!(State::from_index(STATE_MAX), None);
-        assert_eq!(State::Normal.index(), 2);
-        assert_eq!(State::NonExist.index(), 12);
-    }
 
     #[test]
     fn ordering_follows_values() {

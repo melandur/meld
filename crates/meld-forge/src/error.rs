@@ -41,11 +41,6 @@ impl Error {
     pub fn is_cancelled(&self) -> bool {
         matches!(self, Error::Cancelled)
     }
-
-    /// The forge's tool isn't installed
-    pub fn is_tool_missing(&self) -> bool {
-        matches!(self, Error::ToolMissing { .. })
-    }
 }
 
 impl From<meld_ailens::Error> for Error {

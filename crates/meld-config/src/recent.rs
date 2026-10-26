@@ -16,9 +16,6 @@ use crate::error::atomic_write;
 /// Most comparisons kept; the GTK recent chooser Meld used showed 50.
 pub const MAX_RECENT: usize = 50;
 
-/// Suffix of saved comparison files.
-pub const MELDCMP_SUFFIX: &str = ".meldcmp";
-
 /// Kind of a comparison (`meld.const.RecentType`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -101,16 +98,6 @@ impl RecentComparison {
             _ => "Version control:",
         };
         format!("{label} {display}")
-    }
-
-    /// `"<type> comparison\n<uris>"` description, as Meld stored it.
-    pub fn description(&self) -> String {
-        let uris: Vec<String> = self.paths.iter().map(|p| path_to_uri(p)).collect();
-        format!(
-            "{} comparison\n{}",
-            self.kind.meldcmp_name(),
-            uris.join(", ")
-        )
     }
 
     /// Whether every compared path exists.
@@ -217,10 +204,12 @@ impl RecentComparisons {
         &self.entries
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
@@ -255,15 +244,6 @@ impl RecentComparisons {
         self.entries.retain(|e| !e.same_comparison(&entry));
         self.entries.insert(0, entry);
         self.entries.truncate(MAX_RECENT);
-    }
-
-    /// Remove the entry at `index`.
-    pub fn remove(&mut self, index: usize) -> Option<RecentComparison> {
-        (index < self.entries.len()).then(|| self.entries.remove(index))
-    }
-
-    pub fn clear(&mut self) {
-        self.entries.clear();
     }
 
     /// Drop entries with paths that no longer exist; returns how many.
@@ -358,16 +338,6 @@ pub fn parse_meldcmp(text: &str) -> Result<RecentComparison, ConfigError> {
     })
 }
 
-/// Contents of a `.meldcmp` file for a comparison, as Meld writes them.
-pub fn write_meldcmp(comparison: &RecentComparison) -> String {
-    let uris: Vec<String> = comparison.paths.iter().map(|p| path_to_uri(p)).collect();
-    format!(
-        "[Comparison]\ntype = {}\nuris = {}\n\n",
-        comparison.kind.meldcmp_name(),
-        uris.join(";")
-    )
-}
-
 /// Keys (lowercased) and values of one section of an INI file, parsed
 /// like Python's `RawConfigParser`: `key = value` or `key: value`, `#`
 /// and `;` comment lines, and indented continuation lines.
@@ -402,20 +372,6 @@ fn parse_ini_section(text: &str, wanted: &str) -> Option<Vec<(String, String)>> 
         entries.push((key, value));
     }
     found.then_some(entries)
-}
-
-/// `file://` URI for an absolute path, percent-encoding as GIO does.
-pub fn path_to_uri(path: &Path) -> String {
-    let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
-    let mut uri = String::from("file://");
-    for byte in path.to_string_lossy().bytes() {
-        if byte.is_ascii_alphanumeric() || b"/-_.~!$&'()*+,;=:@".contains(&byte) {
-            uri.push(byte as char);
-        } else {
-            uri.push_str(&format!("%{byte:02X}"));
-        }
-    }
-    uri
 }
 
 /// Path of a `file://` URI (or a plain absolute path). Other schemes
@@ -539,20 +495,6 @@ mod tests {
     }
 
     #[test]
-    fn meldcmp_round_trip() {
-        let c = RecentComparison {
-            kind: ComparisonType::VersionControl,
-            paths: vec![PathBuf::from("/home/me/my repo/ä")],
-            flags: vec![],
-            timestamp: 0,
-        };
-        let text = write_meldcmp(&c);
-        assert!(text.contains("type = Version control"));
-        assert!(text.contains("uris = file:///home/me/my%20repo/%C3%A4"));
-        assert_eq!(parse_meldcmp(&text).unwrap(), c);
-    }
-
-    #[test]
     fn meldcmp_parsing() {
         let parsed = parse_meldcmp(
             "# saved\n[Other]\ntype = Folder\n[Comparison]\nTYPE: File\nuris = file:///a/b;file://localhost/c%3Bd\n",
@@ -608,7 +550,6 @@ mod tests {
             uri_to_path("file:///trailing%2"),
             Some(PathBuf::from("/trailing%2"))
         );
-        assert_eq!(path_to_uri(Path::new("/a b/c#d")), "file:///a%20b/c%23d");
     }
 
     #[test]
@@ -657,11 +598,6 @@ mod tests {
             recent.entries()[0].paths[0],
             dir.path().join(format!("f{}", MAX_RECENT + 4))
         );
-
-        assert!(recent.remove(0).is_some());
-        assert!(recent.remove(1000).is_none());
-        recent.clear();
-        assert!(recent.is_empty());
     }
 
     #[test]
@@ -714,10 +650,6 @@ mod tests {
             vec![PathBuf::from("/srv/repo")],
         );
         assert_eq!(c.display_name(), "Version control: /srv/repo");
-        assert!(
-            c.description()
-                .starts_with("Version control comparison\nfile:///srv/repo")
-        );
         if let Some(home) = dirs::home_dir() {
             let c = RecentComparison::new(ComparisonType::VersionControl, vec![home.join("code")]);
             assert_eq!(c.display_name(), "Version control: ~/code");

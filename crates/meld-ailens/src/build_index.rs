@@ -6,7 +6,7 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 
-use crate::build_file::{BuildHeader, newest_first, parse_build_header};
+use crate::build_file::{BuildHeader, parse_build_header};
 use crate::build_narrative::js_trim;
 use crate::error::{Error, Result};
 use crate::git::{normalize, realpath};
@@ -50,24 +50,6 @@ pub fn read_build_headers(folder: &Path) -> Result<Vec<BuildHeader>> {
         }
     }
     Ok(headers)
-}
-
-/// File names of the builds that cover a commit, newest first
-///
-/// By SHA, or by patch ID when the commit was rebased or cherry-picked
-/// since (same change, new SHA). Squashed commits have a new patch and
-/// aren't found.
-pub fn find_builds(headers: &[BuildHeader], sha: &str, patch_id: Option<&str>) -> Vec<String> {
-    let mut found: Vec<&BuildHeader> = headers
-        .iter()
-        .filter(|header| {
-            header.commits.iter().any(|commit| {
-                commit.sha == sha || (patch_id.is_some() && commit.patch_id.as_deref() == patch_id)
-            })
-        })
-        .collect();
-    found.sort_by(|a, b| newest_first(a, b));
-    found.into_iter().map(|h| h.file_name.clone()).collect()
 }
 
 static BUILD_FILE_NAME_RE: LazyLock<Regex> =

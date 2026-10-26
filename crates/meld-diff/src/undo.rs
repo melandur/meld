@@ -287,22 +287,6 @@ impl<A: UndoAction + Clone> UndoSequence<A> {
             }
         }
     }
-
-    /// Discard the actions of the innermost group (without undoing them).
-    pub fn abort_group(&mut self) {
-        let Some(group) = self.group.as_mut() else {
-            return;
-        };
-        if group.group.is_some() {
-            group.abort_group();
-        } else {
-            self.group = None;
-        }
-    }
-
-    pub fn in_grouped_action(&self) -> bool {
-        self.group.is_some()
-    }
 }
 
 #[cfg(test)]
@@ -367,10 +351,8 @@ mod tests {
         s.add_action(Act(0, "b"));
         s.add_action(Act(0, "c"));
         s.end_group();
-        assert!(s.in_grouped_action());
         s.add_action(Act(0, "d"));
         s.end_group();
-        assert!(!s.in_grouped_action());
         assert_eq!(
             s.undo(),
             Some(vec![Act(0, "d"), Act(0, "c"), Act(0, "b"), Act(0, "a")])
@@ -390,12 +372,6 @@ mod tests {
         s.add_action(Act(0, "x"));
         s.end_group();
         assert_eq!(s.undo(), Some(vec![Act(0, "x")]));
-
-        // Aborting drops the grouped actions
-        s.begin_group();
-        s.add_action(Act(0, "y"));
-        s.abort_group();
-        assert!(!s.can_undo());
         s.end_group(); // unpaired: ignored
     }
 

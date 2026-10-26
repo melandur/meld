@@ -113,7 +113,6 @@ impl Tab {
                         merge_output,
                         auto_merge,
                         extras,
-                        ..filediff::Options::default()
                     },
                     shared,
                 );

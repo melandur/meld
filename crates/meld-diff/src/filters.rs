@@ -87,14 +87,6 @@ pub fn filter_line(line: &str, regexes: &[Regex]) -> String {
     apply_text_filters(line, regexes).map_or_else(|_| line.to_owned(), |f| f.text)
 }
 
-/// Filter every line of a buffer (see [`filter_line`]).
-pub fn filter_lines<S: AsRef<str>>(lines: &[S], regexes: &[Regex]) -> Vec<String> {
-    lines
-        .iter()
-        .map(|l| filter_line(l.as_ref(), regexes))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

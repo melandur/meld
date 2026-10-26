@@ -62,8 +62,6 @@ pub struct DiffColors {
     pub syncpoint_outline: Rgba,
     /// Foreground of dimmed text (`meld:dimmed`).
     pub dimmed: Rgba,
-    /// Overview map viewport overlay (`map-overlay` background).
-    pub map_overlay: Rgba,
 }
 
 impl DiffColors {
@@ -192,11 +190,6 @@ impl Theme {
         &self.scheme
     }
 
-    /// The base scheme providing fallback `meld:*` colours.
-    pub fn base_scheme(&self) -> &StyleScheme {
-        &self.base
-    }
-
     /// Whether the scheme is dark (`_use_dark`).
     pub fn is_dark(&self) -> bool {
         self.dark
@@ -243,7 +236,6 @@ impl Theme {
             current_line_highlight: c("meld:current-line-highlight", Bg),
             syncpoint_outline: c("meld:syncpoint-outline", Fg),
             dimmed: c("meld:dimmed", Fg),
-            map_overlay: c("map-overlay", Bg),
         }
     }
 
@@ -331,21 +323,6 @@ impl Theme {
         colors
     }
 
-    /// Colours for pane `pane` of a `num_panes`-way file comparison,
-    /// using the default sides of [`crate::diff_sides`].
-    pub fn pane_diff_colors(
-        &self,
-        mode: DiffColorMode,
-        num_panes: usize,
-        pane: usize,
-    ) -> DiffColors {
-        let side = crate::palette::diff_sides(num_panes, None)
-            .get(pane)
-            .copied()
-            .flatten();
-        self.diff_colors(mode, side)
-    }
-
     /// Folder and version control tree state colours.
     pub fn status_colors(&self) -> StatusColors {
         let fg = |name: &str| self.color(name, StyleAttr::Foreground);
@@ -364,44 +341,4 @@ fn bundled(id: &str) -> StyleScheme {
     SchemeManager::builtin()
         .get(id)
         .unwrap_or_else(|| unreachable!("bundled scheme {id} is embedded"))
-}
-
-/// Font zoom state (`update_font_zoom`/`reset_font_zoom`): an offset in
-/// points applied to the configured font size.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct FontZoom {
-    offset: i32,
-}
-
-impl FontZoom {
-    pub fn offset(&self) -> i32 {
-        self.offset
-    }
-
-    /// Zoom by `change` points; `None` or zero resets. The result can't
-    /// zoom out past 1pt for a font of `font_size` points. Returns
-    /// whether the zoom changed (when Meld emits "changed::font").
-    pub fn update(&mut self, change: Option<i32>, font_size: i32) -> bool {
-        let offset = match change {
-            Some(c) if c != 0 => self.offset + c,
-            _ => 0,
-        };
-        let offset = offset.max(1 - font_size);
-        if offset == self.offset {
-            return false;
-        }
-        self.offset = offset;
-        true
-    }
-
-    /// Reset when the configured font changes. Returns whether the zoom
-    /// changed.
-    pub fn reset(&mut self) -> bool {
-        std::mem::take(&mut self.offset) != 0
-    }
-
-    /// The zoomed size for a font of `font_size` points, at least 1pt.
-    pub fn scaled_size(&self, font_size: i32) -> i32 {
-        (font_size + self.offset).max(1)
-    }
 }

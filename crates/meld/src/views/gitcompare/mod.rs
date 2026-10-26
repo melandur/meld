@@ -45,7 +45,7 @@ use meld_ailens::{
 };
 use meld_config::{Settings, StyleAttr};
 use meld_forge::{
-    Discussion, FetchedPullRequest, Forge, PullRequest, PullRequestDetails, Side, StateFilter,
+    FetchedPullRequest, Forge, PullRequest, PullRequestDetails, ReviewSubmission, Side, StateFilter,
 };
 
 use self::diffhost::{DiffHost, EmbeddedFile};
@@ -234,8 +234,7 @@ pub enum Outcome {
     PrList(Result<Vec<PullRequest>, Error>),
     PrSearch(String, Result<Vec<PullRequest>, Error>),
     PrOpened(Result<(Forge, Box<PullRequestDetails>, FetchedPullRequest), Error>),
-    PrDiscussion(u64, Result<Discussion, Error>),
-    PrPosted(review::Post, Result<(), Error>),
+    PrPosted(ReviewSubmission, Result<(), Error>),
 }
 
 #[derive(Debug, Clone)]
@@ -1097,8 +1096,7 @@ impl GitCompare {
                         self.target = Revision::commit(opened.fetched.head_ref.clone());
                         self.pr = Some(opened);
                         self.pr_spec = None;
-                        let discussion = self.load_discussion();
-                        Task::batch([self.reload(shared), discussion])
+                        self.reload(shared)
                     }
                     Err(err) if err.is_cancelled() => {
                         let what = self
@@ -1125,37 +1123,24 @@ impl GitCompare {
                     }
                 }
             }
-            Outcome::PrDiscussion(number, result) => {
-                if let Some(pr) = self.pr.as_mut().filter(|pr| pr.number() == number) {
-                    match result {
-                        Ok(discussion) => pr.set_discussion(Ok(discussion)),
-                        Err(err) if err.is_cancelled() => {}
-                        Err(err) => pr.set_discussion(Err(condense(&err.to_string()).0)),
-                    }
-                }
-                Task::none()
-            }
             Outcome::PrPosted(post, result) => {
                 let Some(pr) = self.pr.as_mut() else {
                     return Task::none();
                 };
-                let what = match &post {
-                    review::Post::Review(review) => review.summary(),
-                    review::Post::Reply { .. } => tr!("Reply").to_string(),
-                };
+                let what = post.summary();
                 match result {
                     Ok(()) => {
-                        pr.posted(&post, Ok(()));
+                        pr.posted(Ok(()));
                         let text = tr!(
                             "Posted to {reference}: {what}",
                             reference = pr.reference(),
                             what = what
                         );
                         self.show_banner(BannerKind::Info, text, None);
-                        self.load_discussion()
+                        Task::none()
                     }
                     Err(err) => {
-                        pr.posted(&post, Err(err.to_string()));
+                        pr.posted(Err(err.to_string()));
                         if !err.is_cancelled() {
                             self.show_banner(
                                 BannerKind::Error,
@@ -1286,21 +1271,6 @@ impl GitCompare {
         )
     }
 
-    fn load_discussion(&mut self) -> Task<Message> {
-        let Some(pr) = self.pr.as_mut() else {
-            return Task::none();
-        };
-        pr.discussion_status = Some(tr!("Loading comments…").into());
-        let (forge, details) = (pr.forge.clone(), pr.details.clone());
-        let number = pr.number();
-        self.run(
-            "pr-discussion",
-            true,
-            move |cancel, _| Ok(forge.discussion(&details, cancel)?),
-            move |result| Outcome::PrDiscussion(number, result),
-        )
-    }
-
     /// The pull request being reviewed, while the comparison shows it.
     fn active_pr(&self) -> Option<&review::PrReview> {
         self.pr
@@ -1391,20 +1361,12 @@ impl GitCompare {
                     "pr-post",
                     true,
                     move |cancel, _| {
-                        match &post {
-                            review::Post::Review(review) => {
-                                forge.submit_review(&details, review, cancel)?
-                            }
-                            review::Post::Reply { thread, body } => {
-                                forge.reply(&details, thread, body, cancel)?
-                            }
-                        }
+                        forge.submit_review(&details, &post, cancel)?;
                         Ok(())
                     },
                     move |result| Outcome::PrPosted(for_result.clone(), result),
                 )
             }
-            review::Action::RefreshComments => self.load_discussion(),
             review::Action::OpenUrl(url) => {
                 if let Err(err) = open::that_detached(&url) {
                     self.show_banner(
@@ -2058,7 +2020,7 @@ impl GitCompare {
                     // right edge is the window's
                     DragTarget::WhyColumn => self
                         .why_width
-                        .unwrap_or_else(|| shared.settings.window_state.width as f32 - origin_x),
+                        .unwrap_or(shared.settings.window_state.width as f32 - origin_x),
                 };
                 self.drag = Some(Drag {
                     target,
@@ -2263,11 +2225,6 @@ impl GitCompare {
                 tr!("Review…"),
                 None,
                 Message::Review(review::Message::StartReview),
-            ));
-            items.push(menu::Item::action(
-                tr!("Reload Comments"),
-                None,
-                Message::Review(review::Message::RefreshComments),
             ));
             items.push(menu::Item::action(
                 tr!("Open in Browser"),
@@ -2775,12 +2732,14 @@ mod tests {
 
     #[test]
     fn config_follows_the_settings_with_defaults_for_empty_texts() {
-        let mut settings = Settings::default();
-        settings.ailens_claude_path = "/opt/claude".into();
-        settings.ailens_infer_enabled = false;
-        settings.ailens_infer_model = " ".into();
-        settings.ailens_notes_ref = "lens".into();
-        settings.ailens_author_pattern = "bot@".into();
+        let mut settings = Settings {
+            ailens_claude_path: "/opt/claude".into(),
+            ailens_infer_enabled: false,
+            ailens_infer_model: " ".into(),
+            ailens_notes_ref: "lens".into(),
+            ailens_author_pattern: "bot@".into(),
+            ..Settings::default()
+        };
         let config = config_from_settings(&settings);
         assert_eq!(config.claude_path, "/opt/claude");
         assert!(!config.infer_enabled);

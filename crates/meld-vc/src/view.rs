@@ -309,23 +309,13 @@ fn file_key(_meta: &std::fs::Metadata) -> Option<(u64, u64)> {
 /// Build the tree of rows below `start` (normally [`Vc::location`]) from
 /// the backend's cached state; call [`Vc::refresh_vc_state`] first.
 pub fn scan_tree(vc: &dyn Vc, start: &Path, filters: &StatusFilters) -> Result<VcRow> {
-    scan_tree_with_progress(vc, start, filters, &mut |_| {})
+    scan(vc, start, filters, &mut |_| {}, None)
 }
 
 /// [`scan_tree`] reporting progress messages ("Scanning repository",
-/// "Scanning sub/dir") for a status bar.
-pub fn scan_tree_with_progress(
-    vc: &dyn Vc,
-    start: &Path,
-    filters: &StatusFilters,
-    progress: &mut dyn FnMut(&str),
-) -> Result<VcRow> {
-    scan(vc, start, filters, progress, None)
-}
-
-/// [`scan_tree_with_progress`] that stops with [`VcError::Cancelled`]
-/// soon after `cancel` is set; it is checked before each folder and
-/// entry.
+/// "Scanning sub/dir") for a status bar, that stops with
+/// [`VcError::Cancelled`] soon after `cancel` is set; it is checked
+/// before each folder and entry.
 pub fn scan_tree_cancellable(
     vc: &dyn Vc,
     start: &Path,
@@ -627,6 +617,7 @@ impl MergeFileOrder {
         }
     }
 
+    #[cfg(test)]
     pub fn key(self) -> &'static str {
         match self {
             MergeFileOrder::LocalMergeRemote => "local-merge-remote",

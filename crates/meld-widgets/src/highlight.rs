@@ -54,7 +54,6 @@ pub enum SyntaxStyle {
     Operator,
     Preprocessor,
     Error,
-    NetAddress,
     Emphasis,
     StrongEmphasis,
     Heading,
@@ -94,7 +93,6 @@ impl SyntaxStyle {
             Operator => "def:operator",
             Preprocessor => "def:preprocessor",
             Error => "def:error",
-            NetAddress => "def:net-address",
             Emphasis => "def:emphasis",
             StrongEmphasis => "def:strong-emphasis",
             Heading => "def:heading",
@@ -438,6 +436,7 @@ impl Highlighter {
     }
 
     /// Whether a language id maps to a known syntax.
+    #[cfg(test)]
     pub fn has_language(id: &str) -> bool {
         find_language(id).is_some()
     }
@@ -466,6 +465,7 @@ impl Highlighter {
     }
 
     /// Whether this highlighter produces no spans.
+    #[cfg(test)]
     pub fn is_plain(&self) -> bool {
         self.inner.borrow().syntax.is_none()
     }
@@ -536,6 +536,7 @@ impl Highlighter {
 
     /// Highlights at least lines `0..upto` of `lines`, spending at most
     /// `budget` (if given). Returns whether `0..upto` is now valid.
+    #[cfg(test)]
     pub fn highlight(&self, lines: &[String], upto: usize, budget: Option<Duration>) -> bool {
         let mut inner = self.inner.borrow_mut();
         inner.poll_job(lines.len());
@@ -596,6 +597,7 @@ impl Highlighter {
 
     /// Spans for a line, if it has been highlighted (possibly stale or
     /// approximate).
+    #[cfg(test)]
     pub fn line_spans(&self, line: usize) -> Option<Vec<StyleSpan>> {
         let inner = self.inner.borrow();
         inner.syntax?;

@@ -14,15 +14,13 @@ use crate::models::{
 
 pub const MAX_ENTRIES: usize = 2000;
 
-/// What an uncommitted hunk does, why, why it is the right change, and the
-/// model that inferred it
+/// What an uncommitted hunk does, why, and why it is the right change
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HunkExplanation {
     pub what: String,
     pub why: String,
     pub justification: Option<String>,
     pub guide: ChangeGuide,
-    pub model: String,
 }
 
 /// A hunk's explanation, placed where the hunk is now
@@ -33,19 +31,6 @@ pub struct PlacedExplanation {
     pub why: String,
     pub justification: Option<String>,
     pub guide: ChangeGuide,
-    pub model: String,
-}
-
-impl PlacedExplanation {
-    pub fn as_change(&self) -> ChangeExplanation {
-        ChangeExplanation {
-            hunk: self.hunk.clone(),
-            what: self.what.clone(),
-            why: self.why.clone(),
-            justification: self.justification.clone(),
-            guide: self.guide.clone(),
-        }
-    }
 }
 
 /// Anything that explains a hunk, for
@@ -171,7 +156,6 @@ impl UncommittedExplanations {
         layer: UncommittedLayer,
         diff: &GitFileDiff,
         changes: &[ChangeExplanation],
-        model: &str,
     ) -> usize {
         let mut kept = 0;
         for change in changes {
@@ -193,7 +177,6 @@ impl UncommittedExplanations {
                         why: change.why.clone(),
                         justification: change.justification.clone(),
                         guide: change.guide.clone(),
-                        model: model.to_string(),
                     },
                 );
                 kept += 1;
@@ -238,7 +221,6 @@ impl UncommittedExplanations {
                     why: found.why,
                     justification: found.justification,
                     guide: found.guide,
-                    model: found.model,
                 });
             }
         }

@@ -39,7 +39,6 @@ pub fn state_for_key(key: &str) -> State {
 pub struct DiffLine {
     pub old_mode: String,
     pub new_mode: String,
-    pub old_sha: String,
     pub new_sha: String,
     pub status: String,
     /// Path as printed (already unquoted).
@@ -52,7 +51,6 @@ pub fn parse_diff_line(line: &str) -> Option<DiffLine> {
     Some(DiffLine {
         old_mode: caps[1].to_string(),
         new_mode: caps[2].to_string(),
-        old_sha: caps[3].to_string(),
         new_sha: caps[4].to_string(),
         status: caps[5].to_string(),
         path: unquote_path(&caps[6]),

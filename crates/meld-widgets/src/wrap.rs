@@ -141,6 +141,7 @@ static IDENTITY: WrapLayout = WrapLayout {
 
 impl WrapLayout {
     /// A layout wrapping in `mode` (columns are set later).
+    #[cfg(test)]
     pub fn new(mode: WrapMode) -> Self {
         Self {
             mode,

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use meld_ailens::linemap::{new_to_old, old_to_new};
 use meld_ailens::parsers::{
     GitFileStats, log_format, parse_blame, parse_diff, parse_log, parse_name_status, parse_numstat,
-    parse_patch_ids, parse_refs, parse_rev_list_parents, parse_worktrees, unquote_git_path,
+    parse_patch_ids, parse_refs, parse_rev_list_parents_ordered, parse_worktrees, unquote_git_path,
 };
 use meld_ailens::{
     DiffLineKind, Error, GitBlameLine, GitCommit, GitDiffHunk, GitDiffLine, GitFileChange,
@@ -772,11 +772,15 @@ fn patch_ids_map_commit_to_patch_id() {
 
 #[test]
 fn rev_list_parents_map_commit_to_parents() {
-    let parents = parse_rev_list_parents("m a b\na r\nr\n");
-    assert_eq!(parents.len(), 3);
-    assert_eq!(parents["m"], ["a", "b"]);
-    assert_eq!(parents["a"], ["r"]);
-    assert!(parents["r"].is_empty());
+    let parents = parse_rev_list_parents_ordered("m a b\na r\nr\n");
+    assert_eq!(
+        parents,
+        [
+            ("m".to_string(), vec!["a".to_string(), "b".to_string()]),
+            ("a".to_string(), vec!["r".to_string()]),
+            ("r".to_string(), vec![]),
+        ]
+    );
 }
 
 // -- parse_refs --
@@ -1001,17 +1005,13 @@ fn worktrees_reads_every_attribute() {
                 main: true,
                 ..worktree("/repo", Some(sha('a')), Some("main"))
             },
-            GitWorktree {
-                locked: true,
-                ..worktree(
-                    "/wt/with space\nand newline",
-                    Some(sha('b')),
-                    Some("feature/x")
-                )
-            },
+            worktree(
+                "/wt/with space\nand newline",
+                Some(sha('b')),
+                Some("feature/x")
+            ),
             worktree("/wt/unborn", None, Some("orphan")),
             GitWorktree {
-                detached: true,
                 prunable: true,
                 ..worktree("/wt/gone", Some(sha('c')), None)
             },

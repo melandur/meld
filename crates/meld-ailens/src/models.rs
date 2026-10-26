@@ -351,8 +351,6 @@ pub struct GitWorktree {
     /// Short branch name; None when detached
     pub branch: Option<String>,
     pub bare: bool,
-    pub detached: bool,
-    pub locked: bool,
     pub prunable: bool,
     /// The main worktree (the first one `git worktree list` prints)
     pub main: bool,
@@ -687,11 +685,6 @@ impl ChangeKind {
         Self::ALL
             .into_iter()
             .find(|kind| kind.as_str().eq_ignore_ascii_case(name))
-    }
-
-    /// Changes a reader can skip over: what they do is clear from their kind
-    pub fn skimmable(self) -> bool {
-        matches!(self, Self::Rename | Self::Mechanical | Self::Test)
     }
 }
 

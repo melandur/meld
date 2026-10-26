@@ -54,7 +54,6 @@ printf '%s' '{{"is_error": false, "result": "{{\"ok\": true}}", "modelUsage": {{
     let response = run_claude(&base_request(&claude), &never()).unwrap();
 
     assert_eq!(response.model, "claude-sonnet-5-5");
-    assert_eq!(response.cost_usd, Some(0.01));
     assert_eq!(response.output, json!({"ok": true}));
     assert_eq!(
         std::fs::read_to_string(out.join("input")).unwrap(),
@@ -391,7 +390,6 @@ fn prefers_structured_output_and_falls_back_to_the_requested_model() {
     .unwrap();
     assert_eq!(response.output, json!({"what": "x"}));
     assert_eq!(response.model, "m");
-    assert_eq!(response.cost_usd, None);
     assert_eq!(response.text, "ignored");
 }
 
@@ -434,22 +432,6 @@ fn parse_response_reads_the_model_only_when_exactly_one_answered() {
     )
     .unwrap();
     assert_eq!(two.model, "m");
-}
-
-#[test]
-fn parse_response_ignores_a_cost_that_is_not_a_number() {
-    let cost = |value: serde_json::Value| {
-        parse_response(
-            &json!({"result": "{}", "total_cost_usd": value}).to_string(),
-            "m",
-            true,
-        )
-        .unwrap()
-        .cost_usd
-    };
-    assert_eq!(cost(json!("1")), None);
-    assert_eq!(cost(json!(true)), None);
-    assert_eq!(cost(json!(2)), Some(2.0));
 }
 
 #[test]

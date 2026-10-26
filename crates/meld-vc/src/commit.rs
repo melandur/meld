@@ -290,19 +290,6 @@ impl MessageHistory {
 
     /// Remember `text` as the most recent message.
     pub fn prepend(&mut self, text: &str) {
-        self.insert(text, true);
-    }
-
-    /// Remember `text` as the oldest message.
-    pub fn append(&mut self, text: &str) {
-        self.insert(text, false);
-    }
-
-    pub fn clear(&mut self) {
-        self.messages.clear();
-    }
-
-    fn insert(&mut self, text: &str, prepend: bool) {
         if text.chars().count() <= MIN_ITEM_LEN {
             return;
         }
@@ -311,11 +298,7 @@ impl MessageHistory {
         } else if self.length >= 2 {
             self.messages.truncate(self.length - 2);
         }
-        if prepend {
-            self.messages.insert(0, text.to_string());
-        } else {
-            self.messages.push(text.to_string());
-        }
+        self.messages.insert(0, text.to_string());
     }
 
     /// `$XDG_CONFIG_HOME/meld/history.ini`.

@@ -150,15 +150,9 @@ pub enum DiffSide {
 }
 
 impl DiffSide {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Old => "old",
-            Self::New => "new",
-        }
-    }
-
     /// Convert a side name to a side, with anything unknown as no side
     /// (`parse_diff_side`).
+    #[cfg(test)]
     pub fn parse(value: &str) -> Option<DiffSide> {
         match value {
             "old" => Some(Self::Old),
@@ -205,9 +199,6 @@ impl DiffTone {
     }
     pub fn line_rgba(&self) -> Rgba {
         Rgba::parse(self.line).unwrap_or(Rgba::TRANSPARENT)
-    }
-    pub fn inline_rgba(&self) -> Rgba {
-        Rgba::parse(self.inline).unwrap_or(Rgba::TRANSPARENT)
     }
 }
 
@@ -766,14 +757,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn parse_diff_side() {
-        assert_eq!(DiffSide::parse("old"), Some(DiffSide::Old));
-        assert_eq!(DiffSide::parse("new"), Some(DiffSide::New));
-        assert_eq!(DiffSide::parse(""), None);
-        assert_eq!(DiffSide::parse("left"), None);
     }
 
     /// Port of test_filediff_diff_sides.

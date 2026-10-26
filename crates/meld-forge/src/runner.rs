@@ -311,7 +311,7 @@ mod tests {
         let err = runner
             .run(ForgeKind::GitHub, &[], None, &CancelToken::new())
             .unwrap_err();
-        assert!(err.is_tool_missing(), "{err:?}");
+        assert!(matches!(err, Error::ToolMissing { .. }), "{err:?}");
         assert!(err.to_string().contains("GitHub CLI"));
     }
 

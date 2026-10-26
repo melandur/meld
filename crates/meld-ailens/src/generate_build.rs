@@ -21,9 +21,6 @@ pub const INDEX_FILE_NAME: &str = "index.md";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GeneratedBuild {
     pub path: PathBuf,
-    pub index_path: PathBuf,
-    pub facts: BuildFacts,
-    pub narrative: BuildNarrative,
 }
 
 /// Writes `<base>_<target>_build.md` and rebuilds `index.md`
@@ -67,12 +64,7 @@ pub fn write_build(
         &render_index(&read_build_headers(&folder_path)?),
     )?;
 
-    Ok(GeneratedBuild {
-        path,
-        index_path,
-        facts: facts.clone(),
-        narrative: narrative.clone(),
-    })
+    Ok(GeneratedBuild { path })
 }
 
 fn describe(err: &std::io::Error) -> String {

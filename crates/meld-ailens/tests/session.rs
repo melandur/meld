@@ -9,9 +9,9 @@ use common::{CommitOptions, FixtureRepo, co_authored_by_claude};
 use meld_ailens::claude::{ClaudeRequest, ClaudeResponse, RunClaude};
 use meld_ailens::session::MAX_FILE_BYTES;
 use meld_ailens::{
-    CancelToken, CardKind, CardStep, CompareSession, Error, ExplainAction, ExplanationSource,
-    FileEntry, GitFileChange, GitFileStatus, LineRange, PickerSide, RepositoryInfo, Revision,
-    SessionConfig, Side, UncommittedLayer, build_file_tree,
+    CancelToken, CardKind, CardStep, CompareSession, Error, ExplainAction, FileEntry,
+    GitFileChange, GitFileStatus, LineRange, PickerSide, RepositoryInfo, Revision, SessionConfig,
+    Side, UncommittedLayer, build_file_tree,
 };
 use regex::Regex;
 use serde_json::json;
@@ -201,9 +201,6 @@ fn commit_comparison_files_and_cards() {
         .find(|c| c.sha.as_deref() == Some(&history.sha("human")))
         .unwrap();
     assert_eq!(human.what, "Makes two louder");
-    assert_eq!(human.why, "Users could not hear it.");
-    assert_eq!(human.source, Some(ExplanationSource::Commit));
-    assert!(!human.agent());
     // It has a Why, so only its changes can still be explained
     assert_eq!(human.explain, Some(ExplainAction::Changes));
     let agent = view
@@ -211,10 +208,7 @@ fn commit_comparison_files_and_cards() {
         .iter()
         .find(|c| c.sha.as_deref() == Some(&history.sha("agent")))
         .unwrap();
-    assert_eq!(agent.agent_name, "Claude Opus 5.5");
-    assert_eq!(agent.agent_model, "claude-opus-5-5");
     assert_eq!(agent.explain, Some(ExplainAction::Commit));
-    assert!(human.color_index == 0 && agent.color_index == 1);
     assert_eq!(agent.added.iter().map(|r| r.start).collect::<Vec<_>>(), [4]);
 }
 
@@ -251,10 +245,6 @@ fn explain_commit_saves_note_and_updates_cards() {
         .iter()
         .find(|c| c.sha.as_deref() == Some(&history.sha("agent")))
         .unwrap();
-    assert_eq!(agent.why, "Inferred why");
-    assert_eq!(agent.justification, "Inferred justification");
-    assert_eq!(agent.source, Some(ExplanationSource::Inferred));
-    assert_eq!(agent.inferred_by, "fake-model");
     assert_eq!(agent.change_what, "Change 1 what");
     assert_eq!(agent.change_justification, "Change 1 justification");
     assert_eq!(agent.explain, None);
@@ -287,6 +277,9 @@ fn explain_changes_keeps_the_commit_why() {
     session
         .explain_commit(&history.sha("human"), &never())
         .unwrap();
+    // The inferred Why doesn't replace the message's
+    let note = history.git(&["notes", "--ref=ai-lens", "show", &history.sha("human")]);
+    assert!(!note.contains("Why: Inferred why"), "{note}");
     let entry = entry_for(&session, "app.py");
     let view = session.file_view(&entry.change, &never()).unwrap();
     let human = view
@@ -294,11 +287,6 @@ fn explain_changes_keeps_the_commit_why() {
         .iter()
         .find(|c| c.sha.as_deref() == Some(&history.sha("human")))
         .unwrap();
-    assert_eq!(human.why, "Users could not hear it.");
-    assert_eq!(human.source, Some(ExplanationSource::Commit));
-    // The message gives no justification, and an inferred one isn't put
-    // under the author's Why
-    assert_eq!(human.justification, "");
     assert_eq!(human.change_why, "Change 1 why");
     assert_eq!(human.change_justification, "Change 1 justification");
     assert_eq!(human.explain, None);
@@ -348,7 +336,6 @@ fn changes_explained_as_one_hunk_can_be_explained_again_apart() {
     let whys: Vec<&str> = cards.iter().map(|c| c.change_why.as_str()).collect();
     assert_eq!(whys, ["Change 1 why", "Change 2 why"]);
     assert!(cards.iter().all(|c| c.explain.is_none()));
-    assert_eq!(cards[0].why, "Easier to read.");
     let note = history.git(&["notes", "--ref=ai-lens", "show", &history.sha("joined")]);
     assert!(note.contains("Change-Unit: block\n"), "{note}");
 }
@@ -615,11 +602,6 @@ fn explain_all_and_build() {
         text.contains("  - Justification: Change 1 justification\n"),
         "{text}"
     );
-    // Cards now link to the build
-    let entry = entry_for(&session, "app.py");
-    let view = session.file_view(&entry.change, &never()).unwrap();
-    let name = path.file_name().unwrap().to_str().unwrap().to_string();
-    assert!(view.cards.iter().all(|c| c.builds.contains(&name)));
 }
 
 #[test]
@@ -926,19 +908,6 @@ fn cancelled_load() {
     let token = CancelToken::new();
     token.cancel();
     assert!(session.files(&token).unwrap_err().is_cancelled());
-}
-
-#[test]
-fn commit_message() {
-    let mut history = history();
-    history.note("agent", "Why: A note.", "ai-lens");
-    let session = base_main(&history, None);
-    let message = session
-        .commit_message(&history.sha("agent"), &never())
-        .unwrap();
-    assert!(message.starts_with(&format!("commit {}", history.sha("agent"))));
-    assert!(message.contains("Co-Authored-By: Claude Opus 5.5"));
-    assert!(message.contains("A note."));
 }
 
 #[test]

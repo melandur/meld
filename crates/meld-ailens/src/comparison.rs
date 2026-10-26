@@ -193,17 +193,8 @@ pub fn changed_files(
     list_changed_files(repo, comparison, &untracked, cancel)
 }
 
-/// Lines added and deleted per changed file, untracked files too
-pub fn file_stats(
-    repo: &GitRepository,
-    comparison: &Comparison,
-    cancel: &CancelToken,
-) -> Result<Vec<GitFileStats>> {
-    let untracked = untracked(repo, comparison, cancel)?;
-    list_file_stats(repo, comparison, &untracked, cancel)
-}
-
-/// [`changed_files`] and [`file_stats`], listing untracked files once
+/// [`changed_files`] and the lines added and deleted per changed file
+/// (untracked files too), listing untracked files once
 pub fn changed_files_with_stats(
     repo: &GitRepository,
     comparison: &Comparison,

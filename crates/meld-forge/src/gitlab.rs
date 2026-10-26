@@ -2,9 +2,9 @@
 //!
 //! Everything goes through the REST API of the remote's host
 //! (`glab api --hostname <host> projects/<path>/merge_requests…`): lists,
-//! details (with `diff_refs`, whose `base_sha` is the merge base),
-//! discussions (line comments carry a `position`), new discussions with a
-//! position for line comments, notes for the overall comment, `approve`.
+//! details (with `diff_refs`, whose `base_sha` is the merge base), new
+//! discussions with a position for line comments, notes for the overall
+//! comment, `approve`.
 
 use serde_json::{Value, json};
 
@@ -84,7 +84,6 @@ fn merge_request(v: &Value) -> PullRequest {
         author: text(v, "author.username"),
         state,
         draft: flag(v, "draft") || flag(v, "work_in_progress"),
-        created_at: text(v, "created_at"),
         updated_at: text(v, "updated_at"),
         url: text(v, "web_url"),
         head_branch: text(v, "source_branch"),
@@ -158,12 +157,8 @@ pub fn details(
     {
         pr.head_sha = refs.head_sha.clone();
     }
-    let pipeline = opt_text(&v, "head_pipeline.status").or_else(|| opt_text(&v, "pipeline.status"));
     Ok(PullRequestDetails {
         pr,
-        body: text(&v, "description"),
-        checks: pipeline.map(|status| format!("Pipeline: {}", status.replace('_', " "))),
-        review_decision: None,
         base_sha: diff_refs
             .as_ref()
             .map(|d| d.base_sha.clone())
@@ -171,116 +166,7 @@ pub fn details(
         merge_commit: opt_text(&v, "merge_commit_sha")
             .or_else(|| opt_text(&v, "squash_commit_sha")),
         diff_refs,
-        additions: None,
-        deletions: None,
-        changed_files: crate::json::number(&v, "changes_count"),
     })
-}
-
-fn note(v: &Value) -> Comment {
-    Comment {
-        id: text(v, "id"),
-        author: text(v, "author.username"),
-        body: text(v, "body"),
-        created_at: text(v, "created_at"),
-        url: String::new(),
-    }
-}
-
-/// Threads and conversation from `…/discussions`; `head_sha` (the merge
-/// request's current head) marks threads on older versions outdated
-pub fn from_discussions(discussions: &[Value], head_sha: Option<&str>) -> Discussion {
-    let mut result = Discussion::default();
-    for d in discussions {
-        let notes = array(d, "notes");
-        let Some(first) = notes.first() else {
-            continue;
-        };
-        let position = at(first, "position").filter(|p| p.is_object());
-        if let Some(position) = position {
-            let new_line = number(position, "new_line").map(|n| n as u32);
-            let old_line = number(position, "old_line").map(|n| n as u32);
-            let (side, line) = match (new_line, old_line) {
-                (Some(line), _) => (Side::New, Some(line)),
-                (None, Some(line)) => (Side::Old, Some(line)),
-                (None, None) => (Side::New, None),
-            };
-            let new_path = text(position, "new_path");
-            let old_path = text(position, "old_path");
-            let path = if new_path.is_empty() {
-                old_path.clone()
-            } else {
-                new_path.clone()
-            };
-            let outdated = match (head_sha, opt_text(position, "head_sha")) {
-                (Some(head), Some(at_comment)) => !head.is_empty() && head != at_comment,
-                _ => false,
-            };
-            result.threads.push(ReviewThread {
-                id: text(d, "id"),
-                path,
-                original_path: (!old_path.is_empty() && old_path != new_path).then_some(old_path),
-                side,
-                line: if outdated { None } else { line },
-                original_line: line,
-                outdated,
-                resolved: flag(first, "resolved"),
-                comments: notes
-                    .iter()
-                    .filter(|n| !flag(n, "system"))
-                    .map(note)
-                    .collect(),
-            });
-            continue;
-        }
-        for n in notes {
-            if flag(n, "system") {
-                // The approvals are only system notes
-                if text(n, "body").starts_with("approved this merge request") {
-                    result.conversation.push(ConversationItem {
-                        review: Some(ReviewState::Approved),
-                        comment: Comment {
-                            body: String::new(),
-                            ..note(n)
-                        },
-                    });
-                }
-                continue;
-            }
-            result.conversation.push(ConversationItem {
-                review: None,
-                comment: note(n),
-            });
-        }
-    }
-    result
-        .conversation
-        .sort_by(|a, b| a.comment.created_at.cmp(&b.comment.created_at));
-    result
-}
-
-pub fn discussion(
-    runner: &dyn Runner,
-    remote: &ForgeRemote,
-    details: &PullRequestDetails,
-    cancel: &CancelToken,
-) -> Result<Discussion> {
-    let mut all = Vec::new();
-    for page in 1..=MAX_PAGES {
-        let path = format!(
-            "{}/merge_requests/{}/discussions?per_page={PAGE}&page={page}",
-            project(remote),
-            details.pr.number
-        );
-        let items = parse_pages("glab", &get(runner, remote, &path, cancel)?)?;
-        let count = items.len();
-        all.extend(items);
-        if count < PAGE {
-            break;
-        }
-    }
-    let head = details.diff_refs.as_ref().map(|d| d.head_sha.as_str());
-    Ok(from_discussions(&all, head))
 }
 
 /// The JSON body of a new discussion on a line
@@ -374,26 +260,6 @@ fn partial(err: Error, posted: usize, total: usize) -> Error {
     }
 }
 
-pub fn reply(
-    runner: &dyn Runner,
-    remote: &ForgeRemote,
-    details: &PullRequestDetails,
-    thread: &ReviewThread,
-    body: &str,
-    cancel: &CancelToken,
-) -> Result<()> {
-    if body.trim().is_empty() {
-        return Err(Error::Invalid("The reply is empty.".into()));
-    }
-    let path = format!(
-        "{}/merge_requests/{}/discussions/{}/notes",
-        project(remote),
-        details.pr.number,
-        thread.id
-    );
-    post(runner, remote, &path, &json!({ "body": body }), cancel)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -440,37 +306,7 @@ mod tests {
         assert_eq!(d.base_sha.as_deref(), Some("b"));
         assert_eq!(d.pr.head_sha, "h");
         assert_eq!(d.merge_commit.as_deref(), Some("m"));
-        assert_eq!(d.checks.as_deref(), Some("Pipeline: success"));
         assert_eq!(d.pr.state, PrState::Merged);
-    }
-
-    #[test]
-    fn discussions_become_threads_and_conversation() {
-        let discussions: Vec<Value> = serde_json::from_str(
-            r#"[{"id":"d1","notes":[{"id":1,"body":"Why?","author":{"username":"a"},"created_at":"2026-01-02",
-                  "position":{"new_path":"x.rs","old_path":"x.rs","new_line":4,"old_line":null,"head_sha":"h"}},
-                  {"id":2,"body":"Because","author":{"username":"b"}}]},
-                {"id":"d2","notes":[{"id":3,"body":"old","position":{"new_path":"y.rs","old_path":"w.rs","old_line":9,"head_sha":"old"}}]},
-                {"id":"d3","notes":[{"id":4,"body":"LGTM","author":{"username":"c"},"created_at":"2026-01-03"}]},
-                {"id":"d4","notes":[{"id":5,"body":"approved this merge request","system":true,"author":{"username":"d"},"created_at":"2026-01-01"}]},
-                {"id":"d5","notes":[{"id":6,"body":"added 1 commit","system":true}]}]"#,
-        )
-        .unwrap();
-        let d = from_discussions(&discussions, Some("h"));
-        assert_eq!(d.threads.len(), 2);
-        assert_eq!(d.threads[0].id, "d1");
-        assert_eq!(d.threads[0].comments.len(), 2);
-        assert_eq!((d.threads[0].side, d.threads[0].line), (Side::New, Some(4)));
-        assert!(d.threads[1].outdated);
-        assert_eq!(d.threads[1].side, Side::Old);
-        assert_eq!(d.threads[1].original_path.as_deref(), Some("w.rs"));
-        assert!(d.threads[1].is_on("w.rs"));
-        let items: Vec<(Option<ReviewState>, &str)> = d
-            .conversation
-            .iter()
-            .map(|c| (c.review, c.comment.author.as_str()))
-            .collect();
-        assert_eq!(items, [(Some(ReviewState::Approved), "d"), (None, "c")]);
     }
 
     fn mr() -> PullRequestDetails {
@@ -531,34 +367,5 @@ mod tests {
         };
         assert!(submit_review(&runner, &remote(), &mr(), &review, &CancelToken::new()).is_err());
         assert!(runner.calls().is_empty());
-    }
-
-    #[test]
-    fn replies_are_notes_of_the_discussion() {
-        let runner = ScriptedRunner::new().when("POST", "{}");
-        let thread = ReviewThread {
-            id: "d1".into(),
-            path: "x.rs".into(),
-            original_path: None,
-            side: Side::New,
-            line: Some(4),
-            original_line: Some(4),
-            outdated: false,
-            resolved: false,
-            comments: Vec::new(),
-        };
-        reply(
-            &runner,
-            &remote(),
-            &mr(),
-            &thread,
-            "Fixed",
-            &CancelToken::new(),
-        )
-        .unwrap();
-        assert_eq!(
-            runner.calls()[0].args[7],
-            "projects/GNOME%2Fmeld/merge_requests/5/discussions/d1/notes"
-        );
     }
 }

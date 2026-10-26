@@ -6,7 +6,6 @@
 //! `…/base`. The user's branches and remote-tracking branches are never
 //! touched. The comparison's base is where the pull request branched off.
 
-use meld_ailens::git::RunOptions;
 use meld_ailens::{CancelToken, GitRepository};
 
 use crate::error::{Error, Result};
@@ -218,33 +217,6 @@ fn base_commit(
     })
 }
 
-/// Deletes the refs Meld keeps for a pull request
-pub fn delete_refs(
-    repo: &GitRepository,
-    remote: &str,
-    number: u64,
-    cancel: &CancelToken,
-) -> Result<()> {
-    let prefix = format!("{REF_PREFIX}{remote}/{number}/");
-    let out = repo.run(&["for-each-ref", "--format=%(refname)", &prefix], cancel)?;
-    let input: String = String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter(|l| l.starts_with(&prefix))
-        .map(|l| format!("delete {l}\n"))
-        .collect();
-    if !input.is_empty() {
-        repo.run_with(
-            &["update-ref", "--stdin"],
-            RunOptions {
-                input: Some(input.as_bytes()),
-                ..Default::default()
-            },
-            cancel,
-        )?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -353,8 +325,6 @@ mod tests {
             refs,
             "refs/meld/pr/github/7/base\nrefs/meld/pr/github/7/head"
         );
-        delete_refs(&repo, "github", 7, &CancelToken::new()).unwrap();
-        assert_eq!(git(Path::new(&local), &["for-each-ref"]), "");
     }
 
     #[test]

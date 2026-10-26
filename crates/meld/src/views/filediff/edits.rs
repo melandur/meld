@@ -191,12 +191,6 @@ pub fn char_column(line: &str, byte: usize) -> usize {
     line.char_indices().take_while(|(i, _)| *i < byte).count()
 }
 
-/// Byte offset of character column `col` in `line`.
-#[cfg(test)]
-pub fn byte_offset(line: &str, col: usize) -> usize {
-    line.char_indices().nth(col).map_or(line.len(), |(i, _)| i)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -400,7 +394,5 @@ mod tests {
     #[test]
     fn columns() {
         assert_eq!(char_column("héllo", 3), 2);
-        assert_eq!(byte_offset("héllo", 2), 3);
-        assert_eq!(byte_offset("hé", 9), 3);
     }
 }

@@ -188,8 +188,6 @@ fn writes_build_and_index_the_same_way_every_time() {
         build.path,
         repo.join("agent").join(format!("{b}_{t}_build.md"))
     );
-    assert_eq!(build.index_path, repo.join("agent").join("index.md"));
-    assert_eq!(build.narrative, narrative());
 
     let text = read(&build.path);
     let contains = |needle: &str| assert!(text.contains(needle), "missing {needle:?}");
@@ -214,7 +212,7 @@ fn writes_build_and_index_the_same_way_every_time() {
     contains("### pnpm-lock.yaml · A · +1 \u{2212}0\n\n- Left out");
     contains("### secrets/key.txt · M · +1 \u{2212}1\n\n- Left out");
 
-    let index = read(&build.index_path);
+    let index = read(&repo.join("agent").join("index.md"));
     assert!(index.contains(&format!(
         "| [{b}_{t}]({b}_{t}_build.md) | {b} → main | 2026-10-08 | claude-opus-5-5 | Renames the module |"
     )));
@@ -256,8 +254,8 @@ fn index_lists_every_build_and_tolerates_junk() {
     std::fs::create_dir(folder.join("dir_build.md")).unwrap();
     std::fs::write(folder.join("index.md"), "stale").unwrap();
 
-    let build = write_full(&repo, "docs/agent", &make_facts(), &narrative(), created()).unwrap();
-    let index = read(&build.index_path);
+    write_full(&repo, "docs/agent", &make_facts(), &narrative(), created()).unwrap();
+    let index = read(&folder.join("index.md"));
     assert_eq!(index, render_index(&read_build_headers(&folder).unwrap()));
     let rows: Vec<&str> = index.split('\n').collect();
     let rows = &rows[7..rows.len() - 1];

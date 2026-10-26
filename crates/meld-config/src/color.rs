@@ -21,6 +21,7 @@ pub struct Rgba {
 
 impl Rgba {
     pub const TRANSPARENT: Rgba = Rgba::new(0.0, 0.0, 0.0, 0.0);
+    #[cfg(test)]
     pub const BLACK: Rgba = Rgba::new(0.0, 0.0, 0.0, 1.0);
     pub const WHITE: Rgba = Rgba::new(1.0, 1.0, 1.0, 1.0);
 
@@ -71,6 +72,7 @@ impl Rgba {
     }
 
     /// Relative luminance (Rec. 709 weights) of the colour channels.
+    #[cfg(test)]
     pub fn luminance(self) -> f32 {
         0.2126 * self.r + 0.7152 * self.g + 0.0722 * self.b
     }

@@ -151,7 +151,6 @@ fn empty_tree_and_git_dir() {
         "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
     );
     assert_eq!(repo.git_dir(None, &c()).unwrap(), f.path.join(".git"));
-    assert!(!repo.is_shallow(&c()).unwrap());
 }
 
 // -- discovery and errors --
@@ -223,7 +222,6 @@ fn git_missing_is_a_clear_error() {
     let repo = GitRepository::new(&f.path, &options);
 
     let err = repo.head(None, &c()).unwrap_err();
-    assert!(err.is_git_not_found());
     assert_message(err, "Git wasn't found at");
     let err = GitRepository::discover(&f.path, &options, &c()).unwrap_err();
     assert_message(err, "Git wasn't found at");
@@ -236,7 +234,6 @@ fn a_missing_folder_is_not_reported_as_missing_git() {
 
     let err = repo.head(None, &c()).unwrap_err();
     assert!(matches!(err, Error::Git { .. }));
-    assert!(!err.is_git_not_found());
     assert_message(err, "doesn't exist");
 }
 
@@ -479,15 +476,7 @@ fn worktrees() {
     // The main worktree first, the others in git's order
     let described: Vec<_> = worktrees
         .iter()
-        .map(|w| {
-            (
-                w.path.clone(),
-                w.head.clone(),
-                w.branch.clone(),
-                w.detached,
-                w.main,
-            )
-        })
+        .map(|w| (w.path.clone(), w.head.clone(), w.branch.clone(), w.main))
         .collect();
     assert_eq!(
         described,
@@ -496,21 +485,18 @@ fn worktrees() {
                 f.path.clone(),
                 Some(f.sha("main")),
                 Some("main".to_string()),
-                false,
                 true
             ),
             (
                 std::fs::canonicalize(tmp.join("detached")).unwrap(),
                 Some(f.sha("base")),
                 None,
-                true,
                 false
             ),
             (
                 other,
                 Some(f.sha("feature")),
                 Some("other".to_string()),
-                false,
                 false
             ),
         ]
@@ -722,7 +708,7 @@ fn writes_notes_and_reads_them_back_only_from_the_requested_ref() {
         .unwrap();
     f.git(&["notes", "add", "-m", "default ref", &main]);
 
-    let read = |sha: &str, notes_ref: &str| repo.read_note(sha, notes_ref, &c()).unwrap();
+    let read = |sha: &str, notes_ref: &str| repo.commit(sha, Some(notes_ref), &c()).unwrap().note;
     assert_eq!(read(&feature, "ai-lens").as_deref(), Some("Why: replaced"));
     assert_eq!(
         read(&feature, "refs/notes/ai-lens").as_deref(),
@@ -780,11 +766,9 @@ fn notes_keep_unicode() {
     repo.write_note(&main, "Warum: ü → 日本", "other", &c())
         .unwrap();
 
-    assert_eq!(
-        repo.read_note(&main, "other", &c()).unwrap().as_deref(),
-        Some("Warum: ü → 日本")
-    );
-    assert_eq!(repo.read_note(&main, "ai-lens", &c()).unwrap(), None);
+    let read = |notes_ref: &str| repo.commit(&main, Some(notes_ref), &c()).unwrap().note;
+    assert_eq!(read("other").as_deref(), Some("Warum: ü → 日本"));
+    assert_eq!(read("ai-lens"), None);
 }
 
 // -- patch IDs --

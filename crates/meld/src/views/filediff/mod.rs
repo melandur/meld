@@ -84,7 +84,6 @@ pub struct Options {
 }
 
 /// A file for an embedded comparison.
-#[allow(dead_code)] // used by views embedding a comparison
 #[derive(Debug, Clone)]
 pub struct EmbeddedFile {
     pub path: PathBuf,
@@ -93,12 +92,10 @@ pub struct EmbeddedFile {
 }
 
 /// Vertical geometry of a pane's text area.
-#[allow(dead_code)] // used by views embedding a comparison
 #[derive(Debug, Clone, Copy)]
 pub struct PaneGeometry<'a> {
     pub scroll_y: f32,
     pub line_height: f32,
-    pub viewport_height: f32,
     pub line_count: usize,
     /// How far below [`FileDiff::header_height`] the pane's text starts
     /// (a message area above this pane only).
@@ -107,7 +104,6 @@ pub struct PaneGeometry<'a> {
     pub wrap: Option<&'a WrapLayout>,
 }
 
-#[allow(dead_code)] // used by views embedding a comparison
 impl PaneGeometry<'_> {
     /// Top of 0-based `line` (clamped to the end of the text) relative to
     /// [`FileDiff::header_height`].
@@ -694,7 +690,6 @@ impl FileDiff {
     }
 
     /// An empty two-pane comparison for embedding in another view.
-    #[allow(dead_code)] // embedding API
     pub fn embedded(shared: &mut Shared) -> Self {
         let mut diff = Self::with_panes(2, shared);
         diff.embedded = true;
@@ -702,7 +697,6 @@ impl FileDiff {
     }
 
     /// Loads files into an embedded comparison and compares them.
-    #[allow(dead_code)] // embedding API
     pub fn set_files(&mut self, files: Vec<EmbeddedFile>, shared: &mut Shared) -> Task<Message> {
         let n = files.len().clamp(1, 3);
         if n != self.panes.len() {
@@ -723,13 +717,11 @@ impl FileDiff {
     }
 
     /// The vertical geometry of `pane`.
-    #[allow(dead_code)] // embedding API
     pub fn pane_geometry(&self, pane: usize) -> Option<PaneGeometry<'_>> {
         let p = self.panes.get(pane)?;
         Some(PaneGeometry {
             scroll_y: p.scroll.y,
             line_height: self.metrics.line_height,
-            viewport_height: p.viewport.height,
             line_count: p.buffer.display_line_count(),
             top: self.banner_height(pane),
             wrap: p.wrap.is_wrapping().then_some(&p.wrap),
@@ -737,7 +729,6 @@ impl FileDiff {
     }
 
     /// The pane and 0-based line the cursor is on, once a pane has one.
-    #[allow(dead_code)] // embedding API
     pub fn cursor_line(&self) -> Option<(usize, usize)> {
         Some((self.cursor.pane?, self.cursor.line?))
     }
@@ -770,7 +761,6 @@ impl FileDiff {
     }
 
     /// Scrolls `pane` so that `line` is centred, syncing the other panes.
-    #[allow(dead_code)] // embedding API
     pub fn scroll_to_line(&mut self, pane: usize, line: usize) -> Task<Message> {
         if pane < self.panes.len() {
             self.center_line(pane, line);
@@ -782,7 +772,6 @@ impl FileDiff {
 
     /// The first line (in pane 1, or pane 0 of a single pane) of the
     /// first change.
-    #[allow(dead_code)] // embedding API
     pub fn first_change(&self) -> Option<usize> {
         let cmp = self.cmp.as_ref()?;
         let pane = if self.panes.len() > 1 { 1 } else { 0 };
@@ -813,14 +802,12 @@ impl FileDiff {
     }
 
     /// How far below the top of [`FileDiff::view`] the panes' text starts.
-    #[allow(dead_code)] // embedding API
     pub fn header_height(&self) -> f32 {
         view::HEADER_ROW_HEIGHT + 1.0
     }
 
     /// Highlights lines of the two panes on top of the chunks (the
     /// hovered Why card of Git Compare); empty ranges clear it.
-    #[allow(dead_code)] // embedding API
     pub fn set_hover(&mut self, lines: [Vec<std::ops::Range<usize>>; 2]) {
         for (pane, lines) in self.panes.iter_mut().zip(lines) {
             pane.hover_lines = lines;

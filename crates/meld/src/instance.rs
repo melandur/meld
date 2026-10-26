@@ -130,7 +130,7 @@ fn serve(tx: tokio::sync::mpsc::UnboundedSender<Request>) {
 fn read_request(stream: &UnixStream) -> Option<(PathBuf, Vec<String>)> {
     let mut parts = Vec::new();
     let mut current = Vec::new();
-    for byte in stream.bytes() {
+    for byte in BufReader::new(stream).bytes() {
         let byte = byte.ok()?;
         if byte != 0 {
             current.push(byte);

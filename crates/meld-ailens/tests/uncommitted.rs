@@ -66,7 +66,6 @@ fn explained() -> HunkExplanation {
         what: "Shouts nine.".into(),
         why: "Louder.".into(),
         justification: None,
-        model: "claude-sonnet-5-5".into(),
         guide: Default::default(),
     }
 }
@@ -145,7 +144,6 @@ fn place_puts_explanations_where_the_hunks_are_now() {
             what: "Shouts nine.".into(),
             why: "Louder.".into(),
             justification: None,
-            model: "claude-sonnet-5-5".into(),
             guide: Default::default(),
         }]
     );
@@ -212,14 +210,13 @@ fn remember_keeps_a_models_answers_by_hunk_position() {
             guide: Default::default(),
         },
     ];
-    assert_eq!(cache.remember(Staged, &diff(), &changes, "claude-x"), 1);
+    assert_eq!(cache.remember(Staged, &diff(), &changes), 1);
     assert_eq!(
         cache.get(Staged, &diff(), &bottom()),
         Some(HunkExplanation {
             what: "Shouts nine.".into(),
             why: "Louder.".into(),
             justification: None,
-            model: "claude-x".into(),
             guide: current(),
         })
     );
@@ -235,7 +232,6 @@ fn remember_keeps_a_models_answers_by_hunk_position() {
             justification: None,
             guide: current(),
         }],
-        "claude-x",
     );
     assert!(cache.is_explained(Staged, &diff()));
     assert!(!cache.is_explained(Unstaged, &diff()));
@@ -262,11 +258,11 @@ fn explanations_from_before_steps_and_risks_are_explained_again() {
             guide: guide.clone(),
         })
     };
-    cache.remember(Staged, &diff(), &both(Default::default()), "claude-x");
+    cache.remember(Staged, &diff(), &both(Default::default()));
     assert!(!cache.is_explained(Staged, &diff()));
     // Still shown until then
     assert_eq!(cache.place(Staged, &[diff()]).len(), 2);
-    cache.remember(Staged, &diff(), &both(current()), "claude-x");
+    cache.remember(Staged, &diff(), &both(current()));
     assert!(cache.is_explained(Staged, &diff()));
 }
 
@@ -277,7 +273,6 @@ fn setting_again_replaces_and_refreshes() {
         what: "1".into(),
         why: "1".into(),
         justification: None,
-        model: "m".into(),
         guide: Default::default(),
     };
     cache.set(Staged, &diff(), &top(), first.clone());
@@ -377,7 +372,7 @@ fn justifications_are_kept_and_placed() {
         justification: Some("Nothing else is loud enough.".into()),
         guide: Default::default(),
     }];
-    assert_eq!(cache.remember(Staged, &diff(), &changes, "claude-x"), 1);
+    assert_eq!(cache.remember(Staged, &diff(), &changes), 1);
     assert_eq!(
         cache
             .get(Staged, &diff(), &bottom())
@@ -392,7 +387,6 @@ fn justifications_are_kept_and_placed() {
         placed[0].justification.as_deref(),
         Some("Nothing else is loud enough.")
     );
-    assert_eq!(placed[0].as_change(), changes[0]);
 }
 
 #[test]
@@ -415,12 +409,9 @@ fn changes_git_joined_into_one_hunk_are_explained_apart() {
     };
 
     let cache = UncommittedExplanations::default();
-    assert_eq!(
-        cache.remember(Unstaged, &diff, &[change(1, 1, "first")], "claude-x"),
-        1
-    );
+    assert_eq!(cache.remember(Unstaged, &diff, &[change(1, 1, "first")]), 1);
     assert!(!cache.is_explained(Unstaged, &diff));
-    cache.remember(Unstaged, &diff, &[change(5, 5, "second")], "claude-x");
+    cache.remember(Unstaged, &diff, &[change(5, 5, "second")]);
     assert!(cache.is_explained(Unstaged, &diff));
 
     let placed = cache.place(Unstaged, std::slice::from_ref(&diff));

@@ -2538,10 +2538,7 @@ impl DirDiff {
             Kind::Error { pane: p, message } if *p == pane => (message.clone(), Some(ERROR_GLYPH)),
             Kind::Error { .. } => (String::new(), None),
         };
-        let (fg, italic, bold, strike) = match style {
-            Some(s) => s,
-            None => (None, false, false, false),
-        };
+        let (fg, italic, bold, strike) = style.unwrap_or_default();
         let fg = if node.scanning { None } else { fg };
         let italic = italic || node.scanning;
         let icon_color = match (&node.kind, state) {

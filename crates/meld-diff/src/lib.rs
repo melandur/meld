@@ -4,8 +4,8 @@
 //! `meld/matchers/merge.py`, the cache of `meld/matchers/helpers.py`,
 //! `meld/undo.py`, the model of `meld/syncpoints.py`, the patch output of
 //! `meld/patchdialog.py` (with the parts of Python's `difflib` it relies on),
-//! `misc.apply_text_filters`/`merge_intervals`, `BufferLines` and the buffer
-//! logic of `MeldBuffer`, and the buffer/differ glue of `meld/filediff.py`
+//! `misc.apply_text_filters`/`merge_intervals`, the buffer logic of
+//! `MeldBuffer`, and the buffer/differ glue of `meld/filediff.py`
 //! (edits, chunk actions, merge actions, inline highlighting).
 //!
 //! Conventions: lines are `String`s without terminators; line numbers are
@@ -21,13 +21,13 @@
 //!   `difference_opcodes`), and the shortcuts [`myers::opcodes`],
 //!   [`myers::difference_opcodes`], [`inline_opcodes`] (char offsets).
 //! - [`Differ`]: `set_sequences(&[lines])`, `set_sequences_cancellable`,
-//!   `change_sequence(pane, start_line, size_change, &texts)`, `clear`, all
+//!   `change_sequence(pane, start_line, size_change, &texts)`, all
 //!   returning [`DiffsChanged`] (replaces the `diffs-changed` signal);
 //!   queries `all_changes` (`&[MergedChunk]`), `locate_chunk(pane, line)`
 //!   ([`ChunkLocation`] current/prev/next), `get_chunk(index, from, to)`,
-//!   `get_chunk_starts`, `has_chunk`, `pair_changes`, `single_changes`,
-//!   `paired_all_single_changes`, `conflicts`, `has_mergeable_changes`,
-//!   `sequences_identical`, `diff_count`, `unresolved`/`unresolved_count`;
+//!   `get_chunk_starts`, `pair_changes`, `single_changes`, `conflicts`,
+//!   `has_mergeable_changes`, `sequences_identical`, `diff_count`,
+//!   `unresolved`;
 //!   settings `ignore_blanks`, `auto_merge`, `set_syncpoints`.
 //!   [`consume_blank_lines`], [`merged_chunk_order`].
 //! - Merging ([`merge`]): [`merge_3_files`], [`merge_2_files`],
@@ -37,25 +37,24 @@
 //!   [`INLINE_LIMIT`].
 //! - Buffers ([`buffer`]): [`TextBuffer`] (GtkTextBuffer line semantics,
 //!   `insert`/`delete`/`apply` returning [`AppliedEdit`] with inverse and
-//!   [`LineChange`]), [`Position`], [`TextEdit`], [`FilteredLines`]
-//!   (`BufferLines` cache), [`splitlines`].
+//!   [`LineChange`]), [`Position`], [`TextEdit`], [`splitlines`].
 //! - Chunk actions ([`actions`]): [`ChunkAction`], [`replace_chunk`],
-//!   [`copy_chunk`], [`delete_chunk`] (and `*_with` variants reporting each
-//!   edit).
-//! - [`FileComparison`]: buffers + filters + differ kept in sync: `new`,
-//!   `new_auto_merge`, `edit`, `set_text`, `chunk_action`,
-//!   `merge_all_non_conflicting`, `pull_all_non_conflicting`, `rediff`,
-//!   `set_filters`, `set_ignore_blanks`, `set_syncpoints`,
+//!   [`delete_chunk`] (and `*_with` variants reporting each edit, including
+//!   `copy_chunk_with`).
+//! - [`FileComparison`]: buffers + filters + differ kept in sync:
+//!   `new_cancellable`, `new_auto_merge`, `edit`, `set_text`,
+//!   `chunk_action`, `merge_all_non_conflicting`,
+//!   `pull_all_non_conflicting`, `rediff_cancellable`,
 //!   `inline_highlights`, returning [`EditOutcome`]s.
 //! - Text filters ([`filters`]): [`apply_text_filters`], [`filter_line`],
-//!   [`filter_lines`], [`merge_intervals`].
+//!   [`merge_intervals`].
 //! - Patches: [`make_patch`] (patch dialog output), [`patch_lines`],
 //!   [`patch_names`], and [`difflib`]'s [`SequenceMatcher`],
 //!   [`unified_diff`]/[`unified_diff_lines`] (byte-identical to Python).
 //! - [`UndoSequence<A: UndoAction>`](UndoSequence): `add_action`,
-//!   `begin_group`/`end_group`/`abort_group`, `undo`/`redo` (return the
-//!   actions to revert/re-apply), `checkpoint`, `checkpointed`,
-//!   `take_events` ([`UndoEvent`]).
+//!   `begin_group`/`end_group`, `undo`/`redo` (return the actions to
+//!   revert/re-apply), `checkpoint`, `checkpointed`, `take_events`
+//!   ([`UndoEvent`]).
 //! - [`Syncpoints`]: `add`, `move_unmatched`, `remove`, `clear`,
 //!   `valid_points`, `action` ([`SyncpointAction`]), `pane_state`
 //!   ([`PaneState`]), `adjust_for_edit`.
@@ -76,17 +75,15 @@ pub mod session;
 pub mod syncpoints;
 pub mod undo;
 
-pub use actions::{ChunkAction, copy_chunk, delete_chunk, replace_chunk};
-pub use buffer::{
-    AppliedEdit, FilteredLines, LineChange, Position, TextBuffer, TextEdit, splitlines,
-};
+pub use actions::{ChunkAction, delete_chunk, replace_chunk};
+pub use buffer::{AppliedEdit, LineChange, Position, TextBuffer, TextEdit, splitlines};
 pub use chunk::{Chunk, MatchingBlock, Tag, opcodes_from_blocks};
 pub use differ::{
     ChunkLocation, Differ, DiffsChanged, MergedChunk, consume_blank_lines, merged_chunk_order,
 };
 pub use difflib::{SequenceMatcher, UnifiedDiffOptions, unified_diff, unified_diff_lines};
 pub use error::DiffError;
-pub use filters::{FilteredText, apply_text_filters, filter_line, filter_lines, merge_intervals};
+pub use filters::{FilteredText, apply_text_filters, filter_line, merge_intervals};
 pub use inline::{
     INLINE_LIMIT, InlineCache, exceeds_inline_limit, highlight_ranges, inline_highlights,
 };
