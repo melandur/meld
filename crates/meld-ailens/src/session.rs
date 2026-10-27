@@ -1,4 +1,4 @@
-//! One open comparison: its files, their Why cards, explaining and builds
+//! One open comparison: its files, their Why cards and explaining them
 //! (port of `session.py`, plus the file tree of `gitcompare.py`)
 //!
 //! Every method here blocks on git or Claude Code, so the UI calls them on
@@ -10,15 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use crate::agent::detect_agent;
-use crate::agent_setup::{AgentSetupOptions, plan_agent_setup, write_agent_setup};
 use crate::attribution::ComparisonAttributor;
-use crate::build_facts::{
-    BuildAgent, BuildChange, BuildCommit, BuildFacts, BuildFile, BuildFileEntry, BuildRevision,
-    BuildStats, merge_ranges,
-};
-use crate::build_index::resolve_build_folder;
-use crate::build_narrative::write_narrative;
 use crate::cards::{Card, CardKind, CardStep, ExplainAction};
 use crate::claude::RunClaude;
 use crate::comparison::{changed_files_with_stats, resolve_comparison};
@@ -26,18 +18,17 @@ use crate::error::{Error, Result};
 use crate::explanation::{
     MessageFormat, ParsedNote, compose_note, explain_commit, find_change_explanations, parse_note,
 };
-use crate::generate_build::write_build;
 use crate::git::{GitOptions, GitRepository, LogQuery, realpath};
-use crate::ignore::{create_ignore_rules, is_ignored};
+use crate::ignore::{IgnoreRules, create_ignore_rules, is_ignored};
 use crate::infer::{
     InferOptions, compose_inferred_note, infer_commit_changes, infer_explanation,
     infer_uncommitted_explanation,
 };
 use crate::models::{
     ChangeExplanation, ChangeGroup, ChangeGuide, ChangeStep, CommitHunk, Comparison,
-    ComparisonRelation, ExplanationSource, FileAttribution, GitCommit, GitDiffHunk, GitFileChange,
-    GitFileDiff, GitFileStatus, LayerDiffsUsed, LineRange, Revision, RevisionKind, Side,
-    UncommittedLayer,
+    ComparisonRelation, DiffLineKind, FileAttribution, GitCommit, GitDiffHunk, GitFileChange,
+    GitFileDiff, GitFileStatus, LayerDiffsUsed, LineOrigin, LineRange, Revision, RevisionKind,
+    Side, UncommittedLayer,
 };
 use crate::picker::{
     COMMIT_PAGE_SIZE, PickerEntry, PickerSide, PickerSources, build_entries, short_sha,
@@ -51,10 +42,9 @@ pub const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
 /// How many bytes are checked for NUL to call a file binary, as git does
 pub const BINARY_SNIFF_BYTES: usize = 8000;
 
-/// Reports what a long operation is doing, e.g. "Explaining commit …"
-pub type Progress<'a> = &'a dyn Fn(&str);
-
-fn no_progress(_: &str) {}
+/// Reports how far explaining everything is: what it is doing, and the
+/// share of the work done, from 0 to 1
+pub type ExplainProgress<'a> = &'a dyn Fn(&str, f32);
 
 /// The settings a session reads; the app fills it from its preferences
 #[derive(Clone)]
@@ -65,17 +55,9 @@ pub struct SessionConfig {
     pub infer_enabled: bool,
     /// Model that explains commits (`ailens-infer-model`)
     pub infer_model: String,
-    /// Model that writes builds (`ailens-build-model`)
-    pub build_model: String,
-    /// Build folder relative to the repository (`ailens-build-folder`)
-    pub build_folder: String,
     /// Notes ref name (`ailens-notes-ref`)
     pub notes_ref: String,
     pub message_format: MessageFormat,
-    /// Extra agent author regex (`ailens-author-pattern`); None when empty
-    pub author_pattern: Option<String>,
-    /// Written as `generator:` into builds
-    pub generator: String,
     /// Replaces the Claude Code call, e.g. in tests
     pub run_claude: Option<RunClaude>,
 }
@@ -86,12 +68,8 @@ impl Default for SessionConfig {
             claude_path: "claude".into(),
             infer_enabled: true,
             infer_model: "claude-opus-5-5".into(),
-            build_model: "claude-opus-5-5".into(),
-            build_folder: "agent".into(),
             notes_ref: "ai-lens".into(),
             message_format: MessageFormat::default(),
-            author_pattern: None,
-            generator: "meld".into(),
             run_claude: None,
         }
     }
@@ -103,12 +81,8 @@ impl std::fmt::Debug for SessionConfig {
             .field("claude_path", &self.claude_path)
             .field("infer_enabled", &self.infer_enabled)
             .field("infer_model", &self.infer_model)
-            .field("build_model", &self.build_model)
-            .field("build_folder", &self.build_folder)
             .field("notes_ref", &self.notes_ref)
             .field("message_format", &self.message_format)
-            .field("author_pattern", &self.author_pattern)
-            .field("generator", &self.generator)
             .field("run_claude", &self.run_claude.is_some())
             .finish()
     }
@@ -210,6 +184,12 @@ pub struct RepositoryInfo {
     pub uncommitted: UncommittedExplanations,
     /// HEAD of each worktree (None: this one), as the pickers last saw it
     worktree_heads: Mutex<HashMap<Option<PathBuf>, String>>,
+    /// One lock per commit whose note is being explained: its note is
+    /// read, added to and written by one explanation at a time
+    note_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// Notes found to explain every change block of their commit, by
+    /// commit: looked at again once the note changes
+    complete_notes: Mutex<HashMap<String, Option<String>>>,
 }
 
 impl RepositoryInfo {
@@ -219,7 +199,18 @@ impl RepositoryInfo {
             repo,
             uncommitted: UncommittedExplanations::default(),
             worktree_heads: Mutex::new(HashMap::new()),
+            note_locks: Mutex::new(HashMap::new()),
+            complete_notes: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// The lock to hold while the note of `sha` is read, explained and
+    /// written
+    fn note_lock(&self, sha: &str) -> Arc<Mutex<()>> {
+        lock(&self.note_locks)
+            .entry(sha.to_string())
+            .or_default()
+            .clone()
     }
 
     /// The repository of the worktree that holds `path` (a file or folder)
@@ -247,10 +238,6 @@ impl RepositoryInfo {
     /// last saw them; for [`crate::picker::apply_pick`]
     pub fn worktree_heads(&self) -> HashMap<Option<PathBuf>, String> {
         lock(&self.worktree_heads).clone()
-    }
-
-    pub fn build_folder(&self, config: &SessionConfig) -> Result<PathBuf> {
-        resolve_build_folder(&self.root, &config.build_folder)
     }
 
     /// The text of the repository's `.ailensignore`, if any
@@ -379,33 +366,6 @@ impl RepositoryInfo {
         paths.dedup();
         paths
     }
-
-    /// Write the CLAUDE.md section and the /why skill; returns the changed
-    /// files relative to the repository
-    pub fn set_up_agents(
-        &self,
-        config: &SessionConfig,
-        cancel: &CancelToken,
-    ) -> Result<Vec<String>> {
-        let options = AgentSetupOptions {
-            build_folder: config.build_folder.clone(),
-            notes_ref: config.notes_ref.clone(),
-        };
-        let files = plan_agent_setup(&self.root, &options)?;
-        cancel.check()?;
-        write_agent_setup(&files)?;
-        Ok(files
-            .iter()
-            .filter(|file| file.changed)
-            .map(|file| {
-                file.path
-                    .strip_prefix(&self.root)
-                    .unwrap_or(&file.path)
-                    .to_string_lossy()
-                    .into_owned()
-            })
-            .collect())
-    }
 }
 
 #[derive(Default)]
@@ -419,8 +379,7 @@ struct SessionState {
 ///
 /// What the Git Compare tab drives: [`Self::files`] for the file list,
 /// [`Self::file_view`] for both versions of a file and its cards,
-/// [`Self::explain_card`] / [`Self::explain_all`] for the Explain button
-/// and [`Self::generate_build`] for Explain & Build.
+/// [`Self::explain_card`] / [`Self::explain_all`] for the Explain buttons.
 pub struct CompareSession {
     pub info: Arc<RepositoryInfo>,
     pub repo: GitRepository,
@@ -526,22 +485,6 @@ impl CompareSession {
                     !(name.len() >= 7 && name.chars().all(|ch| "0123456789abcdef".contains(ch)))
                 })
         })
-    }
-
-    pub fn can_build(&self) -> bool {
-        self.build_unavailable_reason().is_empty()
-    }
-
-    /// Why Explain & Build is off; empty when it is available
-    pub fn build_unavailable_reason(&self) -> String {
-        let c = &self.comparison;
-        if c.uncommitted() || c.base.uncommitted() {
-            return "Builds cover commits only, not staged or unstaged changes".into();
-        }
-        if c.relation == ComparisonRelation::Same {
-            return "Base and target are the same commit".into();
-        }
-        String::new()
     }
 
     // -- files --
@@ -731,7 +674,8 @@ impl CompareSession {
         Ok(commit)
     }
 
-    fn refresh_commit(&self, sha: &str, cancel: &CancelToken) -> Result<()> {
+    /// The commit as git has it now, its note included, cached again
+    fn refresh_commit(&self, sha: &str, cancel: &CancelToken) -> Result<GitCommit> {
         let commit = self
             .repo
             .commit(sha, Some(&self.config.notes_ref), cancel)?;
@@ -742,7 +686,7 @@ impl CompareSession {
                 *item = commit.clone();
             }
         }
-        Ok(())
+        Ok(commit)
     }
 
     // -- cards --
@@ -933,7 +877,28 @@ impl CompareSession {
         match (card.kind, &card.sha) {
             (CardKind::Commit, Some(sha)) if card.explain == Some(ExplainAction::Block) => {
                 let index = view.cards.iter().position(|c| c.key == key).unwrap_or(0);
-                self.explain_block(view, index, sha, cancel)
+                let group = view
+                    .attribution
+                    .as_ref()
+                    .and_then(|attribution| attribution.groups.get(index))
+                    .ok_or_else(|| Error::msg("That change isn’t in this file any more."))?;
+                // Only the change blocks with the card's lines
+                let files = self
+                    .repo
+                    .commit_diffs(sha, cancel)?
+                    .into_iter()
+                    .filter_map(|(change, mut diff)| {
+                        let paths = diff_paths(&diff);
+                        diff.hunks = diff
+                            .hunks
+                            .iter()
+                            .flat_map(GitDiffHunk::blocks)
+                            .filter(|block| block_has_lines(&paths, block, &group.origins))
+                            .collect();
+                        (!diff.hunks.is_empty()).then_some((change, diff))
+                    })
+                    .collect();
+                self.explain_blocks(sha, files, cancel).map(|_| ())
             }
             (CardKind::Commit, Some(sha)) => self.explain_commit(sha, cancel),
             (CardKind::Staged, _) => self
@@ -948,8 +913,21 @@ impl CompareSession {
 
     /// Have Claude Code explain a commit and its changes; saved as a note
     pub fn explain_commit(&self, sha: &str, cancel: &CancelToken) -> Result<()> {
+        self.explain_commit_once(sha, cancel).map(|_| ())
+    }
+
+    /// [`Self::explain_commit`], unless another explanation of the commit
+    /// finished while this one waited for it and left nothing to explain;
+    /// returns whether it asked Claude Code
+    fn explain_commit_once(&self, sha: &str, cancel: &CancelToken) -> Result<bool> {
         self.require_infer()?;
-        let commit = self.get_commit(sha, cancel)?;
+        let seen = self.get_commit(sha, cancel)?.note;
+        let note_lock = self.info.note_lock(sha);
+        let _writing = lock(&note_lock);
+        let commit = self.refresh_commit(sha, cancel)?;
+        if commit.note != seen && !self.commit_needs_explaining(&commit) {
+            return Ok(false);
+        }
         let files: Vec<_> = self
             .repo
             .commit_diffs(sha, cancel)?
@@ -963,50 +941,46 @@ impl CompareSession {
         cancel.check()?;
         self.repo
             .write_note(sha, &note, &self.config.notes_ref, cancel)?;
-        self.refresh_commit(sha, cancel)
+        self.refresh_commit(sha, cancel)?;
+        Ok(true)
     }
 
-    /// Have Claude Code explain the hunks of the commit `sha` that the
-    /// card of `view`'s group `index` shows, which its note doesn't explain
-    /// (left out of the prompt for its size), and add them to the note
+    /// Have Claude Code explain the change blocks of the commit `sha` in
+    /// `files` (its diffs, cut down to those blocks) that its note doesn't
+    /// explain (left out of the prompt for its size), and add them to the
+    /// note
     ///
-    /// Only those hunks are sent, with the commit's message, so no cap cuts
-    /// them. Explanations of the same hunks in the note are replaced.
-    fn explain_block(
+    /// Only those blocks are sent, with the commit's message, so no cap
+    /// cuts them. Blocks the note explains by the time it's this call's turn
+    /// to write it are left out. Returns how many hunks Claude Code
+    /// explained.
+    fn explain_blocks(
         &self,
-        view: &FileView,
-        index: usize,
         sha: &str,
+        files: Vec<(GitFileChange, GitFileDiff)>,
         cancel: &CancelToken,
-    ) -> Result<()> {
+    ) -> Result<usize> {
         self.require_infer()?;
-        let group = view
-            .attribution
-            .as_ref()
-            .and_then(|attribution| attribution.groups.get(index))
-            .ok_or_else(|| Error::msg("That change isn’t in this file any more."))?;
-        let commit = self.get_commit(sha, cancel)?;
-        let files: Vec<_> = self
-            .repo
-            .commit_diffs(sha, cancel)?
+        let note_lock = self.info.note_lock(sha);
+        let _writing = lock(&note_lock);
+        let commit = self.refresh_commit(sha, cancel)?;
+        let note = Self::note(&commit);
+        let explained_changes = note.as_ref().map_or(&[][..], |note| &note.changes[..]);
+        let files: Vec<_> = files
             .into_iter()
             .filter_map(|(change, mut diff)| {
-                // Only the change blocks with the card's lines: those
-                // explained already stay as they are
                 let paths = diff_paths(&diff);
-                diff.hunks = diff
-                    .hunks
-                    .iter()
-                    .flat_map(GitDiffHunk::blocks)
-                    .filter(|block| block_has_lines(&paths, block, &group.origins))
-                    .collect();
+                diff.hunks
+                    .retain(|block| !block_is_explained(&paths, block, explained_changes));
                 (!diff.hunks.is_empty()).then_some((change, Some(diff)))
             })
             .collect();
+        if files.is_empty() {
+            return Ok(0);
+        }
         let ignore_rules = self.info.ignore_rules();
         let options = self.infer_options(ignore_rules.as_deref());
         let inferred = infer_commit_changes(&commit, &files, &options, cancel)?;
-        let note = commit.note.as_deref().map(parse_note);
         let same = |a: &CommitHunk, b: &CommitHunk| {
             a.path == b.path && a.old_start == b.old_start && a.new_start == b.new_start
         };
@@ -1022,6 +996,7 @@ impl CompareSession {
                     .any(|new| same(&old.hunk, &new.hunk))
             })
             .collect();
+        let explained = inferred.changes.len();
         changes.extend(inferred.changes);
         changes.sort_by(|a, b| {
             (&a.hunk.path, a.hunk.new_start, a.hunk.old_start).cmp(&(
@@ -1035,7 +1010,8 @@ impl CompareSession {
         cancel.check()?;
         self.repo
             .write_note(sha, &text, &self.config.notes_ref, cancel)?;
-        self.refresh_commit(sha, cancel)
+        self.refresh_commit(sha, cancel)?;
+        Ok(explained)
     }
 
     /// Have Claude Code explain a file's staged or unstaged hunks
@@ -1087,7 +1063,9 @@ impl CompareSession {
         explanation.why.is_none() || !changes_explained || outdated
     }
 
-    /// Explain every commit and uncommitted hunk not explained yet
+    /// Explain every change of every file not explained yet: each commit
+    /// and the change blocks its note left out, then the staged, unstaged
+    /// and untracked changes
     ///
     /// Keeps going past single failures; a missing Claude Code or a cancel
     /// stops at once. Returns how many were explained, or fails naming what
@@ -1095,72 +1073,116 @@ impl CompareSession {
     pub fn explain_all(
         &self,
         cancel: &CancelToken,
-        progress: Option<Progress<'_>>,
-        commits_only: bool,
+        progress: Option<ExplainProgress<'_>>,
     ) -> Result<usize> {
         self.require_infer()?;
-        let progress = progress.unwrap_or(&no_progress);
+        let progress = progress.unwrap_or(&|_, _| {});
         let mut failures: Vec<String> = Vec::new();
         let mut done = 0;
-        let todo: Vec<GitCommit> = self
-            .range_commits(cancel)?
-            .into_iter()
-            .filter(|c| self.commit_needs_explaining(c))
-            .collect();
-        for (index, commit) in todo.iter().enumerate() {
+        // Counts what was explained, notes what failed; stops for good at a
+        // missing Claude Code or a cancel
+        let mut settle = |what: String, result: Result<usize>| match result {
+            Ok(count) => {
+                if count > 0 {
+                    done += 1;
+                }
+                Ok(())
+            }
+            Err(err) if err.is_claude_not_found() || err.is_cancelled() => Err(err),
+            Err(err) => {
+                failures.push(format!("{what}: {err}"));
+                Ok(())
+            }
+        };
+        progress("Finding what isn’t explained yet…", 0.0);
+        let commits = self.range_commits(cancel)?;
+        let c = &self.comparison;
+        let entries = if c.uncommitted() || c.base.uncommitted() {
+            self.files(cancel)?
+        } else {
+            Vec::new()
+        };
+        let rules = create_ignore_rules(self.info.ignore_rules().as_deref());
+        // Each commit and each file is a step
+        let steps = (commits.len() + entries.len()).max(1) as f32;
+        for (index, commit) in commits.iter().enumerate() {
             cancel.check()?;
-            progress(&format!(
-                "Explaining commit {} ({} of {})…",
-                short_sha(&commit.sha),
-                index + 1,
-                todo.len()
-            ));
-            match self.explain_commit(&commit.sha, cancel) {
-                Ok(()) => done += 1,
-                Err(err) if err.is_claude_not_found() || err.is_cancelled() => return Err(err),
-                Err(err) => failures.push(format!("{}: {err}", short_sha(&commit.sha))),
+            let sha = short_sha(&commit.sha);
+            let share = index as f32 / steps;
+            // As cached now: a card's Explain may have changed it
+            let commit = self.get_commit(&commit.sha, cancel)?;
+            if self.commit_needs_explaining(&commit) {
+                progress(
+                    &format!(
+                        "Explaining commit {sha} ({} of {})…",
+                        index + 1,
+                        commits.len()
+                    ),
+                    share,
+                );
+                settle(
+                    sha.to_string(),
+                    self.explain_commit_once(&commit.sha, cancel)
+                        .map(usize::from),
+                )?;
+            }
+            let starting = |path: Option<&str>| {
+                let text = match path {
+                    Some(path) => format!(
+                        "Explaining the rest of commit {sha} in {path} ({} of {})…",
+                        index + 1,
+                        commits.len()
+                    ),
+                    None => format!(
+                        "Explaining commit {sha} again, block by block ({} of {})…",
+                        index + 1,
+                        commits.len()
+                    ),
+                };
+                progress(&text, share);
+            };
+            for (what, result) in self.complete_note(&commit.sha, &rules, cancel, &starting) {
+                settle(format!("{sha} {what}").trim_end().to_string(), result)?;
             }
         }
 
-        let c = &self.comparison;
-        if !commits_only && (c.uncommitted() || c.base.uncommitted()) {
-            let entries = self.files(cancel)?;
-            for (index, entry) in entries.iter().enumerate() {
-                cancel.check()?;
-                let attribution = self.attributor.attribute(&entry.change, cancel)?;
-                for layer in UncommittedLayer::ALL {
-                    let diffs = attribution
-                        .layers
-                        .as_ref()
-                        .map_or(&[][..], |layers| layers.get(layer));
-                    if diffs
-                        .iter()
-                        .all(|diff| self.info.uncommitted.is_explained(layer, diff))
-                    {
-                        continue;
-                    }
-                    progress(&format!(
-                        "Explaining {} changes in {} ({} of {})…",
-                        layer.as_str(),
-                        entry.change.path,
-                        index + 1,
-                        entries.len()
-                    ));
-                    match self.explain_layer(&attribution, layer, cancel) {
-                        Ok(kept) => {
-                            if kept > 0 {
-                                done += 1;
-                            }
-                        }
-                        Err(Error::IgnoredFile(_) | Error::NothingToExplain(_)) => continue,
-                        Err(err) if err.is_claude_not_found() || err.is_cancelled() => {
-                            return Err(err);
-                        }
-                        Err(err) => failures.push(format!("{}: {err}", entry.change.path)),
-                    }
+        for (index, entry) in entries.iter().enumerate() {
+            cancel.check()?;
+            let path = &entry.change.path;
+            progress(
+                &format!(
+                    "Explaining {path} ({} of {} files)…",
+                    index + 1,
+                    entries.len()
+                ),
+                (commits.len() + index) as f32 / steps,
+            );
+            let attribution = match self.attributor.attribute(&entry.change, cancel) {
+                Ok(attribution) => attribution,
+                Err(err) => {
+                    settle(path.clone(), Err(err))?;
+                    continue;
                 }
+            };
+            for layer in UncommittedLayer::ALL {
+                let diffs = attribution
+                    .layers
+                    .as_ref()
+                    .map_or(&[][..], |layers| layers.get(layer));
+                if diffs
+                    .iter()
+                    .all(|diff| self.info.uncommitted.is_explained(layer, diff))
+                {
+                    continue;
+                }
+                settle(
+                    path.clone(),
+                    self.explain_layer(&attribution, layer, cancel)
+                        .or_else(skip_unexplainable),
+                )?;
             }
         }
+        progress("Explained", 1.0);
 
         if let Some(first) = failures.first() {
             return Err(Error::msg(format!(
@@ -1171,196 +1193,113 @@ impl CompareSession {
         Ok(done)
     }
 
-    // -- builds --
-
-    /// Everything the build file states as fact (a port of AI Lens'
-    /// `gatherBuildFacts`)
-    pub fn gather_build_facts(
+    /// Explain what the note of the commit `sha` leaves out: the whole
+    /// commit again when the note gives several change blocks one
+    /// explanation (it predates explaining them apart), then the change
+    /// blocks it doesn't explain, one request per file (they are sent
+    /// uncapped). `starting` is told each file first, or None for the whole
+    /// commit. Returns each request's outcome, by file (empty for the whole
+    /// commit).
+    ///
+    /// A commit without a note explaining its changes has nothing left out
+    /// (all of it is to explain). A note found complete, or after what it
+    /// left out was asked for, is remembered, so that it isn't diffed
+    /// against its commit again until it changes.
+    fn complete_note(
         &self,
+        sha: &str,
+        rules: &IgnoreRules,
         cancel: &CancelToken,
-        progress: Option<Progress<'_>>,
-    ) -> Result<BuildFacts> {
-        if !self.can_build() {
-            return Err(Error::msg(self.build_unavailable_reason()));
-        }
-        let progress = progress.unwrap_or(&no_progress);
-        let ignore_text = self.info.ignore_rules();
-        let rules = create_ignore_rules(ignore_text.as_deref());
-        let entries = self.files(cancel)?;
-        let mut files: Vec<BuildFile> = Vec::new();
-        for (index, entry) in entries.iter().enumerate() {
-            cancel.check()?;
-            progress(&format!(
-                "Reading the changes ({index}/{} files)…",
-                entries.len()
-            ));
-            let change = &entry.change;
-            let ignored = is_ignored(&rules, &change.path, change.original_path.as_deref());
-            let attribution = if ignored {
-                None
-            } else {
-                Some(self.attributor.attribute(change, cancel)?)
-            };
-            let mut file_entries: Vec<BuildFileEntry> = Vec::new();
-            let binary = attribution
+        starting: &dyn Fn(Option<&str>),
+    ) -> Vec<(String, Result<usize>)> {
+        let stops = |result: &Result<usize>| {
+            result
                 .as_ref()
-                .and_then(|a| a.diff.as_ref())
-                .is_some_and(|d| d.binary);
-            if let (Some(attribution), false) = (&attribution, binary) {
-                for card in self.build_cards(attribution, cancel)? {
-                    let changes = (!card.change_what.is_empty() || !card.change_why.is_empty())
-                        .then(|| {
-                            vec![BuildChange {
-                                what: card.change_what.clone(),
-                                why: card.change_why.clone(),
-                                justification: (!card.change_justification.is_empty())
-                                    .then(|| card.change_justification.clone()),
-                            }]
-                        });
-                    let position = file_entries
-                        .iter()
-                        .position(|e| e.sha == card.sha && e.changes == changes);
-                    let found = match position {
-                        Some(position) => &mut file_entries[position],
-                        None => {
-                            file_entries.push(BuildFileEntry {
-                                sha: card.sha.clone(),
-                                changes,
-                                ..Default::default()
-                            });
-                            file_entries.last_mut().expect("just pushed")
-                        }
-                    };
-                    let added: Vec<_> = found.added.iter().chain(&card.added).copied().collect();
-                    found.added = merge_ranges(&added);
-                    let deleted: Vec<_> =
-                        found.deleted.iter().chain(&card.deleted).copied().collect();
-                    found.deleted = merge_ranges(&deleted);
+                .is_err_and(|err| err.is_claude_not_found() || err.is_cancelled())
+        };
+        let mut outcomes = Vec::new();
+        let commit = match self.get_commit(sha, cancel) {
+            Ok(commit) => commit,
+            Err(err) => return vec![(String::new(), Err(err))],
+        };
+        let Some(mut note) = Self::note(&commit) else {
+            return outcomes;
+        };
+        if !note.changes_explained()
+            || note.changes_outdated()
+            || lock(&self.info.complete_notes).get(sha) == Some(&commit.note)
+        {
+            return outcomes;
+        }
+        let diffs: Vec<_> = match self.repo.commit_diffs(sha, cancel) {
+            Ok(diffs) => diffs
+                .into_iter()
+                .filter(|(change, diff)| {
+                    !diff.binary
+                        && !is_ignored(rules, &change.path, change.original_path.as_deref())
+                })
+                .collect(),
+            Err(err) => return vec![(String::new(), Err(err))],
+        };
+        if !note.changes_by_block && joins_blocks(&diffs, &note.changes) {
+            starting(None);
+            let result = self.explain_commit_once(sha, cancel).map(usize::from);
+            let failed = result.is_err();
+            outcomes.push((String::new(), result));
+            if failed {
+                return outcomes;
+            }
+            // The new note may leave blocks out in turn
+            match self
+                .get_commit(sha, cancel)
+                .map(|commit| Self::note(&commit))
+            {
+                Ok(Some(new)) if new.changes_explained() => note = new,
+                Ok(_) => return outcomes,
+                Err(err) => {
+                    outcomes.push((String::new(), Err(err)));
+                    return outcomes;
                 }
             }
-            files.push(BuildFile {
-                path: change.path.clone(),
-                original_path: change.original_path.clone(),
-                status: change.status,
-                additions: entry.additions,
-                deletions: entry.deletions,
-                binary: binary || entry.binary(),
-                ignored,
-                entries: file_entries,
-                touched_by: attribution
-                    .as_ref()
-                    .map(|a| a.touched_by.clone())
-                    .unwrap_or_default(),
-            });
         }
-
-        let commits = self.range_commits(cancel)?;
-        let shas: Vec<&str> = commits.iter().map(|c| c.sha.as_str()).collect();
-        let patch_ids = self.repo.patch_ids(&shas, cancel)?;
-        let mut build_commits = Vec::new();
-        for commit in &commits {
-            let explanation = explain_commit(commit, &self.config.message_format);
-            let agent = detect_agent(commit, self.config.author_pattern.as_deref());
-            let note = Self::note(commit);
-            let changes_inferred_by =
-                note.as_ref()
-                    .filter(|note| note.changes_explained())
-                    .map(|note| {
-                        note.change_model
-                            .clone()
-                            .unwrap_or_else(|| "a model".into())
-                    });
-            build_commits.push(BuildCommit {
-                sha: commit.sha.clone(),
-                short_sha: self.repo.short_sha(&commit.sha, cancel)?,
-                patch_id: patch_ids.get(&commit.sha).cloned(),
-                author: commit.author.name.clone(),
-                agent: if agent.is_some() {
-                    BuildAgent::ClaudeCode
-                } else {
-                    BuildAgent::Human
-                },
-                agent_model: agent.as_ref().and_then(|a| a.model.clone()),
-                agent_name: agent.as_ref().map(|a| a.display_name.clone()),
-                what: explanation.what.clone(),
-                why: explanation.why.clone(),
-                justification: explanation.justification.clone(),
-                why_source: explanation.source,
-                inferred_by: if explanation.source == ExplanationSource::Inferred {
-                    explanation.model.clone()
-                } else {
-                    None
-                },
-                changes_inferred_by,
-            });
+        for (change, mut diff) in diffs {
+            let paths = diff_paths(&diff);
+            diff.hunks = diff
+                .hunks
+                .iter()
+                .flat_map(GitDiffHunk::blocks)
+                .filter(|block| !block_is_explained(&paths, block, &note.changes))
+                .collect();
+            if diff.hunks.is_empty() {
+                continue;
+            }
+            starting(Some(&change.path));
+            let path = change.path.clone();
+            let result = self
+                .explain_blocks(sha, vec![(change, diff)], cancel)
+                .or_else(skip_unexplainable);
+            let stop = stops(&result);
+            outcomes.push((path, result));
+            if stop {
+                return outcomes;
+            }
         }
-
-        let c = &self.comparison;
-        let revision = |sha: &str, label: &str| -> Result<BuildRevision> {
-            let ref_name = if sha.starts_with(label) || label == short_sha(sha) {
-                None
-            } else {
-                Some(label.to_string())
-            };
-            Ok(BuildRevision {
-                sha: sha.to_string(),
-                short_sha: self.repo.short_sha(sha, cancel)?,
-                ref_name,
-            })
-        };
-
-        Ok(BuildFacts {
-            base: revision(&c.base_sha, &self.base_label)?,
-            target: revision(&c.target_sha, &self.target_label)?,
-            merge_base: c.merge_base.clone(),
-            relation: c.relation,
-            stats: BuildStats {
-                files: files.len(),
-                insertions: files.iter().map(|f| f.additions.unwrap_or(0)).sum(),
-                deletions: files.iter().map(|f| f.deletions.unwrap_or(0)).sum(),
-                commits: build_commits.len(),
-            },
-            commits: build_commits,
-            files,
-        })
+        // What Claude Code chose not to explain isn't asked for again
+        if outcomes.iter().all(|(_, result)| result.is_ok())
+            && let Ok(commit) = self.get_commit(sha, cancel)
+        {
+            lock(&self.info.complete_notes).insert(sha.to_string(), commit.note);
+        }
+        outcomes
     }
+}
 
-    /// Explain & Build: explain what isn't yet (if allowed), then write the
-    /// build file; returns its path
-    pub fn generate_build(
-        &self,
-        cancel: &CancelToken,
-        progress: Option<Progress<'_>>,
-    ) -> Result<PathBuf> {
-        if !self.can_build() {
-            return Err(Error::msg(self.build_unavailable_reason()));
-        }
-        let progress = progress.unwrap_or(&no_progress);
-        if self.config.infer_enabled {
-            self.explain_all(cancel, Some(progress), true)?;
-        }
-        let facts = self.gather_build_facts(cancel, Some(progress))?;
-        progress(&format!(
-            "Writing the summary with {}…",
-            self.config.build_model
-        ));
-        let narrative = write_narrative(
-            &facts,
-            &self.config.build_model,
-            Some(&self.config.claude_path),
-            self.config.run_claude.clone(),
-            cancel,
-        )?;
-        cancel.check()?;
-        let built = write_build(
-            &self.root,
-            &self.config.build_folder,
-            &facts,
-            &narrative,
-            &self.config.generator,
-            crate::time::now_timestamp(),
-        )?;
-        Ok(built.path)
+/// A file's changes that are ignored or have nothing to send count as
+/// nothing explained, not as a failure
+fn skip_unexplainable(err: Error) -> Result<usize> {
+    match err {
+        Error::IgnoredFile(_) | Error::NothingToExplain(_) => Ok(0),
+        err => Err(err),
     }
 }
 
@@ -1530,7 +1469,7 @@ fn diff_paths(diff: &GitFileDiff) -> (Option<String>, Option<String>) {
 fn block_has_lines(
     paths: &(Option<String>, Option<String>),
     block: &GitDiffHunk,
-    origins: &[crate::models::LineOrigin],
+    origins: &[LineOrigin],
 ) -> bool {
     origins.iter().any(|origin| {
         let (path, start, count) = match origin.side {
@@ -1541,6 +1480,54 @@ fn block_has_lines(
             && start <= origin.line
             && origin.line < start + count
     })
+}
+
+/// Whether one of `changes` (a note's) explains a changed line of a change
+/// block (in the diff with `paths`, old and new), as a card's lines find
+/// their explanations
+fn block_is_explained(
+    paths: &(Option<String>, Option<String>),
+    block: &GitDiffHunk,
+    changes: &[ChangeExplanation],
+) -> bool {
+    !find_change_explanations(&block_origins(paths, block), changes).is_empty()
+}
+
+/// The added and deleted lines of a change block (in the diff with
+/// `paths`, old and new)
+fn block_origins(paths: &(Option<String>, Option<String>), block: &GitDiffHunk) -> Vec<LineOrigin> {
+    block
+        .lines
+        .iter()
+        .filter_map(|line| match (line.kind, &paths.0, &paths.1) {
+            (DiffLineKind::Add, _, Some(path)) => {
+                Some(LineOrigin::new(path, Side::New, line.new_line?))
+            }
+            (DiffLineKind::Delete, Some(path), _) => {
+                Some(LineOrigin::new(path, Side::Old, line.old_line?))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Whether one of `changes` (a note's) explains two or more change blocks
+/// of `diffs` (its commit's): git joined them into one hunk, which the
+/// note explained as one, as [`shares_a_joined_change`] finds per card
+fn joins_blocks(diffs: &[(GitFileChange, GitFileDiff)], changes: &[ChangeExplanation]) -> bool {
+    let mut seen: Vec<&ChangeExplanation> = Vec::new();
+    for (_, diff) in diffs {
+        let paths = diff_paths(diff);
+        for block in diff.hunks.iter().flat_map(GitDiffHunk::blocks) {
+            for found in find_change_explanations(&block_origins(&paths, &block), changes) {
+                if seen.iter().any(|&other| std::ptr::eq(other, found)) {
+                    return true;
+                }
+                seen.push(found);
+            }
+        }
+    }
+    false
 }
 
 fn join_texts<'a>(texts: impl Iterator<Item = &'a str>) -> String {

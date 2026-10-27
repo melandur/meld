@@ -800,13 +800,3 @@ impl ChangeGuide {
         *self == Self::default()
     }
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CommitAgent {
-    /// Always `claude-code`
-    pub kind: String,
-    /// As written in the trailer, e.g. `Claude Opus 5.5`
-    pub display_name: String,
-    /// Model ID derived from the trailer, e.g. `claude-opus-5-5`
-    pub model: Option<String>,
-}

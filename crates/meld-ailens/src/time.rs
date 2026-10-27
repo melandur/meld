@@ -1,5 +1,4 @@
-//! The little date handling AI Lens needs: ISO 8601 as git prints it, and
-//! UTC timestamps as build files write them
+//! The little date handling AI Lens needs: ISO 8601 as git prints it
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -19,20 +18,6 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let doy = (153 * mp + 2) / 5 + day - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     era * 146_097 + doe - 719_468
-}
-
-/// (year, month, day) of a day count since the epoch
-pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let year = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    (if month <= 2 { year + 1 } else { year }, month, day)
 }
 
 /// Seconds since the epoch for a date/time given in UTC
@@ -99,18 +84,4 @@ pub fn parse_iso8601(value: &str) -> Option<f64> {
     }
     let days = days_from_civil(year, month, day);
     Some(days as f64 * 86_400.0 + (hour * 3600 + minute * 60) as f64 + second - offset as f64)
-}
-
-/// `YYYY-MM-DDTHH:MM:SSZ` for a timestamp, to the second
-pub fn format_utc(timestamp: f64) -> String {
-    let seconds = timestamp.floor() as i64;
-    let days = seconds.div_euclid(86_400);
-    let rest = seconds.rem_euclid(86_400);
-    let (year, month, day) = civil_from_days(days);
-    format!(
-        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
-        rest / 3600,
-        rest % 3600 / 60,
-        rest % 60
-    )
 }

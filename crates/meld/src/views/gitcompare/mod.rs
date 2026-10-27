@@ -35,7 +35,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use iced::widget::{button, column, container, row, scrollable, space, text, tooltip};
+use iced::widget::{
+    button, column, container, progress_bar, row, scrollable, space, text, tooltip,
+};
 use iced::{Background, Element, Length, Subscription, Task, Theme};
 use meld_ailens::picker::{apply_pick, revisions_from_args};
 use meld_ailens::{
@@ -53,7 +55,6 @@ use self::divider::divider;
 use self::filelist::ListRow;
 use self::jobs::{Jobs, Opaque, Ticket};
 use self::picker::Picker;
-use self::popover::popover;
 use self::whycolumn::CardStates;
 use crate::command::Command;
 use crate::comparison::{Comparison, FileExtras, PrSpec};
@@ -81,11 +82,7 @@ pub fn config_from_settings(settings: &Settings) -> SessionConfig {
         claude_path: or(&settings.ailens_claude_path, &defaults.claude_path),
         infer_enabled: settings.ailens_infer_enabled,
         infer_model: or(&settings.ailens_infer_model, &defaults.infer_model),
-        build_model: or(&settings.ailens_build_model, &defaults.build_model),
-        build_folder: or(&settings.ailens_build_folder, &defaults.build_folder),
         notes_ref: or(&settings.ailens_notes_ref, &defaults.notes_ref),
-        author_pattern: Some(settings.ailens_author_pattern.trim().to_string())
-            .filter(|p| !p.is_empty()),
         ..defaults
     }
 }
@@ -103,15 +100,9 @@ enum Content {
     },
 }
 
-#[derive(Debug, Clone)]
-enum BannerAction {
-    Open(PathBuf),
-}
-
 struct Banner {
     kind: BannerKind,
     text: String,
-    action: Option<(String, BannerAction)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,14 +135,6 @@ fn dragged_width(target: DragTarget, start_width: f32, origin_x: f32, x: f32) ->
     }
 }
 
-/// A commit's full message, shown when its card's SHA is clicked.
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Popup {
-    Picker(PickerSide),
-    More,
-}
-
 pub struct GitCompare {
     location: PathBuf,
     config: SessionConfig,
@@ -167,11 +150,14 @@ pub struct GitCompare {
     relation: String,
     base_picker: Picker,
     target_picker: Picker,
-    popup: Option<Popup>,
+    /// The picker whose popup is open
+    popup: Option<PickerSide>,
     busy: Option<String>,
     /// What Claude Code is explaining, by job name: kept apart from `busy`,
     /// which loading a file takes over, until each answer comes back
     explaining: std::collections::BTreeMap<String, String>,
+    /// How much of explaining everything is done (0 to 1), while it runs
+    explain_share: Option<f32>,
     jobs: Jobs,
     banner: Option<Banner>,
     entries: Vec<FileEntry>,
@@ -228,8 +214,6 @@ pub enum Outcome {
     Explained(String, Result<(), Error>),
     Cards(u64, Result<Vec<Card>, Error>),
     ExplainedAll(Result<usize, Error>),
-    Built(Result<PathBuf, Error>),
-    AgentsSetUp(Result<Vec<String>, Error>),
     PrRemotes(Result<crate::forge::Remotes, Error>),
     PrList(Result<Vec<PullRequest>, Error>),
     PrSearch(String, Result<Vec<PullRequest>, Error>),
@@ -240,22 +224,18 @@ pub enum Outcome {
 #[derive(Debug, Clone)]
 pub enum Message {
     Job(Ticket, Outcome),
-    Progress(Ticket, String),
+    Progress(Ticket, String, Option<f32>),
     Diff(diffhost::Message),
     ChooseRepository,
     RepositoryChosen(Option<PathBuf>),
-    TogglePopup(PopupKind),
+    TogglePopup(PickerSide),
     ClosePopup,
     Picker(PickerSide, picker::Message),
     SearchDue(PickerSide, u64),
     Swap,
     Reload,
     ExplainAll,
-    Build,
-    SetUpAgents,
-    OpenBuilds,
     OpenFile,
-    BannerAction,
     DismissBanner,
     SelectFile(FileEntry),
     ToggleFolder(String),
@@ -309,14 +289,6 @@ fn explain_job(key: &str) -> String {
     format!("explain-{key}")
 }
 
-/// Which popup a header button opens.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PopupKind {
-    Base,
-    Target,
-    More,
-}
-
 fn side_name(side: PickerSide) -> &'static str {
     match side {
         PickerSide::Base => "base",
@@ -363,6 +335,7 @@ impl GitCompare {
             popup: None,
             busy: None,
             explaining: Default::default(),
+            explain_share: None,
             jobs: Jobs::default(),
             banner: None,
             entries: Vec::new(),
@@ -404,7 +377,7 @@ impl GitCompare {
                 tab.base = base;
                 tab.target = target;
             }
-            Err(err) => tab.show_banner(BannerKind::Error, err, None),
+            Err(err) => tab.show_banner(BannerKind::Error, err),
         }
         tab.update_picker_labels(false);
         let task = if location.as_os_str().is_empty() {
@@ -452,11 +425,11 @@ impl GitCompare {
     ) -> Task<Message>
     where
         T: Send + 'static,
-        W: FnOnce(&CancelToken, &dyn Fn(&str)) -> Result<T, Error> + Send + 'static,
+        W: FnOnce(&CancelToken, &dyn Fn(&str, Option<f32>)) -> Result<T, Error> + Send + 'static,
     {
         let (ticket, cancel) = self.jobs.start(name, exclusive);
         jobs::spawn(cancel, work).map(move |event| match event {
-            jobs::Event::Progress(text) => Message::Progress(ticket.clone(), text),
+            jobs::Event::Progress(text, share) => Message::Progress(ticket.clone(), text, share),
             jobs::Event::Done(result) => Message::Job(ticket.clone(), wrap(result)),
         })
     }
@@ -970,6 +943,7 @@ impl GitCompare {
             }
             Outcome::ExplainedAll(result) => {
                 self.explaining.remove(EXPLAIN_ALL);
+                self.explain_share = None;
                 match result {
                     Ok(count) => {
                         let text = if count > 0 {
@@ -982,55 +956,12 @@ impl GitCompare {
                         } else {
                             tr!("Everything is explained already").into()
                         };
-                        self.show_banner(BannerKind::Info, text, None);
+                        self.show_banner(BannerKind::Info, text);
                     }
                     Err(err) if !err.is_cancelled() => self.show_error(&err),
                     Err(_) => {}
                 }
                 self.refresh_cards()
-            }
-            Outcome::Built(result) => {
-                self.busy = None;
-                match result {
-                    Ok(path) => {
-                        let root = self
-                            .session
-                            .as_ref()
-                            .map(|s| s.root.clone())
-                            .unwrap_or_default();
-                        let shown = path
-                            .strip_prefix(&root)
-                            .unwrap_or(&path)
-                            .display()
-                            .to_string();
-                        self.show_banner(
-                            BannerKind::Info,
-                            tr!("Wrote {path}", path = shown),
-                            Some((tr!("Open").into(), BannerAction::Open(path))),
-                        );
-                        return self.refresh_cards();
-                    }
-                    Err(err) if !err.is_cancelled() => self.show_error(&err),
-                    Err(_) => {}
-                }
-                Task::none()
-            }
-            Outcome::AgentsSetUp(result) => {
-                match result {
-                    Ok(changed) if changed.is_empty() => self.show_banner(
-                        BannerKind::Info,
-                        tr!("Agent instructions are already set up").into(),
-                        None,
-                    ),
-                    Ok(changed) => self.show_banner(
-                        BannerKind::Info,
-                        tr!("Updated {files}", files = changed.join(", ")),
-                        None,
-                    ),
-                    Err(err) if !err.is_cancelled() => self.show_error(&err),
-                    Err(_) => {}
-                }
-                Task::none()
             }
             Outcome::PrRemotes(result) => {
                 match result {
@@ -1118,7 +1049,7 @@ impl GitCompare {
                             &condense(&err.to_string()).0,
                             Some(tr!("Reload to try again.").into()),
                         );
-                        self.show_banner(BannerKind::Error, err.to_string(), None);
+                        self.show_banner(BannerKind::Error, err.to_string());
                         Task::none()
                     }
                 }
@@ -1136,7 +1067,7 @@ impl GitCompare {
                             reference = pr.reference(),
                             what = what
                         );
-                        self.show_banner(BannerKind::Info, text, None);
+                        self.show_banner(BannerKind::Info, text);
                         Task::none()
                     }
                     Err(err) => {
@@ -1145,7 +1076,6 @@ impl GitCompare {
                             self.show_banner(
                                 BannerKind::Error,
                                 tr!("Couldn’t post: {err}", err = err),
-                                None,
                             );
                         }
                         Task::none()
@@ -1252,18 +1182,21 @@ impl GitCompare {
                     Error::msg(tr!("No remote of this repository is on GitHub or GitLab."))
                 })?;
                 let reference = forge.kind().reference(spec.number);
-                progress(&tr!(
-                    "Loading {reference} from {host}…",
-                    reference = reference,
-                    host = forge.remote.host
-                ));
+                progress(
+                    &tr!(
+                        "Loading {reference} from {host}…",
+                        reference = reference,
+                        host = forge.remote.host
+                    ),
+                    None,
+                );
                 let details = forge.details(spec.number, cancel)?;
                 let fetched = meld_forge::fetch::fetch_pull_request(
                     &info.repo,
                     &forge.remote,
                     &details,
                     cancel,
-                    progress,
+                    &|text| progress(text, None),
                 )?;
                 Ok((forge, Box::new(details), fetched))
             },
@@ -1294,7 +1227,6 @@ impl GitCompare {
                     count,
                     reference = pr.reference()
                 ),
-                None,
             );
         }
     }
@@ -1372,7 +1304,6 @@ impl GitCompare {
                     self.show_banner(
                         BannerKind::Error,
                         tr!("Couldn’t open {url}: {err}", url = url, err = err),
-                        None,
                     );
                 }
                 Task::none()
@@ -1383,18 +1314,13 @@ impl GitCompare {
     /// Opens the composer for a comment on the line with the cursor.
     fn comment_at_cursor(&mut self) {
         let (Some(entry), true) = (self.current.clone(), self.content == Content::Diff) else {
-            self.show_banner(
-                BannerKind::Info,
-                tr!("Open a changed file first").into(),
-                None,
-            );
+            self.show_banner(BannerKind::Info, tr!("Open a changed file first").into());
             return;
         };
         let Some((pane, line)) = self.diff.cursor_line() else {
             self.show_banner(
                 BannerKind::Info,
                 tr!("Click the line to comment on first").into(),
-                None,
             );
             return;
         };
@@ -1435,7 +1361,6 @@ impl GitCompare {
             self.show_banner(
                 BannerKind::Warning,
                 tr!("Only the target can be the working tree or the index").into(),
-                None,
             );
             return Task::none();
         }
@@ -1443,7 +1368,6 @@ impl GitCompare {
             self.show_banner(
                 BannerKind::Warning,
                 tr!("Staged → Working Tree can’t be swapped").into(),
-                None,
             );
             return Task::none();
         }
@@ -1455,6 +1379,7 @@ impl GitCompare {
     /// Forgets what Claude Code was explaining, its jobs cancelled
     fn stop_explaining(&mut self) {
         self.explaining.clear();
+        self.explain_share = None;
         self.cards.busy.clear();
     }
 
@@ -1466,61 +1391,16 @@ impl GitCompare {
             EXPLAIN_ALL.into(),
             tr!("Explaining changes with Claude Code…").into(),
         );
+        self.explain_share = Some(0.0);
         self.run(
             EXPLAIN_ALL,
             true,
-            move |cancel, progress| session.explain_all(cancel, Some(progress), false),
+            move |cancel, progress| {
+                let progress = |text: &str, share: f32| progress(text, Some(share));
+                session.explain_all(cancel, Some(&progress))
+            },
             Outcome::ExplainedAll,
         )
-    }
-
-    fn generate_build(&mut self) -> Task<Message> {
-        let Some(session) = self.session.clone() else {
-            return Task::none();
-        };
-        if !session.can_build() {
-            self.show_banner(
-                BannerKind::Warning,
-                session.build_unavailable_reason(),
-                None,
-            );
-            return Task::none();
-        }
-        self.busy = Some(tr!("Writing the build…").into());
-        self.run(
-            "build",
-            true,
-            move |cancel, progress| session.generate_build(cancel, Some(progress)),
-            Outcome::Built,
-        )
-    }
-
-    fn set_up_agents(&mut self) -> Task<Message> {
-        let Some(info) = self.info.clone() else {
-            return Task::none();
-        };
-        let config = self.config.clone();
-        self.run(
-            "setup",
-            true,
-            move |cancel, _| info.set_up_agents(&config, cancel),
-            Outcome::AgentsSetUp,
-        )
-    }
-
-    fn open_builds_folder(&mut self) {
-        let Some(info) = &self.info else {
-            return;
-        };
-        match info.build_folder(&self.config) {
-            Ok(folder) if folder.is_dir() => open_path(&folder),
-            Ok(_) => self.show_banner(
-                BannerKind::Info,
-                tr!("There are no builds yet").into(),
-                None,
-            ),
-            Err(err) => self.show_error(&err),
-        }
     }
 
     /// Opens the current file in a regular, editable comparison tab.
@@ -1566,7 +1446,6 @@ impl GitCompare {
                     self.show_banner(
                         BannerKind::Error,
                         tr!("Couldn’t write a temporary file: {err}", err = err),
-                        None,
                     );
                     return;
                 }
@@ -1648,7 +1527,7 @@ impl GitCompare {
             choose: true,
         };
         if let Some(error) = error {
-            self.show_banner(BannerKind::Error, error, None);
+            self.show_banner(BannerKind::Error, error);
         }
     }
 
@@ -1657,16 +1536,11 @@ impl GitCompare {
         if self.session.is_none() {
             self.show_message("⚠", &message, None);
         }
-        self.show_banner(BannerKind::Error, message, None);
+        self.show_banner(BannerKind::Error, message);
     }
 
-    fn show_banner(
-        &mut self,
-        kind: BannerKind,
-        text: String,
-        action: Option<(String, BannerAction)>,
-    ) {
-        self.banner = Some(Banner { kind, text, action });
+    fn show_banner(&mut self, kind: BannerKind, text: String) {
+        self.banner = Some(Banner { kind, text });
     }
 
     /// Modification times of the watched files, to notice repository
@@ -1732,9 +1606,12 @@ impl GitCompare {
                 }
                 self.finished(outcome, shared)
             }
-            Message::Progress(ticket, text) => {
+            Message::Progress(ticket, text, share) => {
                 if !self.jobs.is_current(&ticket) {
                     return Task::none();
+                }
+                if ticket.name == EXPLAIN_ALL && share.is_some() {
+                    self.explain_share = share;
                 }
                 if let Some(status) = self.explaining.get_mut(&ticket.name) {
                     *status = text;
@@ -1785,25 +1662,15 @@ impl GitCompare {
                 self.set_location(path)
             }
             Message::RepositoryChosen(None) => Task::none(),
-            Message::TogglePopup(kind) => {
-                let popup = match kind {
-                    PopupKind::Base => Popup::Picker(PickerSide::Base),
-                    PopupKind::Target => Popup::Picker(PickerSide::Target),
-                    PopupKind::More => Popup::More,
-                };
-                if self.popup == Some(popup) {
+            Message::TogglePopup(side) => {
+                if self.popup == Some(side) {
                     self.popup = None;
                     return Task::none();
                 }
-                self.popup = Some(popup);
-                match popup {
-                    Popup::Picker(side) => {
-                        let picker = self.picker_mut(side);
-                        picker.reset();
-                        iced::widget::operation::focus(picker.input_id.clone())
-                    }
-                    Popup::More => Task::none(),
-                }
+                self.popup = Some(side);
+                let picker = self.picker_mut(side);
+                picker.reset();
+                iced::widget::operation::focus(picker.input_id.clone())
             }
             Message::ClosePopup => {
                 self.popup = None;
@@ -1906,31 +1773,9 @@ impl GitCompare {
             Message::Swap => self.swap(shared),
             Message::Reload => self.user_reload(shared),
             Message::ExplainAll => self.explain_all(),
-            Message::Build => self.generate_build(),
-            Message::SetUpAgents => {
-                self.popup = None;
-                self.set_up_agents()
-            }
-            Message::OpenBuilds => {
-                self.popup = None;
-                self.open_builds_folder();
-                Task::none()
-            }
             Message::OpenFile => {
                 self.popup = None;
                 self.open_current_file(events);
-                Task::none()
-            }
-            Message::BannerAction => {
-                if let Some(Banner {
-                    action: Some((_, action)),
-                    ..
-                }) = self.banner.take()
-                {
-                    match action {
-                        BannerAction::Open(path) => open_path(&path),
-                    }
-                }
                 Task::none()
             }
             Message::DismissBanner => {
@@ -2093,7 +1938,6 @@ impl GitCompare {
                         self.show_banner(
                             BannerKind::Warning,
                             tr!("Stopped posting; some of it may have been posted already").into(),
-                            None,
                         );
                     } else if pr.confirm.is_some() {
                         pr.update(review::Message::CancelConfirm);
@@ -2193,18 +2037,6 @@ impl GitCompare {
             Message::Reload,
         ));
         items.push(menu::Item::Separator);
-        let if_info = |label: &str, message: Message| {
-            if self.info.is_some() {
-                menu::Item::action(label, None, message)
-            } else {
-                menu::Item::disabled(label)
-            }
-        };
-        items.push(if_info(
-            tr!("Set Up Agent Instructions"),
-            Message::SetUpAgents,
-        ));
-        items.push(if_info(tr!("Open Builds Folder"), Message::OpenBuilds));
         items.push(if self.view.is_some() {
             menu::Item::action(tr!("Open File in New Tab"), None, Message::OpenFile)
         } else {
@@ -2251,11 +2083,7 @@ impl GitCompare {
     pub fn view<'a>(&'a self, shared: &'a Shared) -> Element<'a, Message> {
         let mut page = column![self.header(), ui::separator(false)];
         if let Some(banner) = &self.banner {
-            let mut actions = Vec::new();
-            if let Some((label, _)) = &banner.action {
-                actions.push((label.clone(), Message::BannerAction));
-            }
-            actions.push((tr!("Dismiss").to_string(), Message::DismissBanner));
+            let actions = vec![(tr!("Dismiss").to_string(), Message::DismissBanner)];
             let (primary, secondary) = condense(&banner.text);
             page = page.push(ui::banner(banner.kind, primary, secondary, actions));
         }
@@ -2319,31 +2147,40 @@ impl GitCompare {
             tooltip::Position::Bottom,
         );
         let base = self.base_picker.view(
-            self.popup == Some(Popup::Picker(PickerSide::Base)),
-            Message::TogglePopup(PopupKind::Base),
+            self.popup == Some(PickerSide::Base),
+            Message::TogglePopup(PickerSide::Base),
             Message::ClosePopup,
             |m| Message::Picker(PickerSide::Base, m),
         );
         let target = self.target_picker.view(
-            self.popup == Some(Popup::Picker(PickerSide::Target)),
-            Message::TogglePopup(PopupKind::Target),
+            self.popup == Some(PickerSide::Target),
+            Message::TogglePopup(PickerSide::Target),
             Message::ClosePopup,
             |m| Message::Picker(PickerSide::Target, m),
         );
-        let has_session = self.session.is_some();
-        let idle = self.busy.is_none();
         let status: Element<'_, Message> = match status_text(&self.explaining, self.busy.as_deref())
         {
-            Some(status) => row![
-                text("⏳").size(13),
-                ellipsized(status, Mode::End)
-                    .size(13)
-                    .style(ui::dim_text)
-                    .width(Length::Fill)
-            ]
-            .spacing(6)
-            .align_y(iced::Center)
-            .into(),
+            Some(status) => {
+                let mut status_row = row![].spacing(6).align_y(iced::Center);
+                status_row = match self.explain_share {
+                    Some(share) => status_row
+                        .push(progress_bar(0.0..=1.0, share).length(160).girth(8))
+                        .push(
+                            text(format!("{}%", (share * 100.0).round() as u32))
+                                .size(13)
+                                .style(ui::dim_text),
+                        ),
+                    None => status_row.push(text("⏳").size(13)),
+                };
+                status_row
+                    .push(
+                        ellipsized(status, Mode::End)
+                            .size(13)
+                            .style(ui::dim_text)
+                            .width(Length::Fill),
+                    )
+                    .into()
+            }
             None if self.relation.is_empty() => space::horizontal().into(),
             None => tooltip(
                 ellipsized(self.relation.as_str(), Mode::End)
@@ -2358,7 +2195,22 @@ impl GitCompare {
             .delay(Duration::from_millis(600))
             .into(),
         };
-        let mut bar = row![
+        let (explain_tip, can_explain) = if !self.config.infer_enabled {
+            (
+                tr!("Explaining with Claude Code is turned off in the preferences"),
+                false,
+            )
+        } else if self.session.is_none() {
+            (tr!("Pick a base and a target first"), false)
+        } else {
+            (
+                tr!(
+                    "Explain every change of every file that isn’t explained yet, with Claude Code"
+                ),
+                !self.explaining.contains_key(EXPLAIN_ALL),
+            )
+        };
+        let bar = row![
             repo,
             base,
             ui::tool_button(
@@ -2376,115 +2228,20 @@ impl GitCompare {
                 tr!("Reload the comparison"),
                 self.info.is_some().then_some(Message::Reload)
             ),
+            tooltip(
+                button(text(tr!("Explain")).size(14))
+                    .padding([5, 12])
+                    .style(button::primary)
+                    .on_press_maybe(can_explain.then_some(Message::ExplainAll)),
+                container(text(explain_tip).size(12))
+                    .padding([4, 8])
+                    .style(ui::tooltip_box),
+                tooltip::Position::Bottom,
+            ),
         ]
         .spacing(6)
         .align_y(iced::Center);
-        if self.config.infer_enabled {
-            bar = bar.push(tooltip(
-                button(text(tr!("Explain")).size(14))
-                    .padding([5, 12])
-                    .style(button::secondary)
-                    .on_press_maybe(
-                        (has_session && !self.explaining.contains_key(EXPLAIN_ALL))
-                            .then_some(Message::ExplainAll),
-                    ),
-                container(
-                    text(tr!(
-                        "Explain every change that isn’t explained yet, with Claude Code"
-                    ))
-                    .size(12),
-                )
-                .padding([4, 8])
-                .style(ui::tooltip_box),
-                tooltip::Position::Bottom,
-            ));
-        }
-        let (build_tip, can_build) = match &self.session {
-            Some(session) => {
-                let reason = session.build_unavailable_reason();
-                if reason.is_empty() {
-                    (
-                        tr!("Write a build file for this comparison").to_string(),
-                        true,
-                    )
-                } else {
-                    (reason, false)
-                }
-            }
-            None => (tr!("Pick a base and a target first").to_string(), false),
-        };
-        bar = bar.push(tooltip(
-            button(
-                text(if self.config.infer_enabled {
-                    tr!("Explain & Build")
-                } else {
-                    tr!("Generate Build")
-                })
-                .size(14),
-            )
-            .padding([5, 12])
-            .style(button::primary)
-            .on_press_maybe((can_build && idle).then_some(Message::Build)),
-            container(text(build_tip).size(12))
-                .padding([4, 8])
-                .style(ui::tooltip_box),
-            tooltip::Position::Bottom,
-        ));
-        let more_open = self.popup == Some(Popup::More);
-        let more_button: Element<'_, Message> = if more_open {
-            // Without its tooltip, which would cover the menu
-            button(text("⋯").size(16).center())
-                .padding([4, 8])
-                .style(ui::flat_button)
-                .on_press(Message::TogglePopup(PopupKind::More))
-                .into()
-        } else {
-            ui::tool_button(
-                "⋯",
-                tr!("More AI Lens actions"),
-                Some(Message::TogglePopup(PopupKind::More)),
-            )
-        };
-        bar = bar.push(
-            popover(
-                more_button,
-                more_open.then(|| self.more_menu()),
-                Message::ClosePopup,
-            )
-            .align_right(true),
-        );
         container(bar).padding([6, 6]).width(Length::Fill).into()
-    }
-
-    fn more_menu(&self) -> Element<'_, Message> {
-        let item = |label: &'static str, message: Option<Message>| {
-            button(text(label).size(14))
-                .width(Length::Fill)
-                .padding([6, 10])
-                .style(ui::flat_button)
-                .on_press_maybe(message)
-        };
-        let has_info = self.info.is_some();
-        container(
-            column![
-                item(
-                    tr!("Set Up Agent Instructions"),
-                    has_info.then_some(Message::SetUpAgents)
-                ),
-                item(
-                    tr!("Open Builds Folder"),
-                    has_info.then_some(Message::OpenBuilds)
-                ),
-                item(
-                    tr!("Open File in New Tab"),
-                    self.view.is_some().then_some(Message::OpenFile)
-                ),
-            ]
-            .width(260),
-        )
-        .padding(6)
-        .style(ui::popover)
-        .into()
     }
 
     fn file_panel<'a>(&'a self, shared: &'a Shared) -> Element<'a, Message> {
@@ -2720,24 +2477,17 @@ fn set_read_only(path: &Path) {
     }
 }
 
-fn open_path(path: &Path) {
-    if let Err(err) = open::that_detached(path) {
-        log::warn!("Can't open {}: {err}", path.display());
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn config_follows_the_settings_with_defaults_for_empty_texts() {
-        let mut settings = Settings {
+        let settings = Settings {
             ailens_claude_path: "/opt/claude".into(),
             ailens_infer_enabled: false,
             ailens_infer_model: " ".into(),
             ailens_notes_ref: "lens".into(),
-            ailens_author_pattern: "bot@".into(),
             ..Settings::default()
         };
         let config = config_from_settings(&settings);
@@ -2745,10 +2495,6 @@ mod tests {
         assert!(!config.infer_enabled);
         assert_eq!(config.infer_model, SessionConfig::default().infer_model);
         assert_eq!(config.notes_ref, "lens");
-        assert_eq!(config.build_folder, "agent");
-        assert_eq!(config.author_pattern.as_deref(), Some("bot@"));
-        settings.ailens_author_pattern.clear();
-        assert_eq!(config_from_settings(&settings).author_pattern, None);
     }
 
     #[test]

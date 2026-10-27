@@ -104,7 +104,6 @@ fn config_with(fake: Option<Arc<FakeClaude>>) -> SessionConfig {
     let fake = fake.unwrap_or_default();
     SessionConfig {
         run_claude: Some(fake.runner()),
-        generator: "meld-test".into(),
         ..Default::default()
     }
 }
@@ -181,7 +180,6 @@ fn commit_comparison_files_and_cards() {
     let session = base_main(&history, None);
     assert_eq!(session.base_label(), &history.sha("base")[..7]);
     assert_eq!(session.target_label(), "main");
-    assert!(session.can_build());
     let files = session.files(&never()).unwrap();
     let paths: Vec<&str> = files.iter().map(|e| e.change.path.as_str()).collect();
     assert_eq!(paths, ["app.py", "data.bin"]);
@@ -341,6 +339,27 @@ fn changes_explained_as_one_hunk_can_be_explained_again_apart() {
 }
 
 #[test]
+fn explain_all_explains_changes_explained_as_one_hunk_again_apart() {
+    // Scored, so not outdated: only the joined change needs explaining
+    let history = joined_history(&JOINED_NOTE.replace("What: Both\n", "Risk: 2\nWhat: Both\n"));
+    let fake = Arc::new(FakeClaude::default());
+    let session = base_main(&history, Some(config_with(Some(fake.clone()))));
+    assert_eq!(session.explain_all(&never(), None).unwrap(), 1);
+    // The whole commit, once
+    assert_eq!(fake.requests.lock().unwrap().len(), 1);
+    let note = history.git(&["notes", "--ref=ai-lens", "show", &history.sha("joined")]);
+    assert!(note.contains("Change-Unit: block\n"), "{note}");
+
+    let entry = entry_for(&session, "app.py");
+    let view = session.file_view(&entry.change, &never()).unwrap();
+    let whys: Vec<&str> = view.cards.iter().map(|c| c.change_why.as_str()).collect();
+    assert_eq!(whys, ["Change 1 why", "Change 2 why"]);
+    assert!(view.cards.iter().all(|c| c.explain.is_none()));
+    assert_eq!(session.explain_all(&never(), None).unwrap(), 0);
+    assert_eq!(fake.requests.lock().unwrap().len(), 1);
+}
+
+#[test]
 fn a_change_spanning_two_cards_gives_each_its_own_steps() {
     // One change covers both blocks; each step is on one of them
     let note = JOINED_NOTE.replace(
@@ -436,12 +455,12 @@ fn notes_from_before_steps_and_risks_are_explained_again() {
             .all(|c| c.explain == Some(ExplainAction::Changes))
     );
     // Explaining everything takes it too, and then it is current
-    assert_eq!(session.explain_all(&never(), None, false).unwrap(), 1);
+    assert_eq!(session.explain_all(&never(), None).unwrap(), 1);
     let cards = session.cards(&view, &never()).unwrap();
     assert!(cards.iter().all(|c| c.explain.is_none()));
     assert!(cards.iter().all(|c| c.change_risk == Some(4)));
     assert!(cards.iter().all(|c| !c.change_steps.is_empty()));
-    assert_eq!(session.explain_all(&never(), None, false).unwrap(), 0);
+    assert_eq!(session.explain_all(&never(), None).unwrap(), 0);
 }
 
 #[test]
@@ -476,6 +495,53 @@ fn a_block_left_out_of_the_note_is_explained_on_its_own() {
     assert!(cards.iter().all(|c| c.explain.is_none()));
     let note = history.git(&["notes", "--ref=ai-lens", "show", &history.sha("joined")]);
     assert!(note.contains("What: Spells five") && note.contains("What: Change 1 what"));
+}
+
+#[test]
+fn explain_all_explains_the_blocks_a_note_left_out() {
+    let note = "Change-Model: old\nChange-Unit: block\n\n\
+        Change: -5,1 +5,1 app.py\nRisk: 2\nWhat: Spells five\nWhy: Easier to read.\n";
+    let history = joined_history(note);
+    let fake = Arc::new(FakeClaude::default());
+    let session = base_main(&history, Some(config_with(Some(fake.clone()))));
+    let shares = Mutex::new(Vec::<f32>::new());
+    let progress = |_: &str, share: f32| shares.lock().unwrap().push(share);
+    assert_eq!(session.explain_all(&never(), Some(&progress)).unwrap(), 1);
+    // The left-out block alone, sent once
+    let requests = fake.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].prompt.contains("+new") && !requests[0].prompt.contains("+five"));
+    drop(requests);
+    let shares = shares.into_inner().unwrap();
+    assert!(shares.windows(2).all(|w| w[0] <= w[1]), "{shares:?}");
+    assert_eq!(shares.last(), Some(&1.0));
+
+    let entry = entry_for(&session, "app.py");
+    let view = session.file_view(&entry.change, &never()).unwrap();
+    assert!(view.cards.iter().all(|c| c.explain.is_none()));
+    assert_eq!(session.explain_all(&never(), None).unwrap(), 0);
+}
+
+#[test]
+fn explaining_a_left_out_block_twice_at_once_asks_once() {
+    let note = "Change-Model: old\nChange-Unit: block\n\n\
+        Change: -5,1 +5,1 app.py\nRisk: 2\nWhat: Spells five\nWhy: Easier to read.\n";
+    let history = joined_history(note);
+    let fake = Arc::new(FakeClaude::default());
+    let session = base_main(&history, Some(config_with(Some(fake.clone()))));
+    let entry = entry_for(&session, "app.py");
+    let view = session.file_view(&entry.change, &never()).unwrap();
+    let key = view.cards[1].key.clone();
+    std::thread::scope(|scope| {
+        scope.spawn(|| session.explain_all(&never(), None).unwrap());
+        scope.spawn(|| session.explain_card(&view, &key, &never()).unwrap());
+    });
+    // Whichever came second found the block explained
+    assert_eq!(fake.requests.lock().unwrap().len(), 1);
+    let note = history.git(&["notes", "--ref=ai-lens", "show", &history.sha("joined")]);
+    assert!(note.contains("What: Spells five") && note.contains("What: Change 1 what"));
+    let cards = session.cards(&view, &never()).unwrap();
+    assert!(cards.iter().all(|c| c.explain.is_none()));
 }
 
 #[test]
@@ -562,46 +628,11 @@ fn note_steps_land_on_their_lines_in_the_comparison() {
 }
 
 #[test]
-fn explain_all_and_build() {
+fn explain_all_explains_each_commit_once() {
     let history = history();
     let session = base_main(&history, None);
-    assert_eq!(session.explain_all(&never(), None, false).unwrap(), 2);
-    assert_eq!(session.explain_all(&never(), None, false).unwrap(), 0);
-
-    let messages = Mutex::new(Vec::<String>::new());
-    let progress = |text: &str| messages.lock().unwrap().push(text.to_string());
-    let path = session.generate_build(&never(), Some(&progress)).unwrap();
-    assert_eq!(
-        path.file_name().unwrap().to_str().unwrap(),
-        format!(
-            "{}_{}_build.md",
-            &history.sha("base")[..7],
-            &history.sha("agent")[..7]
-        )
-    );
-    assert!(
-        messages
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|m| m.contains("Writing the summary"))
-    );
-    let text = std::fs::read_to_string(&path).unwrap();
-    assert!(text.contains("Fake build title"));
-    // The model that actually answered is recorded
-    assert!(text.contains("build_model: \"fake-model\""));
-    let index = std::fs::read_to_string(path.parent().unwrap().join("index.md")).unwrap();
-    assert!(index.contains("Fake build title"));
-    // Builds never contain diff text
-    assert!(!text.contains("TWO"));
-    assert!(
-        text.contains("- Justification: Inferred justification\n"),
-        "{text}"
-    );
-    assert!(
-        text.contains("  - Justification: Change 1 justification\n"),
-        "{text}"
-    );
+    assert_eq!(session.explain_all(&never(), None).unwrap(), 2);
+    assert_eq!(session.explain_all(&never(), None).unwrap(), 0);
 }
 
 #[test]
@@ -609,7 +640,7 @@ fn explain_all_reports_failures_and_continues() {
     let history = history();
     let fake = FakeClaude::failing_for("Makes two louder");
     let session = base_main(&history, Some(config_with(Some(fake))));
-    let err = session.explain_all(&never(), None, false).unwrap_err();
+    let err = session.explain_all(&never(), None).unwrap_err();
     assert!(err.to_string().contains("Explained 1; 1 failed"), "{err}");
 }
 
@@ -623,7 +654,7 @@ fn missing_claude_stops_explain_all() {
         ..config()
     };
     let session = base_main(&history, Some(cfg));
-    let err = session.explain_all(&never(), None, false).unwrap_err();
+    let err = session.explain_all(&never(), None).unwrap_err();
     assert!(err.is_claude_not_found());
 }
 
@@ -659,7 +690,6 @@ fn working_tree_layers() {
         Revision::working_tree(None),
         None,
     );
-    assert!(!session.can_build());
     assert!(session.follows_repository_changes());
     let files = session.files(&never()).unwrap();
     let paths: Vec<&str> = files.iter().map(|e| e.change.path.as_str()).collect();
@@ -897,7 +927,6 @@ fn same_commit() {
         None,
     );
     assert!(session.files(&never()).unwrap().is_empty());
-    assert!(!session.can_build());
     assert!(session.relation_text().contains("same commit"));
 }
 
@@ -973,16 +1002,6 @@ fn repository_info_errors() {
 }
 
 #[test]
-fn set_up_agents() {
-    let history = history();
-    let info = open_info(&history, None);
-    let changed = info.set_up_agents(&config(), &never()).unwrap();
-    assert!(changed.contains(&"CLAUDE.md".to_string()));
-    assert!(changed.iter().any(|p| p.ends_with("SKILL.md")));
-    assert!(info.set_up_agents(&config(), &never()).unwrap().is_empty());
-}
-
-#[test]
 fn unborn_repository() {
     let repo = FixtureRepo::new();
     repo.write_files(files![("first.txt", "hello\n")]);
@@ -1008,26 +1027,6 @@ fn unborn_repository() {
         view.cards.iter().map(|c| c.kind).collect::<Vec<_>>(),
         [CardKind::Unstaged]
     );
-}
-
-#[test]
-fn gather_build_facts_folds_cards_into_entries() {
-    let history = history();
-    let session = base_main(&history, None);
-    let facts = session.gather_build_facts(&never(), None).unwrap();
-    assert_eq!(facts.stats.files, 2);
-    assert_eq!(facts.stats.commits, 2);
-    assert_eq!(facts.base.ref_name, None);
-    assert_eq!(facts.target.ref_name.as_deref(), Some("main"));
-    let app = facts.files.iter().find(|f| f.path == "app.py").unwrap();
-    let shas: Vec<Option<String>> = app.entries.iter().map(|e| e.sha.clone()).collect();
-    assert_eq!(
-        shas,
-        [Some(history.sha("human")), Some(history.sha("agent"))]
-    );
-    let data = facts.files.iter().find(|f| f.path == "data.bin").unwrap();
-    assert!(data.binary);
-    assert_eq!(data.touched_by, [history.sha("agent")]);
 }
 
 // -- the file list as a tree (test_file_tree.py) --

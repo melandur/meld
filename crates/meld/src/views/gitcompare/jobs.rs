@@ -17,7 +17,8 @@ use meld_ailens::{CancelToken, Error};
 
 /// What a running job sends back.
 pub enum Event<T> {
-    Progress(String),
+    /// What it is doing, and the share of it done (0 to 1) when it knows
+    Progress(String, Option<f32>),
     Done(Result<T, Error>),
 }
 
@@ -135,15 +136,15 @@ impl Drop for Jobs {
 pub fn spawn<T, W>(cancel: CancelToken, work: W) -> Task<Event<T>>
 where
     T: Send + 'static,
-    W: FnOnce(&CancelToken, &dyn Fn(&str)) -> Result<T, Error> + Send + 'static,
+    W: FnOnce(&CancelToken, &dyn Fn(&str, Option<f32>)) -> Result<T, Error> + Send + 'static,
 {
     let (sender, receiver) = mpsc::unbounded();
     let spawned = std::thread::Builder::new()
         .name("meld-gitcompare".into())
         .spawn(move || {
             let progress_sender = sender.clone();
-            let progress = move |text: &str| {
-                let _ = progress_sender.unbounded_send(Event::Progress(text.to_string()));
+            let progress = move |text: &str, share: Option<f32>| {
+                let _ = progress_sender.unbounded_send(Event::Progress(text.to_string(), share));
             };
             let result =
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(&cancel, &progress)))

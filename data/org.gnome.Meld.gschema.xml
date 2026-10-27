@@ -310,7 +310,7 @@
     <key name="ailens-claude-path" type="s">
       <default>"claude"</default>
       <summary>Path to the Claude Code CLI</summary>
-      <description>The claude executable that explains changes and writes build summaries.</description>
+      <description>The claude executable that explains changes.</description>
     </key>
     <key name="ailens-infer-enabled" type="b">
       <default>true</default>
@@ -321,16 +321,6 @@
       <default>"claude-opus-5-5"</default>
       <summary>Model that explains commits</summary>
       <description>The model passed to claude -p when inferring why a commit or change was made.</description>
-    </key>
-    <key name="ailens-build-model" type="s">
-      <default>"claude-opus-5-5"</default>
-      <summary>Model that writes build summaries</summary>
-      <description>The model passed to claude -p for a build file's title, summary, decisions and risks.</description>
-    </key>
-    <key name="ailens-build-folder" type="s">
-      <default>"agent"</default>
-      <summary>Folder for build files</summary>
-      <description>Where build files are written, relative to the repository root.</description>
     </key>
     <key name="ailens-notes-ref" type="s">
       <default>"ai-lens"</default>
@@ -348,11 +338,6 @@
       <default>300</default>
       <summary>Width of the Git Compare file list</summary>
       <description>Width of the changed-files list, in pixels. Dragging the divider changes it too.</description>
-    </key>
-    <key name="ailens-author-pattern" type="s">
-      <default>""</default>
-      <summary>Extra pattern for agent commits</summary>
-      <description>A regular expression matched against commit authors to recognise agent commits, besides the Co-Authored-By: Claude trailer.</description>
     </key>
   </schema>
 </schemalist>

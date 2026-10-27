@@ -222,12 +222,9 @@ pub struct Settings {
     pub ailens_claude_path: String,
     pub ailens_infer_enabled: bool,
     pub ailens_infer_model: String,
-    pub ailens_build_model: String,
-    pub ailens_build_folder: String,
     pub ailens_notes_ref: String,
     pub ailens_file_row_spacing: i32,
     pub ailens_file_list_width: i32,
-    pub ailens_author_pattern: String,
     // Arrays of tables come last so the TOML output stays readable.
     pub folder_columns: Vec<FolderColumn>,
     pub filename_filters: Vec<FilterSetting>,
@@ -327,12 +324,9 @@ impl Default for Settings {
             ailens_claude_path: "claude".to_string(),
             ailens_infer_enabled: true,
             ailens_infer_model: "claude-opus-5-5".to_string(),
-            ailens_build_model: "claude-opus-5-5".to_string(),
-            ailens_build_folder: "agent".to_string(),
             ailens_notes_ref: "ai-lens".to_string(),
             ailens_file_row_spacing: 4,
             ailens_file_list_width: 300,
-            ailens_author_pattern: String::new(),
             window_state: WindowState::default(),
         }
     }
@@ -626,12 +620,9 @@ mod tests {
         assert_eq!(s.ailens_claude_path, "claude");
         assert!(s.ailens_infer_enabled);
         assert_eq!(s.ailens_infer_model, "claude-opus-5-5");
-        assert_eq!(s.ailens_build_model, "claude-opus-5-5");
-        assert_eq!(s.ailens_build_folder, "agent");
         assert_eq!(s.ailens_notes_ref, "ai-lens");
         assert_eq!(s.ailens_file_row_spacing, 4);
         assert_eq!(s.ailens_file_list_width, 300);
-        assert_eq!(s.ailens_author_pattern, "");
         assert_eq!(
             s.window_state,
             WindowState {
@@ -661,8 +652,8 @@ mod tests {
                 "missing setting {key}"
             );
         }
-        assert_eq!(count, 48);
-        assert_eq!(table.len() - 1 + window.len(), 48);
+        assert_eq!(count, 45);
+        assert_eq!(table.len() - 1 + window.len(), 45);
     }
 
     #[test]

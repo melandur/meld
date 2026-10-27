@@ -178,10 +178,7 @@ pub enum TextKey {
     DefaultFolder,
     ClaudePath,
     InferModel,
-    BuildModel,
-    BuildFolder,
     NotesRef,
-    AuthorPattern,
 }
 
 impl TextKey {
@@ -191,10 +188,7 @@ impl TextKey {
             TextKey::DefaultFolder => &mut s.default_folder,
             TextKey::ClaudePath => &mut s.ailens_claude_path,
             TextKey::InferModel => &mut s.ailens_infer_model,
-            TextKey::BuildModel => &mut s.ailens_build_model,
-            TextKey::BuildFolder => &mut s.ailens_build_folder,
             TextKey::NotesRef => &mut s.ailens_notes_ref,
-            TextKey::AuthorPattern => &mut s.ailens_author_pattern,
         }
     }
 
@@ -204,10 +198,7 @@ impl TextKey {
             TextKey::DefaultFolder => &s.default_folder,
             TextKey::ClaudePath => &s.ailens_claude_path,
             TextKey::InferModel => &s.ailens_infer_model,
-            TextKey::BuildModel => &s.ailens_build_model,
-            TextKey::BuildFolder => &s.ailens_build_folder,
             TextKey::NotesRef => &s.ailens_notes_ref,
-            TextKey::AuthorPattern => &s.ailens_author_pattern,
         }
     }
 }
@@ -1096,9 +1087,6 @@ impl Preferences {
     }
 
     fn git_compare_page<'a>(&'a self, s: &'a Settings) -> Element<'a, Message> {
-        let author_error = (!s.ailens_author_pattern.is_empty())
-            .then(|| check_regex(&s.ailens_author_pattern).err())
-            .flatten();
         column![
             group(
                 Some(tr!("File List")),
@@ -1123,7 +1111,7 @@ impl Preferences {
             group(
                 Some(tr!("Claude Code")),
                 Some(
-                    tr!("Explain and Explain & Build run “claude -p” with no tools. Changes apply \
+                    tr!("Explain runs “claude -p” with no tools. Changes apply \
                          to comparisons opened or reloaded afterwards.")
                 ),
                 vec![
@@ -1136,7 +1124,7 @@ impl Preferences {
                     ),
                     entry_row(
                         tr!("Claude Code Path"),
-                        tr!("The claude executable that explains changes and writes build summaries."),
+                        tr!("The claude executable that explains changes."),
                         TextKey::ClaudePath,
                         s,
                         None,
@@ -1148,13 +1136,6 @@ impl Preferences {
                         s,
                         None,
                     ),
-                    entry_row(
-                        tr!("Model for Build Summaries"),
-                        tr!("The model passed to claude -p for a build file's title, summary, decisions and risks."),
-                        TextKey::BuildModel,
-                        s,
-                        None,
-                    ),
                 ],
             ),
             group(
@@ -1162,26 +1143,11 @@ impl Preferences {
                 None,
                 vec![
                     entry_row(
-                        tr!("Build Folder"),
-                        tr!("Where build files are written, relative to the repository root."),
-                        TextKey::BuildFolder,
-                        s,
-                        None,
-                    ),
-                    entry_row(
                         tr!("Notes Ref"),
                         tr!("The notes ref that explanations are read from and saved to."),
                         TextKey::NotesRef,
                         s,
                         None,
-                    ),
-                    entry_row(
-                        tr!("Agent Author Pattern (regular expression)"),
-                        tr!("A regular expression matched against commit authors to recognise agent \
-                             commits, besides the Co-Authored-By: Claude trailer."),
-                        TextKey::AuthorPattern,
-                        s,
-                        author_error,
                     ),
                 ],
             ),

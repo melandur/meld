@@ -18,7 +18,6 @@ pub struct Popover<'a, M> {
     popup: Option<Element<'a, M>>,
     on_dismiss: M,
     on_key: Option<Box<dyn Fn(key::Named) -> Option<M> + 'a>>,
-    align_right: bool,
 }
 
 /// `anchor`, with `popup` shown below it when given.
@@ -32,7 +31,6 @@ pub fn popover<'a, M: Clone + 'a>(
         popup,
         on_dismiss,
         on_key: None,
-        align_right: false,
     }
 }
 
@@ -41,12 +39,6 @@ impl<'a, M: Clone + 'a> Popover<'a, M> {
     /// moving through a list while a text field has focus).
     pub fn on_key(mut self, f: impl Fn(key::Named) -> Option<M> + 'a) -> Self {
         self.on_key = Some(Box::new(f));
-        self
-    }
-
-    /// Aligns the popup's right edge with the anchor's.
-    pub fn align_right(mut self, right: bool) -> Self {
-        self.align_right = right;
         self
     }
 }
@@ -183,7 +175,6 @@ impl<'a, M: Clone + 'a> Widget<M, Theme, Renderer> for Popover<'a, M> {
                 anchor: layout.bounds() + translation,
                 on_dismiss: self.on_dismiss.clone(),
                 on_key: self.on_key.as_deref(),
-                align_right: self.align_right,
             }))),
             _ => None,
         };
@@ -209,17 +200,11 @@ struct Popup<'a, 'b, M> {
     anchor: Rectangle,
     on_dismiss: M,
     on_key: Option<&'b (dyn Fn(key::Named) -> Option<M> + 'a)>,
-    align_right: bool,
 }
 
 /// Where a popup of `size` goes below `anchor` within a window of `bounds`.
-pub fn place(anchor: Rectangle, size: Size, bounds: Size, align_right: bool) -> Point {
-    let mut x = if align_right {
-        anchor.x + anchor.width - size.width
-    } else {
-        anchor.x
-    };
-    x = x.min(bounds.width - size.width - MARGIN).max(MARGIN);
+pub fn place(anchor: Rectangle, size: Size, bounds: Size) -> Point {
+    let x = anchor.x.min(bounds.width - size.width - MARGIN).max(MARGIN);
     let mut y = anchor.y + anchor.height + GAP;
     if y + size.height > bounds.height - MARGIN {
         y = (bounds.height - MARGIN - size.height).max(MARGIN);
@@ -238,7 +223,7 @@ impl<'a, M: Clone + 'a> overlay::Overlay<M, Theme, Renderer> for Popup<'a, '_, M
             renderer,
             &layout::Limits::new(Size::ZERO, max),
         );
-        let position = place(self.anchor, node.size(), bounds, self.align_right);
+        let position = place(self.anchor, node.size(), bounds);
         node.move_to(position)
     }
 
@@ -346,24 +331,12 @@ mod tests {
         let anchor = Rectangle::new(Point::new(100.0, 10.0), Size::new(80.0, 30.0));
         let window = Size::new(800.0, 600.0);
         assert_eq!(
-            place(anchor, Size::new(300.0, 200.0), window, false),
+            place(anchor, Size::new(300.0, 200.0), window),
             Point::new(100.0, 44.0)
         );
         // Too wide to the right: pushed left
-        assert_eq!(
-            place(anchor, Size::new(750.0, 200.0), window, false).x,
-            44.0
-        );
-        // Right-aligned with the anchor, but not off the left edge
-        assert_eq!(place(anchor, Size::new(120.0, 50.0), window, true).x, 60.0);
-        assert_eq!(
-            place(anchor, Size::new(300.0, 50.0), window, true).x,
-            MARGIN
-        );
+        assert_eq!(place(anchor, Size::new(750.0, 200.0), window).x, 44.0);
         // Too tall: moved up
-        assert_eq!(
-            place(anchor, Size::new(100.0, 580.0), window, false).y,
-            14.0
-        );
+        assert_eq!(place(anchor, Size::new(100.0, 580.0), window).y, 14.0);
     }
 }

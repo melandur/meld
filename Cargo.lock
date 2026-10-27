@@ -2360,7 +2360,6 @@ dependencies = [
  "libc",
  "log",
  "regex",
- "serde",
  "serde_json",
  "sha1_smol",
  "tempfile",
