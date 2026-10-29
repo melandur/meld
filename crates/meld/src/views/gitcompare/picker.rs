@@ -455,7 +455,6 @@ impl Picker {
             } else {
                 480
             })
-            .max_height(560)
             .padding(8)
             .style(ui::popover)
             .into()
